@@ -87,6 +87,8 @@
   (doc-value-count [_ attr] (db/doc-value-count index-snapshot attr))
   (value-cardinality [_ attr] (db/value-cardinality index-snapshot attr))
   (eid-cardinality [_ attr] (db/eid-cardinality index-snapshot attr))
+  (attr-value-cardinality [_ attr value] (db/attr-value-cardinality index-snapshot attr value))
+
 
   db/IndexMeta
   (-read-index-meta [_ k not-found]
@@ -186,6 +188,11 @@
   (eid-cardinality [_ attr]
     (or (db/eid-cardinality transient-index-snapshot attr)
         (db/eid-cardinality persistent-index-snapshot attr)))
+
+  (attr-value-cardinality [_ attr value]
+    (or (db/attr-value-cardinality transient-index-snapshot attr value)
+        (db/attr-value-cardinality persistent-index-snapshot attr value)))
+
 
   db/IndexMeta
   (-read-index-meta [_ k not-found]

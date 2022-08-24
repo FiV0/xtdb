@@ -425,14 +425,21 @@
      (-> (doto b
            (.putByte 0 c/stats-index-id)
            (.putBytes c/index-id-size attr 0 (.capacity attr)))
-         (mem/limit-buffer (+ c/index-id-size (.capacity attr)))))))
+         (mem/limit-buffer (+ c/index-id-size (.capacity attr))))))
+  (^org.agrona.MutableDirectBuffer [b ^DirectBuffer attr ^DirectBuffer value]
+   (let [^MutableDirectBuffer b (or b (mem/allocate-buffer (+ c/index-id-size (.capacity attr) (.capacity value))))]
+     (-> (doto b
+           (.putByte 0 c/stats-index-id)
+           (.putBytes c/index-id-size attr 0 (.capacity attr))
+           (.putBytes c/index-id-size value (.capacity attr) (.capacity value)))
+         (mem/limit-buffer (+ c/index-id-size (.capacity attr) (.capacity value)))))))
 
 (defn- decode-stats-key->attr-from ^org.agrona.DirectBuffer [^DirectBuffer k]
   (assert (= c/stats-index-id (.getByte k 0)))
   (mem/slice-buffer k c/index-id-size))
 
 (defn- new-stats-value ^org.agrona.MutableDirectBuffer []
-  (doto ^MutableDirectBuffer (mem/allocate-buffer (+ Long/BYTES Long/BYTES hll/default-buffer-size hll/default-buffer-size))
+  (doto ^MutableDirectBuffer (mem/allocate-buffer (+ Long/BYTES Long/BYTES (* 3 hll/default-buffer-size)))
     (.putByte 0 c/stats-index-id)
     (.putLong c/index-id-size 0)
     (.putLong (+ c/index-id-size Long/BYTES) 0)))
@@ -459,6 +466,10 @@
 (defn decode-stats-value->value-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
   (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
     (mem/slice-buffer b (+ Long/BYTES Long/BYTES hll-size) hll-size)))
+
+(defn decode-stats-value->attr-value-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
+  (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
+    (mem/slice-buffer b (+ Long/BYTES Long/BYTES (* 2 hll-size)) hll-size)))
 
 (defn stats-kvs [transient-kv-snapshot persistent-kv-snapshot docs]
   (let [attr-key-bufs (->> docs
@@ -913,6 +924,12 @@
   (eid-cardinality [_ attr]
     (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (c/->value-buffer attr)))
                 decode-stats-value->eid-hll-buffer-from
+                hll/estimate)
+        0.0))
+
+  (attr-value-cardinality [_ attr value]
+    (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (c/->value-buffer attr)))
+                decode-stats-value->
                 hll/estimate)
         0.0))
 
