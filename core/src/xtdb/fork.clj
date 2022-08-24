@@ -119,6 +119,11 @@
     (or (db/eid-cardinality transient-index-snapshot attr)
         (db/eid-cardinality persistent-index-snapshot attr)))
 
+  (attr-value-cardinality [_ attr value]
+    (or (db/attr-value-cardinality transient-index-snapshot attr value)
+        (db/attr-value-cardinality persistent-index-snapshot attr value)))
+
+
   db/IndexMeta
   (-read-index-meta [_ k not-found]
     (let [v (db/read-index-meta transient-index-snapshot k ::not-found)]
