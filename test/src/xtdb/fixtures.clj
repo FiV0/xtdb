@@ -129,4 +129,5 @@
       (doc-count [_ attr] (get-in stats [attr :doc-count]))
       (doc-value-count [_ attr] (get-in stats [attr :doc-value-count]))
       (eid-cardinality [_ attr] (get-in stats [attr :eids]))
-      (value-cardinality [_ attr] (get-in stats [attr :vals])))))
+      (value-cardinality [_ attr] (get-in stats [attr :vals]))
+      (attr-value-cardinality [_ attr value] (get-in stats [attr value :attr-vals])))))

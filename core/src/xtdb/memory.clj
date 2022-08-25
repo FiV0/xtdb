@@ -94,6 +94,13 @@
 (defn limit-buffer ^org.agrona.MutableDirectBuffer [^DirectBuffer buffer ^long limit]
   (slice-buffer buffer 0 limit))
 
+(defn concat-buffer ^org.agrona.MutableDirectBuffer [^DirectBuffer b1 ^DirectBuffer b2]
+  (let [c1 (.capacity b1)
+        c2 (.capacity b2)]
+    (doto ^org.agrona.MutableDirectBuffer (allocate-buffer (+ c1 c2))
+      (.putBytes 0 b1 0 c1)
+      (.putBytes c1 b2 0 c2))))
+
 (extend-protocol MemoryRegion
   (class (byte-array 0))
   (->on-heap [this]

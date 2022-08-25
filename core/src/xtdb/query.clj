@@ -1526,7 +1526,8 @@
     (doc-count [_ a] (db/doc-count index-snapshot a))
     (doc-value-count [_ a] (db/doc-value-count index-snapshot a))
     (eid-cardinality [_ a] (db/eid-cardinality index-snapshot a))
-    (value-cardinality [_ a] (db/value-cardinality index-snapshot a))))
+    (value-cardinality [_ a] (db/value-cardinality index-snapshot a))
+    (attr-value-cardinality [_ a v] (db/attr-value-cardinality index-snapshot a v))))
 
 (defn- compile-sub-query [{:keys [fn-allow-list pred-ctx value-serde] :as db}
                           stats where in in-var-cardinalities

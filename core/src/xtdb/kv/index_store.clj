@@ -448,11 +448,10 @@
   (mem/slice-buffer k c/index-id-size))
 
 (defn- new-stats-value ^org.agrona.MutableDirectBuffer []
-  (doto ^MutableDirectBuffer (mem/allocate-buffer (+ (* 3 Long/BYTES) (* 2 hll/default-buffer-size)))
+  (doto ^MutableDirectBuffer (mem/allocate-buffer (+ (* 2 Long/BYTES) (* 3 hll/default-buffer-size)))
     (.putByte 0 c/stats-index-id)
     (.putLong c/index-id-size 0)
-    (.putLong (+ c/index-id-size Long/BYTES) 0)
-    (.putLong (+ c/index-id-size (* 2 Long/BYTES)) 0)))
+    (.putLong (+ c/index-id-size Long/BYTES) 0)))
 
 (defn- decode-stats-value->doc-count-from ^long [^DirectBuffer b]
   (.getLong b c/index-id-size))
@@ -469,21 +468,17 @@
     (.putLong (+ c/index-id-size Long/BYTES)
               (inc (decode-stats-value->doc-value-count-from b)))))
 
-(defn- decode-stats-value->attr-value-count-from ^long [^DirectBuffer b]
-  (.getLong b (+ c/index-id-size (* 2 Long/BYTES))))
-
-(defn- inc-stats-value-doc-attr-value-count ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
-  (doto b
-    (.putLong (+ c/index-id-size (* 2 Long/BYTES))
-              (inc (decode-stats-value->doc-value-count-from b)))))
-
 (defn decode-stats-value->eid-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
-  (let [hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
-    (mem/slice-buffer b (* 3 Long/BYTES) hll-size)))
+  (let [hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 3)]
+    (mem/slice-buffer b (* 2 Long/BYTES) hll-size)))
 
 (defn decode-stats-value->value-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
-  (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
-    (mem/slice-buffer b (+ (* 3 Long/BYTES) hll-size) hll-size)))
+  (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 3)]
+    (mem/slice-buffer b (+ (* 2 Long/BYTES) hll-size) hll-size)))
+
+(defn- decode-stats-value->attr-value-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
+  (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 3)]
+    (mem/slice-buffer b (+ (* 2 Long/BYTES) (* 2 hll-size)) hll-size)))
 
 
 (defn- stats-kvs [stats-kvs-cache persistent-kv-store docs]
@@ -520,8 +515,9 @@
                                         (doseq [v (c/vectorize-value v)]
                                           (doto stats-buf
                                             (inc-stats-value-doc-value-count)
-                                            (inc-stats-value-doc-attr-value-count)
-                                            (-> decode-stats-value->value-hll-buffer-from (hll/add v))))
+                                            (-> decode-stats-value->value-hll-buffer-from (hll/add v))
+                                            (-> stats-buf decode-stats-value->attr-value-buffer-from
+                                                (hll/add (mem/concat-buffer k-buf (c/->value-buffer v))))))
                                         (assoc! acc k-buf stats-buf)))
                                     acc
                                     doc)))
@@ -645,7 +641,7 @@
                            identity))
 
 (defn- cav-cache-lookup ^NavigableSet [cav-cache canonical-buffer-cache cache-i ^DirectBuffer eid-value-buffer
-                                                 ^DirectBuffer content-hash-buffer ^DirectBuffer attr-buffer]
+                                       ^DirectBuffer content-hash-buffer ^DirectBuffer attr-buffer]
   (cache/compute-if-absent cav-cache
                            (MapEntry/create content-hash-buffer attr-buffer)
                            (fn [_]
@@ -718,6 +714,39 @@
       (when-not (.tryAcquire closing-semaphore open-thread-count 60 TimeUnit/SECONDS)
         (log/warn "Failed to shut down index-store after 60s due to outstanding snapshots"
                   (pr-str snapshot-threads))))))
+
+(comment
+  (require '[clojure.java.io :as io])
+  (defn kv-store [dir]
+    {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
+                :db-dir (io/file dir)
+                :sync? true}})
+
+  (def node (xt/start-node
+             {:xtdb/tx-log (kv-store "data-testing2/tx-log")
+              :xtdb/document-store (kv-store "data-testing2/doc-store")
+              :xtdb/index-store (kv-store "data-testing2/index-store")}))
+
+  (.close node)
+
+  (def node (xt/start-node {}))
+  (xt/submit-tx node [[::xt/put {:xt/id 1 :data/foo 1}]])
+
+  (sc.api/letsc [1 -9]
+                ())
+
+  (xt/db node)
+
+  (def mem-index-snapshot (db/open-index-snapshot (:index-store (xt/db node))))
+
+  (-> (db/av mem-index-snapshot :data/foo mem/empty-buffer)
+      first
+      c/decode-value-buffer)
+
+  (c/decode-value-buffer (c/->value-buffer :data/foo))
+
+  (require 'sc.api)
+  )
 
 (defrecord KvIndexSnapshot [snapshot
                             close-snapshot?
@@ -960,8 +989,8 @@
         0.0))
 
   (attr-value-cardinality [_ attr value]
-    (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (c/->value-buffer attr) (c/->value-buffer (hash value))))
-                decode-stats-value->attr-value-count-from)
+    (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (mem/concat-buffer (c/->value-buffer attr) (c/->value-buffer value)) ))
+                decode-stats-value->attr-value-buffer-from)
         0))
 
   db/IndexMeta
@@ -1197,6 +1226,7 @@
 
   db/IndexSnapshotFactory
   (open-index-snapshot [_]
+    (sc.api/spy)
     (new-kv-index-snapshot (kv/new-snapshot kv-store) true thread-mgr cav-cache canonical-buffer-cache))
 
   status/Status

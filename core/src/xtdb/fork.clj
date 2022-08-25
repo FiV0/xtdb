@@ -9,6 +9,8 @@
   (:import xtdb.codec.EntityTx
            org.agrona.DirectBuffer))
 
+(require 'xtdb.db :reload)
+
 (defn merge-seqs
   ([persistent transient] (merge-seqs persistent transient #(.compare mem/buffer-comparator %1 %2)))
   ([persistent transient compare]

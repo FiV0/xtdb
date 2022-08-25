@@ -10,7 +10,8 @@
             [xtdb.db :as db]
             [xtdb.fixtures :as f]
             [xtdb.fixtures.kv :as fkv]
-            [xtdb.kv.index-store :as kvi])
+            [xtdb.kv.index-store :as kvi]
+            [xtdb.memory :as mem])
   (:import clojure.lang.MapEntry
            xtdb.api.NodeOutOfSyncException
            xtdb.codec.EntityTx
@@ -239,7 +240,20 @@
                                          {:doc-count (db/doc-count index-snapshot attr)
                                           :doc-value-count (db/doc-value-count index-snapshot attr)
                                           :values (Math/round (db/value-cardinality index-snapshot attr))
-                                          :eids (Math/round (db/eid-cardinality index-snapshot attr))})))))))]
+                                          :eids (Math/round (db/eid-cardinality index-snapshot attr))})))))))
+          (->attr-value-stats [index-snapshot-factory]
+            (with-open [index-snapshot (db/open-index-snapshot index-snapshot-factory)]
+              (->> (db/all-attrs index-snapshot)
+                   (map (juxt identity
+                              (fn [attr]
+                                (let [vals (->> (db/av index-snapshot attr mem/empty-buffer)
+                                                (map c/decode-value-buffer))]
+                                  (->> vals
+                                       (map (juxt identity
+                                                  (fn [value]
+                                                    (Math/round (db/attr-value-cardinality index-snapshot attr value)))))
+                                       (into {}))))))
+                   (into {}))))]
     (with-fresh-index-store
       (let [ivan {:crux.db/id :ivan, :name "Ivan", :interests #{:clojure :databases}}
             ivan2 {:crux.db/id :ivan, :name "Ivan2", :interests #{:clojure :databases :bitemporality}}
@@ -295,6 +309,9 @@
       (t/is (= {:crux.db/id {:doc-count 3675, :doc-value-count 3675, :values 3554, :eids 3554}
                 :sub-idx {:doc-count 3675, :doc-value-count 3675, :values 50, :eids 3554}}
                (->stats *index-store*))))))
+
+(comment
+  (clojure.test/test-var #'test-statistics))
 
 (t/deftest test-entity
   (with-fresh-index-store
