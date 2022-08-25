@@ -11,7 +11,8 @@
             [xtdb.kafka :as k]
             [xtdb.kafka.embedded :as ek]
             [xtdb.lucene]
-            [xtdb.rocksdb :as rocks])
+            [xtdb.rocksdb :as rocks]
+            [cemerick.pomegranate :as pomegranate])
   (:import (ch.qos.logback.classic Level Logger)
            (java.io Closeable File)
            (org.slf4j LoggerFactory)
@@ -107,3 +108,11 @@
       (tpch/run-query (xt/db (xtdb-node))
                       (-> q
                           (assoc :timeout 120000)))))))
+
+(defn add-deps [libs]
+  (pomegranate/add-dependencies :coordinates libs
+                                :repositories (merge cemerick.pomegranate.aether/maven-central
+                                                     {"clojars" "https://clojars.org/repo"
+                                                      "oscaro"  "https://artifactory.oscaroad.com/artifactory/libs-release"})))
+
+;; (add-deps '[[vvvvalvalval/scope-capture "0.3.3"]])

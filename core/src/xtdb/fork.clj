@@ -9,6 +9,8 @@
            org.agrona.DirectBuffer
            java.util.Date))
 
+(require 'xtdb.db :reload)
+
 (defn merge-seqs
   ([persistent transient] (merge-seqs persistent transient #(.compare mem/buffer-comparator %1 %2)))
   ([persistent transient compare]
@@ -87,7 +89,7 @@
   (doc-value-count [_ attr] (db/doc-value-count index-snapshot attr))
   (value-cardinality [_ attr] (db/value-cardinality index-snapshot attr))
   (eid-cardinality [_ attr] (db/eid-cardinality index-snapshot attr))
-  (attr-value-count [_ attr value] (db/attr-value-count index-snapshot attr value))
+  (attr-value-cardinality [_ attr value] (db/attr-value-cardinality index-snapshot attr value))
 
 
   db/IndexMeta

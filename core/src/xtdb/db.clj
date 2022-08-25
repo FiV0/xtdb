@@ -40,7 +40,7 @@
   (doc-value-count [this attr])
   (^double value-cardinality [this attr])
   (^double eid-cardinality [this attr])
-  (attr-value-count [this attr value]))
+  (^double attr-value-cardinality [this attr value]))
 
 (defprotocol ValueSerde
   (decode-value [this value-buffer])

@@ -74,6 +74,9 @@
    ;; crux-core test dep
    [clj-commons/fs "1.6.307"]
 
+   ;; loading deps on the fly
+   [clj-commons/pomegranate "1.2.1"]
+
    ;; dependency conflict resolution
    [org.apache.commons/commons-lang3 "3.9"]
    [commons-io "2.8.0"]
