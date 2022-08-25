@@ -439,10 +439,11 @@
   (mem/slice-buffer k c/index-id-size))
 
 (defn- new-stats-value ^org.agrona.MutableDirectBuffer []
-  (doto ^MutableDirectBuffer (mem/allocate-buffer (+ Long/BYTES Long/BYTES (* 3 hll/default-buffer-size)))
+  (doto ^MutableDirectBuffer (mem/allocate-buffer (+ (* 3 Long/BYTES) (* 2 hll/default-buffer-size)))
     (.putByte 0 c/stats-index-id)
     (.putLong c/index-id-size 0)
-    (.putLong (+ c/index-id-size Long/BYTES) 0)))
+    (.putLong (+ c/index-id-size Long/BYTES) 0)
+    (.putLong (+ c/index-id-size (* 2 Long/BYTES)) 0)))
 
 (defn- decode-stats-value->doc-count-from ^long [^DirectBuffer b]
   (.getLong b c/index-id-size))
@@ -459,17 +460,21 @@
     (.putLong (+ c/index-id-size Long/BYTES)
               (inc (decode-stats-value->doc-value-count-from b)))))
 
+(defn- decode-stats-value->attr-value-count-from ^long [^DirectBuffer b]
+  (.getLong b (+ c/index-id-size (* 2 Long/BYTES))))
+
+(defn- inc-stats-value-doc-attr-value-count ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
+  (doto b
+    (.putLong (+ c/index-id-size (* 2 Long/BYTES))
+              (inc (decode-stats-value->doc-value-count-from b)))))
+
 (defn decode-stats-value->eid-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
   (let [hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
-    (mem/slice-buffer b (+ Long/BYTES Long/BYTES) hll-size)))
+    (mem/slice-buffer b (* 3 Long/BYTES) hll-size)))
 
 (defn decode-stats-value->value-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
   (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
-    (mem/slice-buffer b (+ Long/BYTES Long/BYTES hll-size) hll-size)))
-
-(defn decode-stats-value->attr-value-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
-  (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
-    (mem/slice-buffer b (+ Long/BYTES Long/BYTES (* 2 hll-size)) hll-size)))
+    (mem/slice-buffer b (+ (* 3 Long/BYTES) hll-size) hll-size)))
 
 (defn stats-kvs [transient-kv-snapshot persistent-kv-snapshot docs]
   (let [attr-key-bufs (->> docs
@@ -492,6 +497,7 @@
                                     (doseq [v (c/vectorize-value v)]
                                       (doto stats-buf
                                         (inc-stats-value-doc-value-count)
+                                        (inc-stats-value-doc-attr-value-count)
                                         (-> decode-stats-value->value-hll-buffer-from (hll/add v))))
                                     (assoc! acc k-buf stats-buf)))
                                 acc
@@ -928,10 +934,9 @@
         0.0))
 
   (attr-value-cardinality [_ attr value]
-    (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (c/->value-buffer attr)))
-                decode-stats-value->
-                hll/estimate)
-        0.0))
+    (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (c/->value-buffer attr) (c/->value-buffer (hash value))))
+                decode-stats-value->attr-value-count-from)
+        0))
 
   db/IndexMeta
   (-read-index-meta [_ k not-found]
