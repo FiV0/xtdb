@@ -221,8 +221,7 @@
         (t/is (thrown? NodeOutOfSyncException
                        (db/resolve-tx index-snapshot #::xt{:tx-time #inst "2023", :tx-id 1})))))))
 
-(comment
-  (require '[lambdaisland.deep-diff2 :as ddiff]))
+
 
 (t/deftest test-statistics
   (letfn [(->stats [index-snapshot-factory]
@@ -233,15 +232,20 @@
                                          {:doc-count (db/doc-count index-snapshot attr)
                                           :doc-value-count (db/doc-value-count index-snapshot attr)
                                           :values (Math/round (db/value-cardinality index-snapshot attr))
-                                          :eids (Math/round (db/eid-cardinality index-snapshot attr))
-                                          :value-counts
-                                          (->>
-                                           (db/av index-snapshot attr mem/empty-buffer)
-                                           (map c/decode-value-buffer)
-                                           (map (juxt identity
-                                                      (fn [value]
-                                                        (Math/round (db/attr-value-cardinality index-snapshot attr value)))))
-                                           (into {}))})))))))]
+                                          :eids (Math/round (db/eid-cardinality index-snapshot attr))})))))))
+          (->attr-value-stats [index-snapshot-factory]
+            (with-open [index-snapshot (db/open-index-snapshot index-snapshot-factory)]
+              (->> (db/all-attrs index-snapshot)
+                   (map (juxt identity
+                              (fn [attr]
+                                (let [vals (->> (db/av index-snapshot attr mem/empty-buffer)
+                                                (map c/decode-value-buffer))]
+                                  (->> vals
+                                       (map (juxt identity
+                                                  (fn [value]
+                                                    (Math/round (db/attr-value-cardinality index-snapshot attr value)))))
+                                       (into {}))))))
+                   (into {}))))]
     (with-fresh-index-store
       (let [ivan {:crux.db/id :ivan, :name "Ivan", :interests #{:clojure :databases}}
             ivan2 {:crux.db/id :ivan, :name "Ivan2", :interests #{:clojure :databases :bitemporality}}
@@ -249,35 +253,24 @@
         (let [index-store-tx (db/begin-index-tx *index-store* #::xt{:tx-time #inst "2021", :tx-id 0} nil)]
 
           (db/index-docs index-store-tx {(c/new-id ivan) ivan})
-          (t/is (= {:doc-count 1, :doc-value-count 1, :values 1, :eids 1
-                    :value-counts {"Ivan" 1}}
-                   (:name (->stats index-store-tx))))
-          (t/is (= {:doc-count 1, :doc-value-count 2, :values 2, :eids 1
-                    :value-counts {:clojure 1 :databases 1}}
-                   (:interests (->stats index-store-tx))))
+          (t/is (= {:doc-count 1, :doc-value-count 1, :values 1, :eids 1} (:name (->stats index-store-tx))))
+          (t/is (= {:doc-count 1, :doc-value-count 2, :values 2, :eids 1} (:interests (->stats index-store-tx))))
+          (t/is (=  {"Ivan" 1 "Ivan2" 1 "Petr" 1} (:name (->stats index-store-tx))))
 
           (db/index-docs index-store-tx {(c/new-id petr) petr})
-          (t/is (= {:doc-count 2, :doc-value-count 2, :values 2, :eids 2
-                    :value-counts {"Ivan" 1 "Petr" 1}}
-                   (:name (->stats index-store-tx))))
+          (t/is (= {:doc-count 2, :doc-value-count 2, :values 2, :eids 2} (:name (->stats index-store-tx))))
 
           (db/commit-index-tx index-store-tx))
 
-        (t/is (= {:doc-count 2, :doc-value-count 2, :values 2, :eids 2
-                  :value-counts {"Ivan" 1 "Petr" 1}}
-                 (:name (->stats *index-store*))))
+        (t/is (= {:doc-count 2, :doc-value-count 2, :values 2, :eids 2} (:name (->stats *index-store*))))
 
         (t/testing "updated"
           (doto (db/begin-index-tx *index-store* #::xt{:tx-time #inst "2022", :tx-id 1} nil)
             (db/index-docs {(c/new-id ivan2) ivan2})
             (db/commit-index-tx))
 
-          (t/is (= {:doc-count 3, :doc-value-count 3, :values 3, :eids 2
-                    :value-counts {"Ivan" 1 "Ivan2" 1 "Petr" 1}}
-                   (:name (->stats *index-store*))))
-          (t/is (= {:doc-count 2, :doc-value-count 5, :values 3, :eids 1
-                    :value-counts {:clojure 2 :databases 2 :bitemporality 1}}
-                   (:interests (->stats *index-store*)))))
+          (t/is (= {:doc-count 3, :doc-value-count 3, :values 3, :eids 2} (:name (->stats *index-store*))))
+          (t/is (= {:doc-count 2, :doc-value-count 5, :values 3, :eids 1} (:interests (->stats *index-store*)))))
 
         (t/testing "duplicate docs are reflected twice in the doc-count"
           ;; this isn't ideal, but stats won't ever be 100% accurate
@@ -285,15 +278,13 @@
           (let [index-store-tx (db/begin-index-tx *index-store* #::xt{:tx-time #inst "2022", :tx-id 1} nil)]
 
             (db/index-docs index-store-tx {(c/new-id petr) petr})
-            (t/is (= {:doc-count 4, :doc-value-count 4, :values 3, :eids 2
-                      :value-counts {"Ivan" 1 "Ivan2" 1 "Petr" 2}}
+            (t/is (= {:doc-count 4, :doc-value-count 4, :values 3, :eids 2}
                      (:name (->stats index-store-tx))))
 
             (db/commit-index-tx index-store-tx)))))
 
     (with-fresh-index-store
-      (let [id-iterator (.iterator ^Iterable (range))
-            n-docs 50]
+      (let [id-iterator (.iterator ^Iterable (range))]
         (letfn [(mk-docs [n]
                   (for [idx (range n)
                         sub-idx (range idx)]
@@ -302,35 +293,21 @@
                       (MapEntry/create (c/new-id doc) doc))))]
           (doto (db/begin-index-tx *index-store* #::xt{:tx-time #inst "2021", :tx-id 0} nil)
 
-            (db/index-docs (mk-docs n-docs))
-            (db/index-docs (mk-docs n-docs))
+            (db/index-docs (mk-docs 50))
+            (db/index-docs (mk-docs 50))
 
             (db/commit-index-tx))
 
           (doto (db/begin-index-tx *index-store* #::xt{:tx-time #inst "2022", :tx-id 1} nil)
-            (db/index-docs (mk-docs n-docs))
-            (db/commit-index-tx)))
+            (db/index-docs (mk-docs 50))
+            (db/commit-index-tx))))
 
-        #_(ddiff/pretty-print (ddiff/diff {:crux.db/id {:doc-count 3675, :doc-value-count 3675, :values 3554, :eids 3554
-                                                        :value-counts (zipmap (range 3675) (repeat 1))}
-                                           :sub-idx {:doc-count 3675, :doc-value-count 3675, :values 50, :eids 3554
-                                                     :value-counts (zipmap (range (dec n-docs)) (map #(* 3 %) (range (dec n-docs) 0 -1)))}}
-                                          (->stats *index-store*)))
-
-        #_(t/is (= {:crux.db/id {:doc-count 3675, :doc-value-count 3675, :values 3554, :eids 3554
-                                 :value-counts (zipmap (range 3675) (repeat 1))}
-                    :sub-idx {:doc-count 3675, :doc-value-count 3675, :values 50, :eids 3554
-                              :value-counts (zipmap (range (dec n-docs)) (map #(* 3 %) (range (dec n-docs) 0 -1)))}}
-                   (->stats *index-store*)))
-
-        (t/is (= {:crux.db/id {:doc-count 3675, :doc-value-count 3675, :values 3554, :eids 3554}
-                  :sub-idx {:doc-count 3675, :doc-value-count 3675, :values 50, :eids 3554}}
-                 (-> (->stats *index-store*)
-                     (update :crux.db/id dissoc :value-counts)
-                     (update :sub-idx dissoc :value-counts)))) ))))
+      (t/is (= {:crux.db/id {:doc-count 3675, :doc-value-count 3675, :values 3554, :eids 3554}
+                :sub-idx {:doc-count 3675, :doc-value-count 3675, :values 50, :eids 3554}}
+               (->stats *index-store*))))))
 
 (comment
-  (clojure.test/test-vars [#'test-statistics]))
+  (clojure.test/test-var #'test-statistics))
 
 (t/deftest test-entity
   (with-fresh-index-store
