@@ -13,19 +13,20 @@
             [xtdb.kv :as kv]
             [xtdb.kv.mutable-kv :as mut-kv]
             [xtdb.memory :as mem]
+            [xtdb.min-count-sketch :as mcs]
             [xtdb.morton :as morton]
             [xtdb.status :as status]
             [xtdb.system :as sys])
   (:import clojure.lang.MapEntry
-           xtdb.api.IndexVersionOutOfSyncException
-           [xtdb.codec EntityTx Id]
            java.io.Closeable
            java.nio.ByteOrder
            [java.util ArrayList Date HashMap List Map NavigableSet TreeSet]
            [java.util.concurrent Semaphore TimeUnit]
            java.util.concurrent.atomic.AtomicBoolean
            [java.util.function BiFunction Supplier]
-           [org.agrona DirectBuffer ExpandableDirectByteBuffer MutableDirectBuffer]))
+           [org.agrona DirectBuffer ExpandableDirectByteBuffer MutableDirectBuffer]
+           xtdb.api.IndexVersionOutOfSyncException
+           [xtdb.codec EntityTx Id]))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -438,11 +439,22 @@
   (assert (= c/stats-index-id (.getByte k 0)))
   (mem/slice-buffer k c/index-id-size))
 
+(def ^:private min-count-sketch-w 136) ;; ceiling e/0.02
+(def ^:private min-count-sketch-d 4) ;; ceiling ln(1/0.02)
+
 (defn- new-stats-value ^org.agrona.MutableDirectBuffer []
-  (doto ^MutableDirectBuffer (mem/allocate-buffer (+ (* 2 Long/BYTES) (* 3 hll/default-buffer-size)))
-    (.putByte 0 c/stats-index-id)
-    (.putLong c/index-id-size 0)
-    (.putLong (+ c/index-id-size Long/BYTES) 0)))
+  (let [^long sketch-size (mcs/size min-count-sketch-w min-count-sketch-d)
+        res (doto ^MutableDirectBuffer (mem/allocate-buffer (+ c/stats-index-id
+                                                               (* 2 Long/BYTES)
+                                                               (* 2 hll/default-buffer-size)
+                                                               sketch-size))
+              (.putByte 0 c/stats-index-id)
+              (.putLong c/index-id-size 0)
+              (.putLong (+ c/index-id-size Long/BYTES) 0))
+        sketch-offset (+ c/index-id-size (* 2 Long/BYTES) (* 2 hll/default-buffer-size))
+        sketch-buf (mem/slice-buffer res sketch-offset sketch-size)]
+    (mcs/create sketch-buf {:w min-count-sketch-w :d min-count-sketch-d})
+    res))
 
 (defn- decode-stats-value->doc-count-from ^long [^DirectBuffer b]
   (.getLong b c/index-id-size))
@@ -460,16 +472,17 @@
               (inc (decode-stats-value->doc-value-count-from b)))))
 
 (defn decode-stats-value->eid-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
-  (let [hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 3)]
+  (let [hll-size hll/default-buffer-size #_(/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
     (mem/slice-buffer b (* 2 Long/BYTES) hll-size)))
 
 (defn decode-stats-value->value-hll-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
-  (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 3)]
-    (mem/slice-buffer b (+ (* 2 Long/BYTES) hll-size) hll-size)))
+  (let [^long hll-size hll/default-buffer-size #_(/ (- (.capacity b) Long/BYTES Long/BYTES) 2)]
+    (mem/slice-buffer b (+ (* 2 Long/BYTES) ^long hll-size) hll-size)))
 
 (defn- decode-stats-value->attr-value-buffer-from ^org.agrona.MutableDirectBuffer [^MutableDirectBuffer b]
-  (let [^long hll-size (/ (- (.capacity b) Long/BYTES Long/BYTES) 3)]
-    (mem/slice-buffer b (+ (* 2 Long/BYTES) (* 2 hll-size)) hll-size)))
+  (let [sketch-offset (+ c/index-id-size (* 2 Long/BYTES) (* 2 hll/default-buffer-size))
+        sketch-size (- (.capacity b) sketch-offset)]
+    (mem/slice-buffer b sketch-offset sketch-size)))
 
 (defn stats-kvs [transient-kv-snapshot persistent-kv-snapshot docs]
   (let [attr-key-bufs (->> docs
@@ -480,7 +493,7 @@
          (reduce (fn [acc doc]
                    (let [e (:crux.db/id doc)]
                      (reduce-kv (fn [acc k v]
-                                  (sc.api/spy)
+                                  ;; (sc.api/spy)
                                   (let [k-buf (get attr-key-bufs k)
                                         stats-buf (or (get acc k-buf)
                                                       (kv/get-value transient-kv-snapshot k-buf)
@@ -495,7 +508,7 @@
                                         (inc-stats-value-doc-value-count)
                                         (-> decode-stats-value->value-hll-buffer-from (hll/add v)))
                                       (-> stats-buf decode-stats-value->attr-value-buffer-from
-                                          (hll/add (mem/concat-buffer k-buf (c/->value-buffer v)))))
+                                          (mcs/insert v)))
                                     (assoc! acc k-buf stats-buf)))
                                 acc
                                 doc)))
@@ -964,8 +977,9 @@
         0.0))
 
   (attr-value-cardinality [_ attr value]
-    (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (mem/concat-buffer (c/->value-buffer attr) (c/->value-buffer value)) ))
-                decode-stats-value->attr-value-buffer-from)
+    (or (some-> (kv/get-value snapshot (encode-stats-key-to nil (c/->value-buffer attr)))
+                decode-stats-value->attr-value-buffer-from
+                (mcs/estimate value))
         0))
 
   db/IndexMeta
