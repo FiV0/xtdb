@@ -36,8 +36,7 @@
       (let [i (mod (murmur/hash val j) w)
             #_(murmur/truncate (murmur/hash val j) (highest-bit w))]
         (doto sketch
-          (.getAndAddLong (+ offset (* j i Long/BYTES)) 1))))
-    sketch))
+          (.getAndAddLong (+ offset (* j w Long/BYTES) (* i Long/BYTES)) 1))))))
 
 (defn estimate ^long [^AtomicBuffer sketch val]
   (let [w (.getShortVolatile sketch 0)
@@ -45,17 +44,31 @@
         res (->> (for [j (range d)]
                    (let [i (mod (murmur/hash val j) w)
                          #_(murmur/truncate (murmur/hash val j) (highest-bit w))]
-                     (.getLongVolatile sketch (+ offset (* j i Long/BYTES)))))
+                     (.getLongVolatile sketch (+ offset (* j w Long/BYTES) (* i Long/BYTES)))))
                  #_(remove zero?))]
     (if (seq res)
       (reduce min res)
       0)))
 
+(defn get-values [^AtomicBuffer sketch]
+  (let [w (.getShortVolatile sketch 0)
+        d (.getByte sketch Short/BYTES)]
+    (for [i (range d) j (range w)]
+      (.getLongVolatile sketch (+ offset (* i w Long/BYTES) (* j Long/BYTES))))))
+
 (comment
-  (def sktch (create {:w 256 :d 5}))
+  (def sktch (create {:w 256 :d 12}))
   (size sktch)
-  (size (mem/slice-buffer sktch 0 offset))
 
   (insert sktch :foo/bar)
   (estimate sktch :foo/bar)
-  (estimate sktch :foo/foo))
+  (estimate sktch :foo/foo)
+  (apply + (get-values sktch))
+
+  (doseq [i (range 1000)]
+    (insert sktch i))
+
+  (for [i (range 1000)]
+    (estimate sktch i))
+
+  )
