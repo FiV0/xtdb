@@ -1224,11 +1224,6 @@
      (set/difference (set (map :v leaf-triple-clauses))
                      (reduce set/union (vals (dissoc collected-vars :v-vars))))]))
 
-(defn- value-literal-estimates [triple-clauses stats]
-  (->> (filter (comp literal? :v) triple-clauses)
-       (group-by :v)
-       ))
-
 (comment
   (require 'sc.api))
 
@@ -1240,11 +1235,11 @@
 (defn estimate-value-literal-clauses [value-literal-clauses stats]
   (->>
    (map (fn [[v clauses]]
-          (reduce (fn [minimum {:keys [a]}]
-                    (if-let [est (estimate-attr-val-cardinality stats v a)]
-                      (cond-> est minimum (min minimum))
-                      minimum))
-                  nil clauses))
+          [v (reduce (fn [minimum {:keys [a]}]
+                       (if-let [est (estimate-attr-val-cardinality stats a v)]
+                         (cond-> est minimum (min minimum))
+                         minimum))
+                     nil clauses)])
         value-literal-clauses)
    (into {})))
 
@@ -1254,15 +1249,15 @@
               (cond-> est minimum (min minimum))
               minimum)) nil clauses))
 
-(defn estimate-in-value-literal-clauses [stats in in-args triple-clauses]
+(defn estimate-in-value-literal-clauses [stats {:keys [bindings] :as in} in-args triple-clauses]
   (let [value->triple-clauses (group-by :v triple-clauses)
-        var->value (->> (zipmap in in-args)
+        var->value (->> (zipmap bindings in-args)
                         (reduce (fn [res [[b-type in-vars] in-args]]
                                   (case b-type
-                                    :scalar (assoc res in-vars (first in-args))
+                                    :scalar (assoc res in-vars in-args)
                                     :tuple (into res (map vector in-vars in-args))
-                                    res))))]
-    (reduce (fn [res [var value]] (assoc res var (estimate-in-var stats value (value->triple-clauses var)))) var->value)))
+                                    res)) {}))]
+    (reduce (fn [res [var value]] (assoc res var (estimate-in-var stats value (value->triple-clauses var)))) {} var->value)))
 
 (defn- triple-join-order [type->clauses in-var-cardinalities [in in-args] stats]
   ;; TODO make more use of in-var-cardinalities
@@ -1320,10 +1315,14 @@
                                 (contains? range-var-frequencies var)
                                 (Math/pow (/ 0.5 (double (get range-var-frequencies var))))))
 
+        entity-cardinality (fn [a v]
+                             (if (or (literal? v) (single-value-in-vars v))
+                               (/ 1.0 (double (or (db/attr-value-cardinality stats a v) (db/eid-cardinality stats a))))
+                               (double (db/eid-cardinality stats a))))
+
         update-cardinality (fn [acc {:keys [e a v] :as clause}]
                              (let [{:keys [self-join? ignore-v?]} (meta clause)
-                                   es (double (cardinality-for-var e (cond->> (double (db/eid-cardinality stats a))
-                                                                       (or (literal? v) (single-value-in-vars v)) (/ 1.0))))
+                                   es (double (cardinality-for-var e (entity-cardinality a v)))
                                    vs (cond
                                         ignore-v? Double/MAX_VALUE
                                         self-join? (Math/nextUp es)
@@ -1339,8 +1338,10 @@
 
         start-vars (set/union literal-vars single-value-in-vars)
 
+        start-var-order (sort-by #(if-let [est (get start-vars-estimates %)] est Long/MAX_VALUE) start-vars)
+
         triple-clause-var-order (loop [vars (->> (sort-by val var->cardinality) (map key) (filter logic-var?) (remove #(contains? start-vars %)))
-                                       join-order (vec start-vars)
+                                       join-order (vec start-var-order)
                                        reachable-var-groups (list)]
                                   (if-not (seq vars)
                                     (vec (distinct join-order))
@@ -1722,6 +1723,7 @@
                                       (-> (compile-sub-query (assoc db :value-serde static-serde)
                                                              (->stats index-snapshot)
                                                              where in in-var-cardinalities
+                                                             in-args
                                                              rule-name->rules)
                                           (assoc :static-hash-cache (.hash-cache static-serde))))))
                                  (add-logic-var-constraints))
