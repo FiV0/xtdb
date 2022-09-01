@@ -1223,7 +1223,47 @@
      (set/difference (set (map :v leaf-triple-clauses))
                      (reduce set/union (vals (dissoc collected-vars :v-vars))))]))
 
-(defn- triple-join-order [type->clauses in-var-cardinalities stats]
+(defn- value-literal-estimates [triple-clauses stats]
+  (->> (filter (comp literal? :v) triple-clauses)
+       (group-by :v)
+       ))
+
+(comment
+  (require 'sc.api))
+
+(defn estimate-attr-val-cardinality [stats attr value]
+  (let [estimated-err (int (* index-store/min-count-sketch-epsilon (db/value-cardinality stats attr)))]
+    (when (< estimated-err 10)
+      (db/attr-value-cardinality stats attr value))))
+
+(defn estimate-value-literal-clauses [value-literal-clauses stats]
+  (->>
+   (map (fn [[v clauses]]
+          (reduce (fn [minimum {:keys [a]}]
+                    (if-let [est (estimate-attr-val-cardinality stats v a)]
+                      (cond-> est minimum (min minimum))
+                      minimum))
+                  nil clauses))
+        value-literal-clauses)
+   (into {})))
+
+(defn estimate-in-var [stats value clauses]
+  (reduce (fn [minimum {:keys [a]}]
+            (if-let [est (estimate-attr-val-cardinality stats value a)]
+              (cond-> est minimum (min minimum))
+              minimum)) nil clauses))
+
+(defn estimate-in-value-literal-clauses [stats in in-args triple-clauses]
+  (let [value->triple-clauses (group-by :v triple-clauses)
+        var->value (->> (zipmap in in-args)
+                        (reduce (fn [res [[b-type in-vars] in-args]]
+                                  (case b-type
+                                    :scalar (assoc res in-vars (first in-args))
+                                    :tuple (into res (map vector in-vars in-args))
+                                    res))))]
+    (reduce (fn [res [var value]] (assoc res var (estimate-in-var stats value (value->triple-clauses var)))) var->value)))
+
+(defn- triple-join-order [type->clauses in-var-cardinalities [in in-args] stats]
   ;; TODO make more use of in-var-cardinalities
   (let [[type->clauses project-only-leaf-vars] (expand-leaf-preds type->clauses (set (keys in-var-cardinalities)) stats)
         {triple-clauses :triple, range-clauses :range, pred-clauses :pred} type->clauses
@@ -1246,6 +1286,12 @@
         var->clauses (merge-with into
                                  (group-by :v triple-clauses)
                                  (group-by :e triple-clauses))
+
+        value-literal-clauses (->> (filter (comp literal? :v) triple-clauses)
+                                   (group-by :v))
+
+        start-vars-estimates (merge (estimate-value-literal-clauses value-literal-clauses stats)
+                                    (estimate-in-value-literal-clauses stats in in-args triple-clauses))
 
         literal-vars (->> (keys var->clauses)
                           (into #{} (filter literal?)))
@@ -1343,9 +1389,11 @@
 
   )
 
-(defn- calculate-join-order [type->clauses stats in-var-cardinalities]
+(defn- calculate-join-order [type->clauses stats in-var-cardinalities in-stuff]
   (let [in-vars (set (keys in-var-cardinalities))
-        [type->clauses triple-clause-var-order project-only-leaf-vars] (triple-join-order type->clauses in-var-cardinalities stats)
+
+        [type->clauses triple-clause-var-order project-only-leaf-vars]
+        (triple-join-order type->clauses in-var-cardinalities in-stuff stats)
 
         g (as-> (dep/graph) g
                 (reduce (fn [g [a b]]
@@ -1531,7 +1579,7 @@
 
 (defn- compile-sub-query [{:keys [fn-allow-list pred-ctx value-serde] :as db}
                           stats where in in-var-cardinalities
-                          rule-name->rules]
+                          in-args rule-name->rules]
   (try
     (let [in-vars (set (keys in-var-cardinalities))
 
@@ -1554,7 +1602,7 @@
 
           _ (validate-existing-vars type->clauses known-vars)
 
-          [type->clauses vars-in-join-order] (calculate-join-order type->clauses stats in-var-cardinalities)
+          [type->clauses vars-in-join-order] (calculate-join-order type->clauses stats in-var-cardinalities [in in-args])
 
           var->bindings (->> vars-in-join-order
                              (into {} (map-indexed (fn [idx var]
@@ -1598,7 +1646,7 @@
         (if (and (= ::dep/circular-dependency reason)
                  (not (contains? *broken-cycles* cycle)))
           (binding [*broken-cycles* (conj *broken-cycles* cycle)]
-            (compile-sub-query db stats (break-cycle where cycle) in in-var-cardinalities rule-name->rules))
+            (compile-sub-query db stats (break-cycle where cycle) in in-var-cardinalities in-args rule-name->rules))
           (throw e))))))
 
 (defn- build-idx-id->idx [db {:keys [var->joins] :as compiled-query}]
