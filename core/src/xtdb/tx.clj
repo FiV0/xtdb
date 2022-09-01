@@ -11,8 +11,7 @@
             [xtdb.io :as xio]
             [xtdb.system :as sys]
             [xtdb.tx.conform :as txc]
-            [xtdb.tx.event :as txe]
-            [xtdb.tx :as tx])
+            [xtdb.tx.event :as txe])
   (:import clojure.lang.MapEntry
            xtdb.codec.EntityTx
            java.io.Closeable
