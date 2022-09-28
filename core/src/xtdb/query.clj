@@ -1671,7 +1671,8 @@
 ;; work well this would need to be revisited.
 (defn- order-by-comparator [find order-by]
   (let [find-arg->index (zipmap find (range))]
-    (reify Comparator
+    (reify
+      Comparator
       (compare [_ a b]
         (loop [diff 0
                [{:keys [find-arg direction]} & order-by] order-by]
@@ -1682,7 +1683,10 @@
               (recur (long (cond-> (compare (get a index)
                                             (get b index))
                              (= :desc direction) -))
-                     order-by))))))))
+                     order-by)))))
+      clojure.lang.IFn
+      (invoke [this a b] (.compare this a b))
+      (applyTo [_ _] (throw (UnsupportedOperationException.))))))
 
 (defn- emit-projection [form {:keys [agg-allowed? fn-allow-list]
                               :or {agg-allowed? true}
