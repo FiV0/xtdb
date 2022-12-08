@@ -1674,7 +1674,7 @@
                 static-hash-cache]
          :as compiled-query} (-> (cache/compute-if-absent
                                   query-cache
-                                  [where in in-var-cardinalities rule-name->rules]
+                                  [where in in-var-cardinalities rule-name->rules var-ordering]
                                   identity
                                   (fn [_]
                                     (let [static-serde (->cached-serde value-serde {:unpooled? true})]
