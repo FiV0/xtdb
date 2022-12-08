@@ -1109,7 +1109,7 @@
 (def ^:private ^:dynamic *recursion-table* {})
 
 (defn- build-or-constraints
-  [or-clauses rule-name->rules var->bindings vars-in-join-order]
+  [or-clauses rule-name->rules var->bindings vars-in-join-order var-ordering]
   (for [{:keys [args branches] :as or-clause} or-clauses]
     (let [{:keys [idx-id rule-name]} (meta or-clause)
           [arg-type {:keys [bound-args free-args]}] args
@@ -1151,7 +1151,8 @@
                                       (binding [*recursion-table* (if cache-key
                                                                     (assoc *recursion-table* cache-key [])
                                                                     *recursion-table*)]
-                                        (let [{:keys [var->bindings results]} (build-sub-query db branch-clauses or-in-bindings in-args rule-name->rules)
+                                        (let [{:keys [var->bindings results]}
+                                              (build-sub-query db branch-clauses or-in-bindings in-args rule-name->rules var-ordering)
                                               free-args-in-join-order-bindings (map var->bindings free-args-in-join-order)]
                                           (when-let [idx-seq (seq results)]
                                             (if has-free-args?
@@ -1168,7 +1169,7 @@
                  (idx/update-relation-virtual-index! (get idx-id->idx idx-id) free-results)))
              true)))})))
 
-(defn- build-not-constraints [not-clauses rule-name->rules var->bindings]
+(defn- build-not-constraints [not-clauses rule-name->rules var->bindings var-ordering]
   (for [{:keys [args terms]} not-clauses
         :let [not-vars (vec (remove blank-var? args))
               not-in-bindings {:bindings [[:tuple not-vars]]}
@@ -1182,7 +1183,7 @@
                in-args (when (seq not-vars)
                          [(vec (for [^VarBinding var-binding not-var-bindings]
                                  (.get join-keys (.result-index var-binding))))])
-               {:keys [results]} (build-sub-query db terms not-in-bindings in-args rule-name->rules)]
+               {:keys [results]} (build-sub-query db terms not-in-bindings in-args rule-name->rules var-ordering)]
            (empty? results))))}))
 
 (defn- sort-triple-clauses [triple-clauses stats]
@@ -1584,8 +1585,8 @@
                                                                        :pred-clause+idx-ids pred-clause+idx-ids
                                                                        :var->bindings var->bindings
                                                                        :vars-in-join-order vars-in-join-order))
-                                        (build-not-constraints not-join-clauses rule-name->rules var->bindings)
-                                        (build-or-constraints or-join-clauses rule-name->rules var->bindings vars-in-join-order))
+                                        (build-not-constraints not-join-clauses rule-name->rules var->bindings var-ordering)
+                                        (build-or-constraints or-join-clauses rule-name->rules var->bindings vars-in-join-order var-ordering))
                                 (update-depth->constraints (vec (repeat (inc (count vars-in-join-order)) nil))))
 
        :var->range-constraints (build-var-range-constraints value-serde range-clauses)
