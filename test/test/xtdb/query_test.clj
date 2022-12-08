@@ -3778,6 +3778,50 @@
                   :vars-in-join-order
                   (filter #{'e 'v}))))))
 
+(t/deftest var-ordering-test
+  (fix/submit+await-tx (->> (for [x (range 1000)]
+                              [[::xt/put {:xt/id (str "thing-" x), :type :thing, :v x}]
+                               [::xt/put {:xt/id (str "other-thing-" x), :type :other-thing, :v x}]])
+                            (apply concat)))
+
+  (let [db (xt/db *api*)]
+    (t/is (= '[v e]
+             (->> (q/query-plan-for db
+                                    '{:find [e]
+                                      :in [v]
+                                      :where [[e :type :thing]
+                                              [e :v v]]}
+                                    [590])
+                  :vars-in-join-order
+                  (filter #{'e 'v}))))
+    (t/is (= '[e v]
+             (->> (q/query-plan-for db
+                                    '{:find [e]
+                                      :in [v]
+                                      :where [[e :type :thing]
+                                              [e :v v]]}
+                                    [590]
+                                    '[e v])
+                  :vars-in-join-order
+                  (filter #{'e 'v})))))
+
+  (let [db (xt/db *api*)]
+    (t/is (= #{["thing-590"]}
+             (xt/q db
+                   '{:find [e]
+                     :in [v]
+                     :where [[e :type :thing]
+                             [e :v v]]}
+                   590)))
+    (t/is (= #{["thing-590"]}
+             (xt/q db
+                   '{:find [e]
+                     :in [v]
+                     :where [[e :type :thing]
+                             [e :v v]]}
+                   590
+                   {:var-ordering '[e v]})))))
+
 (t/deftest test-binds-against-false-arg-885
   (fix/submit+await-tx [[::xt/put {:xt/id :foo, :name "foo", :flag? false}]
                         [::xt/put {:xt/id :bar, :name "bar", :flag? true}]

@@ -207,6 +207,8 @@
   (s/and vector? (s/cat :source-var (s/? '#{$})
                         :bindings (s/* ::binding))))
 
+(s/def ::var-ordering (s/nilable (s/coll-of logic-var? :kind vector? :min-count 2)))
+
 (defmulti pred-args-spec first)
 
 (defmethod pred-args-spec 'q [_]
@@ -1510,9 +1512,31 @@
     (eid-cardinality [_ a] (db/eid-cardinality index-snapshot a))
     (value-cardinality [_ a] (db/value-cardinality index-snapshot a))))
 
+(defn insert-at [v i x]
+  (reduce conj (into [] (take i v)) (cons x (drop i v))))
+
+(defn apply-var-ordering [vars-in-join-order var-ordering]
+  (if (set/subset? (set var-ordering) (set vars-in-join-order))
+    (let [var->index (zipmap vars-in-join-order (range))
+          constraints (partition 2 1 var-ordering)]
+      (loop [current-join-order vars-in-join-order var->index var->index constraints constraints]
+        (if-let [[var1 var2] (first constraints)]
+          (if (< (var->index var1) (var->index var2))
+            (recur current-join-order var->index (rest constraints))
+            (let [new-join-order (-> (remove #{var2} current-join-order)
+                                     (insert-at (var->index var1) var2))]
+              (recur new-join-order (zipmap new-join-order (range)) (rest constraints))))
+          current-join-order)))
+    (throw (ex-info "var-ordering needs to be a subset of vars in the query"
+                    {:vars-in-join-order vars-in-join-order
+                     :var-ordering var-ordering}))))
+
+(comment
+  (apply-var-ordering '[v1 v2 v3 v4] '[v4 v3 v2]))
+
 (defn- compile-sub-query [{:keys [fn-allow-list pred-ctx value-serde] :as db}
                           stats where in in-var-cardinalities
-                          rule-name->rules]
+                          rule-name->rules var-ordering]
   (try
     (let [in-vars (set (keys in-var-cardinalities))
 
@@ -1536,6 +1560,8 @@
           _ (validate-existing-vars type->clauses known-vars)
 
           [type->clauses vars-in-join-order] (calculate-join-order type->clauses stats in-var-cardinalities)
+          vars-in-join-order (apply-var-ordering vars-in-join-order var-ordering)
+
 
           var->bindings (->> vars-in-join-order
                              (into {} (map-indexed (fn [idx var]
@@ -1579,7 +1605,7 @@
         (if (and (= ::dep/circular-dependency reason)
                  (not (contains? *broken-cycles* cycle)))
           (binding [*broken-cycles* (conj *broken-cycles* cycle)]
-            (compile-sub-query db stats (break-cycle where cycle) in in-var-cardinalities rule-name->rules))
+            (compile-sub-query db stats (break-cycle where cycle) in in-var-cardinalities rule-name->rules var-ordering))
           (throw e))))))
 
 (defn- build-idx-id->idx [db {:keys [var->joins] :as compiled-query}]
@@ -1635,7 +1661,8 @@
 (defn- merge-hash-cache! [^CachedSerde cached-serde, ^Map hash-cache]
   (.putAll ^Map (.hash-cache cached-serde) hash-cache))
 
-(defn- build-sub-query [{:keys [query-cache value-serde index-snapshot] :as db} where in in-args rule-name->rules]
+(defn- build-sub-query [{:keys [query-cache value-serde index-snapshot] :as db} where in in-args
+                        rule-name->rules var-ordering]
   ;; NOTE: this implies argument sets with different vars get compiled differently.
   (let [in-var-cardinalities (->approx-in-var-cardinalities in in-args)
         {:keys [depth->constraints
@@ -1654,7 +1681,7 @@
                                       (-> (compile-sub-query (assoc db :value-serde static-serde)
                                                              (->stats index-snapshot)
                                                              where in in-var-cardinalities
-                                                             rule-name->rules)
+                                                             rule-name->rules var-ordering)
                                           (assoc :static-hash-cache (.hash-cache static-serde))))))
                                  (add-logic-var-constraints))
         _ (merge-hash-cache! value-serde static-hash-cache)
@@ -1920,7 +1947,8 @@
 
 (defn query-plan-for
   ([db q] (query-plan-for db q []))
-  ([db q in-args]
+  ([db q in-args] (query-plan-for db q in-args []))
+  ([db q in-args var-ordering]
    (s/assert ::query q)
    (with-open [index-snapshot (open-index-snapshot db)]
      (let [value-serde (->cached-serde index-snapshot)
@@ -1931,7 +1959,8 @@
            [in in-args] (add-legacy-args conformed-q in-args)]
        (compile-sub-query db (->stats index-snapshot) where
                           in (->approx-in-var-cardinalities in in-args)
-                          (rule-name->rules rules))))))
+                          (rule-name->rules rules)
+                          var-ordering)))))
 
 (defn- ->return-maps [{:keys [keys syms strs]}]
   (let [ks (or (some->> keys (mapv keyword))
@@ -1940,7 +1969,8 @@
     (fn [row]
       (zipmap ks row))))
 
-(defn query [{:keys [index-snapshot] :as db} ^ConformedQuery conformed-q in-args]
+(defn query [{:keys [index-snapshot] :as db} ^ConformedQuery conformed-q in-args {:keys [var-ordering]}]
+  (s/assert ::var-ordering var-ordering)
   (let [q (.q-normalized conformed-q)
         q-conformed (.q-conformed conformed-q)
         {:keys [find where rules offset limit order-by]} q-conformed
@@ -1962,7 +1992,7 @@
                     :value-serde value-serde
                     :entity-resolver-fn (or (:entity-resolver-fn db)
                                             (new-entity-resolver-fn db)))
-          {:keys [results] :as built-query} (build-sub-query db where in in-args rule-name->rules)
+          {:keys [results] :as built-query} (build-sub-query db where in in-args rule-name->rules var-ordering)
           {:keys [find-arg-types find-fn]} (compile-find find built-query db)
           return-maps? (some q [:keys :syms :strs])]
 
@@ -2067,10 +2097,12 @@
                        ::query-id query-id}))
       (try
         (let [db (as-> this db
-                   (assoc db :index-snapshot index-snapshot)
-                   (assoc db :entity-resolver-fn (or entity-resolver-fn (new-entity-resolver-fn db))))]
-
-          (->> (xtdb.query/query db conformed-query args)
+                       (assoc db :index-snapshot index-snapshot)
+                       (assoc db :entity-resolver-fn (or entity-resolver-fn (new-entity-resolver-fn db))))
+              [in-args opts] (if (map? (last args))
+                               [(butlast args) (last args)]
+                               [args {}])]
+          (->> (xtdb.query/query db conformed-query in-args opts)
                (xio/->cursor (fn []
                                (xio/try-close index-snapshot)
                                (when bus
@@ -2091,9 +2123,9 @@
     (let [?eid (gensym '?eid)
           projection (cond-> projection (string? projection) c/read-edn-string-with-readers)]
       (->> (xt/q db
-                  {:find [(list 'pull ?eid projection)]
-                   :in [?eid]}
-                  eid)
+                 {:find [(list 'pull ?eid projection)]
+                  :in [?eid]}
+                 eid)
            ffirst)))
 
   (pull-many [db projection eids]
