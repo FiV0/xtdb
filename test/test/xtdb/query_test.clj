@@ -3806,21 +3806,31 @@
                   (filter #{'e 'v})))))
 
   (let [db (xt/db *api*)]
-    (t/is (= #{["thing-590"]}
-             (xt/q db
-                   '{:find [e]
-                     :in [v]
-                     :where [[e :type :thing]
-                             [e :v v]]}
-                   590)))
-    (t/is (= #{["thing-590"]}
-             (xt/q db
-                   '{:find [e]
-                     :in [v]
-                     :where [[e :type :thing]
-                             [e :v v]]}
-                   590
-                   {:var-ordering '[e v]})))))
+    (t/testing "no custom var-ordering"
+      (t/is (= #{["thing-590"]}
+               (xt/q db
+                     '{:find [e]
+                       :in [v]
+                       :where [[e :type :thing]
+                               [e :v v]]}
+                     590))))
+    (t/testing "only custom var-ordering"
+      (t/is (= #{["thing-590"]}
+               (xt/q db
+                     '{:find [e]
+                       :where [[e :type :thing]
+                               [e :v v]
+                               [e :v 590]]}
+                     {:var-ordering '[e v]}))))
+    (t/testing "in vars and custom var-ordering"
+      (t/is (= #{["thing-590"]}
+               (xt/q db
+                     '{:find [e]
+                       :in [v]
+                       :where [[e :type :thing]
+                               [e :v v]]}
+                     590
+                     {:var-ordering '[e v]}))))))
 
 (t/deftest test-binds-against-false-arg-885
   (fix/submit+await-tx [[::xt/put {:xt/id :foo, :name "foo", :flag? false}]
