@@ -1,0 +1,64 @@
+= KD-tree
+
+The KD-tree can not be thought of completely independently of the link:grid.adoc[Grid].
+So if you want to understand the whole picture of the temporal structure you will probably need
+to read that document too. The KD-tree serves to store temporal data and answer questions
+on the temporal data.
+
+https://en.wikipedia.org/wiki/K-d_tree[Wikipedia] has good page on kd-trees, we suggest that
+, if you have not already, have a look at that first.
+In short KD-trees store points (with a fixed number of dimensions)
+and let you query for those points efficiently. It achieves this by building a tree where on
+every internal node the points are partitioned according to some dimension. In our case the points
+are made up temporal data + some connection to the content.
+
+Both the KD-tree and the Grid implement an KD-tree interface. When talking about the kd-tree
+we referring to the in-memory part of the whole structure.
+
+In the following we are describing the content and that goes in and out of the KD-tree/Grid.
+The KD-tree (currently) stores points in a 6D-space. The six-dimensions are the following.
+- `iid` - an internal representation of xt/id
+- `row-id` - an id referring to a specific version of a document
+- valid-time-start -
+- valid-time-end -
+- system-time-start -
+- system-time-end -
+
+As a simple example, let's say you put the following two documents:
+`[put :foo {:xt/id 1 :bar 1} {:for-valid-time [:in "2020"]}]`
+`[put :foo {:xt/id 1 :bar 2} {:for-valid-time ["2021" "2023"]}]`
+in two different transactions where system-time is equal to valid-time.
+Then the KD-tree stores all the temporal information related to these
+two document versions (meaning validity of the first document according to valid-time and system-time etc..).
+
+After the first transaction the kd-tree would contain the point (according to the order above)
+`[1 1 "2020" "+inf" "2020" "+inf"]`.  After the second transaction the tree would contain the points.
+[source,clojure]
+----
+[1 1 "2020" "+inf" "2020" "2021"] ;; old version, see different sys-time
+[1 1 "2020" "-2021" "2021" "+inf"] ;; old version, first valid part interval
+[1 2 "2021" "2023" "2021" "+inf"] ;; new version
+[1 1 "2023+" "+inf" "2021" "+inf"] ;; old version, second vaild part interval
+----
+Beware that the tree does not store the data in the format above (that's just for illustration) but rather
+as 64-bit longs. The dimensions might also not appear in this order. The order is quite important
+as a highly selective dimension coming earlier is better. This is even more important for the grid
+(see the grid for more details).
+
+In a bitemporal system it is quite obvious why one would need to store the later four dimensions (temporal dimensions).
+- `iid`- lets you easily query for all the versions of a document.
+- `row-id`- with the row-id you connect content to a validity time range (in both system and valid time)
+
+One could potentially ask why both ids are needed as one could always just store `row-id`
+and go from `iid` to `row-ids`. That is a valid question. Its essentially a tradeoff.
+One can (without indirection) ask for all versions + validity of a document if `iid` is in the tree.
+Otherwise one has to first go off to the content and retrieve all `row-id` s for a specific `iid`.
+
+When querying the tree one specifies a min and a max point. It then returns all points where each dimensions falls in
+the range of that dimension specified by min and max. For example:
+[source,clojure]
+----
+[1 "-inf" "-inf" "2023" "-inf" "2023"] ;; min
+[1 "+inf" "2020" "+inf" "2023+" "+inf"] ;; max
+----
+Would return all versions of entity `1` which are valid between 2020 and 2023 looking at the database in 2023.
