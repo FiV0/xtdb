@@ -400,14 +400,15 @@
            (scan-op-at-now for-system-time))))
 
 (defn use-current-row-id-cache? [^IWatermark watermark scan-opts basis temporal-col-names]
-  (and
-   (.txBasis watermark)
-   (= (:tx basis)
-      (.txBasis watermark))
-   (at-now? scan-opts)
-   (>= (util/instant->micros (:current-time basis))
-       (util/instant->micros (:system-time (:tx basis))))
-   (empty? (remove #(= % "xt$id") temporal-col-names))))
+  (when (= (System/getProperty "xtdb.current.rowid.cache.enabled") "true")
+    (and
+     (.txBasis watermark)
+     (= (:tx basis)
+        (.txBasis watermark))
+     (at-now? scan-opts)
+     (>= (util/instant->micros (:current-time basis))
+         (util/instant->micros (:system-time (:tx basis))))
+     (empty? (remove #(= % "xt$id") temporal-col-names)))))
 
 (defn get-current-row-ids [^IWatermark watermark basis]
   (.getCurrentRowIds

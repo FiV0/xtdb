@@ -2,7 +2,8 @@
   (:require [clojure.data.json :as json]
             [xtdb.util :as util]
             [xtdb.temporal.kd-tree :as kd]
-            [xtdb.temporal.histogram :as hist])
+            [xtdb.temporal.histogram :as hist]
+            [clojure.set :as set])
   (:import [xtdb.temporal.kd_tree IKdTreePointAccess KdTreeVectorPointAccess]
            [xtdb.temporal.histogram IHistogram IMultiDimensionalHistogram]
            xtdb.BitUtil
@@ -173,6 +174,106 @@
         (recur (inc n) (bit-or (bit-shift-left idx axis-shift) axis-idx))))))
 
 (declare ->grid-point-access)
+
+(def dimensions '("system-time-end-idx" "id-idx" "system-time-start-idx" "row-id-idx" "app-time-start-idx" "app-time-end-idx"))
+(defn ->coordinates [x]
+  (zipmap dimensions x))
+
+(require '[clojure.set :as set])
+
+(defn single-dimension-idxs [k idx axis-shift]
+  (let [axis-size (dec (bit-shift-left 1 axis-shift))]
+    (->> (range (bit-shift-left 1 (* k axis-shift)))
+         (reduce (fn [res i]
+                   (update res (bit-and axis-size (bit-shift-right i (* idx axis-shift))) (fnil conj []) i))
+                 {}))))
+
+(defn two-dimension-idxs [k [idx1 idx2] axis-shift]
+  (for [[i idxs1] (single-dimension-idxs k idx1 axis-shift)
+        [j idxs2] (single-dimension-idxs k idx2 axis-shift)]
+    [[i j] (seq (set/intersection (set idxs1) (set idxs2)))]))
+
+(comment
+  (single-dimension-idxs 5 0 1)
+  (single-dimension-idxs 5 3 1)
+  (two-dimension-idxs 5 [0 3] 1))
+
+(defn single-dimension-bins [grid k]
+  (let [cells (.cells grid)
+        axis-shift (.axis-shift grid)]
+    (for [i (range k)]
+      [i (->> (single-dimension-idxs k i axis-shift)
+              (map (fn [[i idxs]] [i (->> (map #(some-> (nth cells %) (.getValueCount)) idxs)
+                                          (remove nil?)
+                                          (reduce +))]))
+              (sort-by first))])))
+
+(defn two-dimensions-bins [grid k]
+  (let [cells (.cells grid)
+        axis-shift (.axis-shift grid)]
+    (for [i (range k)
+          j (range i k)]
+      [[i j] (->> (two-dimension-idxs k [i j] axis-shift)
+                  (map (fn [[i idxs]] [i (->> (map #(some-> (nth cells %) (.getValueCount)) idxs)
+                                              (remove nil?)
+                                              (reduce +))]))
+                  (sort-by first))])))
+
+(defn grid->stats [grid]
+  (let [k (dec (.k grid))
+        cells (.cells grid)
+        axis-shift (.axis-shift grid)]
+    {:single-dimension (single-dimension-bins grid k)
+     :two-dimension (two-dimensions-bins grid k)}))
+
+(comment
+  (sc.api/letsc [106 -2]
+                ;; (type (.static-kd-tree kd-tree))
+                (def kd-tree (.static-kd-tree kd-tree)))
+
+  (.k kd-tree)
+
+  (grid->stats kd-tree))
+
+
+
+(comment
+
+
+  (.value-count kd-tree)
+  (.ref-cnt kd-tree)
+
+  (let [cells (.cells kd-tree)]
+    ;; (count cells)
+    (map #(some-> % (.getValueCount)) cells))
+
+  (let [mins (.mins kd-tree)]
+    (->coordinates (map identity mins)))
+
+  (let [maxs (.maxs kd-tree)]
+    (->coordinates (map identity maxs)))
+
+  (let [scales (.scales kd-tree)]
+    (->coordinates (map seq scales)))
+
+  (.axis-shift kd-tree)
+  (.cell-shift kd-tree)
+
+
+  (let [mins (.mins kd-tree)
+        maxs (.maxs kd-tree)
+        scales (.scales kd-tree)]
+    {:mins (->coordinates (map identity mins))
+     :maxs (->coordinates (map identity maxs))
+     :scales (->coordinates (map seq scales))
+     :axis-shift (.axis-shift kd-tree)
+     :cell-shift (.cell-shift kd-tree)})
+
+  (.axis-shift kd-tree)
+  (.cell-shift kd-tree)
+
+
+  )
 
 (deftype Grid [^ArrowBuf arrow-buf
                ^objects scales
@@ -374,10 +475,15 @@
 
 (def ^:private ^:const point-vec-idx 0)
 
+(comment
+  (sc.api/letsc [1018 -2]
+                grid-meta))
+
 (defn ->arrow-buf-grid ^xtdb.temporal.grid.Grid [^ArrowBuf arrow-buf]
   (let [footer (util/read-arrow-footer arrow-buf)
         schema (.getSchema footer)
         grid-meta (json/read-str (get (.getCustomMetadata schema) "grid-meta") :key-fn keyword)
+        ;; _ (sc.api/spy)
         allocator (.getAllocator (.getReferenceManager arrow-buf))
         cells (object-array
                (for [block (.getRecordBatches footer)]
@@ -396,12 +502,12 @@
 
 (defn ->disk-grid
   (^xtdb.temporal.grid.Grid [^BufferAllocator allocator ^Path path points {:keys [^long max-histogram-bins
-                                                                                   ^long cell-size
-                                                                                   ^long k
-                                                                                   deletes?]
-                                                                            :or {max-histogram-bins 128
-                                                                                 cell-size (* 8 1024)
-                                                                                 deletes? false}}]
+                                                                                  ^long cell-size
+                                                                                  ^long k
+                                                                                  deletes?]
+                                                                           :or {max-histogram-bins 128
+                                                                                cell-size (* 8 1024)
+                                                                                deletes? false}}]
    (assert (number? k))
    (util/mkdirs (.getParent path))
    (let [^long total (kd/kd-tree-size points)

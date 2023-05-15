@@ -138,8 +138,7 @@
                   (+ s (/ mi 2.0))))))))))
 
   (uniform [this number-of-buckets]
-    (let [last-idx (dec (.size bins))
-          number-of-buckets number-of-buckets]
+    (let [last-idx (dec (.size bins))]
       (double-array
        (for [^long x (range 1 number-of-buckets)
              :let [s (* (double (/ x number-of-buckets)) total)
@@ -324,11 +323,11 @@
 
           (.forEach bins (reify Consumer
                            (accept [_ b]
-                             (let [^MultiDimensionalBin b b]
-                               (let [neighbour (.getNeighbour b)]
-                                 (when (or (identical? bin-i neighbour)
-                                           (identical? bin-i+1 neighbour))
-                                   (find-neighbour bins b))))))))))
+                             (let [^MultiDimensionalBin b b
+                                   neighbour (.getNeighbour b)]
+                               (when (or (identical? bin-i neighbour)
+                                         (identical? bin-i+1 neighbour))
+                                 (find-neighbour bins b)))))))))
 
     this)
 

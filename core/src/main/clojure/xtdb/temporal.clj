@@ -277,11 +277,48 @@
       (log/errorf t "Failed to parse %s" obj-key)
       (throw t))))
 
+(comment
+  (def ranges (atom []))
+  (distinct (deref ranges))
+
+  (ffirst (deref ranges))
+
+  (require 'sc.api)
+
+  (defn n-times [n f]
+    (apply comp (repeat n f)))
+
+  (require '[clojure.math :as m])
+
+  (/ (m/log 102400) (m/log 2))
+
+  (sc.api/letsc [1017 -1]
+                ;; (type kd-tree)
+                ;; (kd/kd-tree-height (.left kd-tree))
+                ;; (kd/kd-tree-height ((n-times 10 #(.right %)) kd-tree))
+
+                (let [^FixedSizeListVector cell (aget (.cells (.static-kd-tree kd-tree) 0))]
+                  (.getValueCount cell))
+
+                #_(loop [trees [kd-tree] res []]
+                    (if-let [t (first trees)]
+                      (if (instance? xtdb.temporal.kd_tree.InnerNode t)
+                        (recur (-> trees rest (conj (.left t)) (conj (.right t))) res)
+                        (recur (rest trees) (conj res t)))
+                      (map kd/kd-tree-size res)))
+
+                #_(time (iterator-seq (.iterator (kd/kd-tree-range-search kd-tree (ffirst (deref ranges)) (second (last (deref ranges))))))))
+
+  )
+
 (defn- ->temporal-rel ^xtdb.vector.IIndirectRelation [^BufferAllocator allocator, kd-tree columns temporal-min-range temporal-max-range ^Roaring64Bitmap row-id-bitmap]
   (let [^IKdTreePointAccess point-access (kd/kd-tree-point-access kd-tree)
         ^LongStream kd-tree-idxs (if (.isEmpty row-id-bitmap)
                                    (LongStream/empty)
                                    (kd/kd-tree-range-search kd-tree temporal-min-range temporal-max-range))
+        ;; _ (println (kd/kd-tree-height kd-tree))
+        ;; _ (swap! ranges conj [temporal-min-range temporal-max-range])
+        _ (sc.api/spy)
         coordinates (-> kd-tree-idxs
                         (.mapToObj (reify LongFunction
                                      (apply [_ x]
