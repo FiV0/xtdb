@@ -1886,6 +1886,7 @@
                (lp/validate-plan plan)))]
      (try
        (let [plan (plan ag)]
+         (clojure.pprint/pprint plan)
          (if (#{:insert :delete :update :erase} (first plan))
            (let [[dml-op dml-op-opts plan] plan]
              [dml-op dml-op-opts
@@ -1895,6 +1896,6 @@
              (validate-plan))))
        (catch Throwable t
          (throw (err/illegal-arg ;;might not be a bad query but IAE returns errors via pg-wire
-                  ::plan-error
-                  {::err/message (format "Error Planning SQL: %s" (ex-message t))}
-                  t)))))))
+                 ::plan-error
+                 {::err/message (format "Error Planning SQL: %s" (ex-message t))}
+                 t)))))))

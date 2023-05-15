@@ -22,7 +22,7 @@
        (-> ast
            (plan/plan-query query-opts)
            (vary-meta assoc :param-count (sem/param-count ast))
-           #_(doto clojure.pprint/pprint))))))
+           (doto clojure.pprint/pprint))))))
 
 (defn open-sql-query ^xtdb.IResultSet [^BufferAllocator allocator, wm-src, ^PreparedQuery pq,
                                        {:keys [basis default-tz default-all-valid-time?] :as query-opts}]

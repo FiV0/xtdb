@@ -8,7 +8,8 @@
             [xtdb.test-util :as tu]
             [xtdb.util :as util]
             [integrant.core :as i]
-            [integrant.repl :as ir])
+            [integrant.repl :as ir]
+            [xtdb.datalog :as xt])
   (:import java.time.Duration))
 
 (def dev-node-dir
@@ -99,3 +100,70 @@
       (prn !q)
       (let [db (ingest/snapshot (tu/component node :xtdb/ingester))]
         (time (tu/query-ra @!q db))))))
+
+(comment
+  (go)
+  (halt)
+  (reset)
+
+  (do
+    (xt/submit-tx node [[:put :users {:xt/id 1 :name "Shannon"}]
+                        [:put :users {:xt/id 2 :name "Turing"}]])
+
+    (xt/submit-tx node [[:put :posts {:xt/id 1 :user-id 1 :text "Entropy is good!"}]
+                        [:put :posts {:xt/id 2 :user-id 1 :text "The Turing test is wrong!"}]
+                        [:put :posts {:xt/id 3 :user-id 2 :text "foo"}]])
+    )
+
+  (require '[xtdb.sql :as sql])
+
+  ;; uses single-join
+  (def query "
+select
+  users.xt$id,
+  (
+      select count(posts.xt$id)
+      from posts
+      where posts.user_id = users.xt$id
+  ) as post_count
+from users")
+
+  ;; before
+  [:project
+   [{xt$id users__108_xt$id} {post_count subquery__25_$column_1$}]
+   [:apply
+    :single-join
+    {users__108_xt$id ?users__108_xt$id}
+    [:rename users__108 [:scan {:table users} [xt$id]]]
+    [:rename
+     subquery__25
+     [:project
+      [{$column_1$ $agg_out__27_34$}]
+      [:group-by
+       [{$agg_out__27_34$ (count $agg_in__27_34$)}]
+       [:map
+        [{$agg_in__27_34$ posts__58_xt$id}]
+        [:select
+         (= posts__58_user_id ?users__108_xt$id)
+         [:rename posts__58 [:scan {:table posts} [xt$id user_id]]]]]]]]]]
+  ;; after
+  [:rename
+   {x1 xt$id, x6 post_count}
+   [:project
+    [x1 x6]
+    [:group-by
+     [x1 $row_number$ {x6 (count x3)}]
+     [:left-outer-join
+      [{x1 x4}]
+      [:map
+       [{$row_number$ (row-number)}]
+       [:rename {xt$id x1} [:scan {:table users} [xt$id]]]]
+      [:rename
+       {xt$id x3, user_id x4}
+       [:scan {:table posts} [xt$id user_id]]]]]]]
+
+  (sql/q node [query])
+
+
+
+  )
