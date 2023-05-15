@@ -176,6 +176,8 @@ dependencies {
 
     devImplementation("integrant", "repl", "0.3.2")
     devImplementation("com.azure","azure-identity","1.9.0")
+    devImplementation("io.github.nextjournal", "clerk", "0.13.842")
+
     testImplementation("org.slf4j", "slf4j-api", "2.0.6")
     testImplementation("com.clojure-goes-fast", "clj-async-profiler", "1.0.0")
     testImplementation("org.postgresql", "postgresql", "42.5.0")
@@ -187,6 +189,7 @@ dependencies {
 if (hasProperty("fin")) {
     dependencies {
         devImplementation("vvvvalvalval","scope-capture","0.3.3")
+        devImplementation("lambdaisland", "deep-diff2", "2.8.190")
     }
 }
 

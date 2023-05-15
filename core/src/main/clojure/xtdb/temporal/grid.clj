@@ -227,12 +227,11 @@
      :two-dimension (two-dimensions-bins grid k)}))
 
 (comment
-  (sc.api/letsc [106 -2]
+  (sc.api/letsc [109 -1]
                 ;; (type (.static-kd-tree kd-tree))
                 (def kd-tree (.static-kd-tree kd-tree)))
 
   (.k kd-tree)
-
   (grid->stats kd-tree))
 
 
@@ -245,7 +244,11 @@
 
   (let [cells (.cells kd-tree)]
     ;; (count cells)
-    (map #(some-> % (.getValueCount)) cells))
+    (->> (map #(some-> % (.getValueCount)) cells)
+         (filter nil?)
+         count)
+
+    )
 
   (let [mins (.mins kd-tree)]
     (->coordinates (map identity mins)))
