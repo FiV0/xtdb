@@ -277,39 +277,9 @@
       (log/errorf t "Failed to parse %s" obj-key)
       (throw t))))
 
-(comment
-  (def ranges (atom []))
-  (distinct (deref ranges))
+(def range-queries (atom 0))
 
-  (ffirst (deref ranges))
-
-  (require 'sc.api)
-
-  (defn n-times [n f]
-    (apply comp (repeat n f)))
-
-  (require '[clojure.math :as m])
-
-  (/ (m/log 102400) (m/log 2))
-
-  (sc.api/letsc [1017 -1]
-                ;; (type kd-tree)
-                ;; (kd/kd-tree-height (.left kd-tree))
-                ;; (kd/kd-tree-height ((n-times 10 #(.right %)) kd-tree))
-
-                (let [^FixedSizeListVector cell (aget (.cells (.static-kd-tree kd-tree) 0))]
-                  (.getValueCount cell))
-
-                #_(loop [trees [kd-tree] res []]
-                    (if-let [t (first trees)]
-                      (if (instance? xtdb.temporal.kd_tree.InnerNode t)
-                        (recur (-> trees rest (conj (.left t)) (conj (.right t))) res)
-                        (recur (rest trees) (conj res t)))
-                      (map kd/kd-tree-size res)))
-
-                #_(time (iterator-seq (.iterator (kd/kd-tree-range-search kd-tree (ffirst (deref ranges)) (second (last (deref ranges))))))))
-
-  )
+(require 'sc.api)
 
 (defn- ->temporal-rel ^xtdb.vector.IIndirectRelation [^BufferAllocator allocator, kd-tree columns temporal-min-range temporal-max-range ^Roaring64Bitmap row-id-bitmap]
   (let [^IKdTreePointAccess point-access (kd/kd-tree-point-access kd-tree)
@@ -317,8 +287,8 @@
                                    (LongStream/empty)
                                    (kd/kd-tree-range-search kd-tree temporal-min-range temporal-max-range))
         ;; _ (println (kd/kd-tree-height kd-tree))
-        ;; _ (swap! ranges conj [temporal-min-range temporal-max-range])
-        _ (sc.api/spy)
+        _ (swap! range-queries inc)
+        ;; _ (sc.api/spy)
         coordinates (-> kd-tree-idxs
                         (.mapToObj (reify LongFunction
                                      (apply [_ x]
@@ -452,10 +422,13 @@
   (let [row-ids-to-add (row-ids-to-from-start kd-tree current-time)
         row-id-changes-by-app-time (sort-by #(aget ^longs % 0) row-ids-to-add)]
     (reduce
-      (fn [current-row-ids-acc ^longs change]
-        (conj current-row-ids-acc (aget change 1)))
-      #{}
-      row-id-changes-by-app-time)))
+     (fn [current-row-ids-acc ^longs change]
+       (conj current-row-ids-acc (aget change 1)))
+     #{}
+     row-id-changes-by-app-time)))
+
+(defprotocol GetKdTree
+  (get-kd-tree [this]))
 
 (deftype TemporalManager [^BufferAllocator allocator
                           ^ObjectStore object-store
@@ -468,6 +441,8 @@
                           ^:unsynchronized-mutable kd-tree-snapshot-idx
                           ^:volatile-mutable kd-tree
                           ^boolean async-snapshot?]
+  GetKdTree
+  (get-kd-tree [_] kd-tree)
   TemporalManagerPrivate
   (latestTemporalSnapshotIndex [_ chunk-idx]
     (->> (.listObjects object-store "temporal-snapshots/")
@@ -518,8 +493,8 @@
       (.reloadTemporalIndex this temporal-chunk-idx (.latestTemporalSnapshotIndex this temporal-chunk-idx))
       (set! (.current-row-ids this)
             (current-row-ids-from-start
-              (.kd-tree this)
-              (util/instant->micros (.system-time latest-completed-tx))))))
+             (.kd-tree this)
+             (util/instant->micros (.system-time latest-completed-tx))))))
 
   (awaitSnapshotBuild [_]
     (some-> snapshot-future (deref)))
@@ -556,10 +531,10 @@
 
         (getCurrentRowIds [_ current-time]
           (advance-current-row-ids
-            current-row-ids
-            kd-tree
-            (util/instant->micros (.system-time latest-completed-tx))
-            current-time))
+           current-row-ids
+           kd-tree
+           (util/instant->micros (.system-time latest-completed-tx))
+           current-time))
 
         AutoCloseable
         (close [_]
@@ -600,11 +575,11 @@
 
       (when latest-completed-tx
         (vswap!
-          !current-row-ids
-          advance-current-row-ids
-          @!kd-tree
-          (util/instant->micros (.system-time latest-completed-tx))
-          system-time-μs))
+         !current-row-ids
+         advance-current-row-ids
+         @!kd-tree
+         (util/instant->micros (.system-time latest-completed-tx))
+         system-time-μs))
 
       (reify
         ITemporalTxIndexer
@@ -647,10 +622,10 @@
 
         (getCurrentRowIds [_ current-time]
           (advance-current-row-ids
-            @!current-row-ids
-            @!kd-tree
-            (util/instant->micros (.system-time latest-completed-tx))
-            current-time)))))
+           @!current-row-ids
+           @!kd-tree
+           (util/instant->micros (.system-time latest-completed-tx))
+           current-time)))))
 
   AutoCloseable
   (close [this]

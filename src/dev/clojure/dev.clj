@@ -99,3 +99,11 @@
       (prn !q)
       (let [db (ingest/snapshot (tu/component node :xtdb/ingester))]
         (time (tu/query-ra @!q db))))))
+
+(comment
+  (require '[nextjournal.clerk :as clerk])
+  (clerk/serve! {:browse? true})
+  (clerk/serve! {:watch-paths ["notebooks"]})
+
+
+  )

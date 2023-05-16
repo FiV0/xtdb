@@ -2,18 +2,26 @@
   (:require [clojure.java.io :as io]
             [xtdb.node :as node]
             [xtdb.test-util :as tu]
-            [xtdb.datalog :as d]
-            [xtdb.util :as util]))
+            [xtdb.api :as d]
+            [xtdb.util :as util]
+            [xtdb.temporal :as tmp]
+            [xtdb.temporal.grid :as grid]))
+
+#_(doseq [s '[io node tu d util tmp grid]]
+    (ns-unalias *ns* s))
 
 (comment
-  (def data-dir "tmp/temporal-noodle")
+  (def no-history-dir "dev/temporal-noodle-no-history")
+  (def history-dir "dev/temporal-noodle-history")
+  ;; (util/delete-dir (.toPath (io/file data-dir)))
 
-  (do
-    ;; (.close n)
-    ;; (util/delete-dir (.toPath (io/file data-dir)))
-    (def n (tu/->local-node {#_#_:rows-per-chunk 10000
-                             #_#_:rows-per-block 1000
-                             :node-dir (.toPath (io/file data-dir))})))
+  (defn ->config [dir]
+    {:xtdb.log/local-directory-log {:root-path (io/file dir "log")}
+     :xtdb.buffer-pool/buffer-pool {:cache-path (io/file dir "buffers")}
+     :xtdb.object-store/file-system-object-store {:root-path (io/file dir "objects")}})
+
+  (def no-history-n (node/start-node (->config no-history-dir)))
+  (def history-n (node/start-node (->config history-dir)))
 
   (defn caught-up? [n]
     (let [{:keys [latest-completed-tx latest-submitted-tx]} (d/status n)]
@@ -23,13 +31,8 @@
     (while (not (caught-up? n))
       (Thread/sleep 100)))
 
-  (d/status n)
-
-  (def integer-count (- 102400 2000) #_(- (* 1 1e5) 100))
+  (def integer-count (+ 102400 2000) #_(- (* 1 1e5) 100))
   (def tx-batch-size 64)
-
-  (d/submit-tx n (->> (shuffle (range 2500))
-                      (map (fn [i] [:put :ints {:xt/id i :n i}]))))
 
   ;; without updates to docs
   (time
@@ -38,13 +41,25 @@
                      (map (fn [i] [:put :ints {:xt/id i :n i}]))
                      (partition-all tx-batch-size))]
        (d/submit-tx n tx))
-     (catch-up n)))
+     (catch-up history-n)))
   ;; "Elapsed time: 26111.239338 msecs" 1e5 inserts
   ;; "Elapsed time: 49860.27167 msecs" (* 2 1e5) inserts
+  (do
+    (reset! tmp/range-queries 0)
+    (reset! grid/scan-counter 0)
+    (d/q no-history-n '{:find [n] :where [($ :ints {:xt/id 1 :n n})]})
+    [@tmp/range-queries @grid/scan-counter])
 
-  (defn q [d] (d/q @#'n d))
-  (time (count (q '{:find [e #_(count e)] :where [($ :ints {:xt/id e})]})))
 
+  (defn point-query-estimates [n s]
+    (for [i s]
+      (do
+        (reset! tmp/range-queries 0)
+        (reset! grid/scan-counter 0)
+        (d/q n {:find ['n] :where [(list '$ :ints {:xt/id i :n 'n})]})
+        [@tmp/range-queries @grid/scan-counter])))
+
+  (point-query-estimates no-history-n (range 0 10))
 
   (def updates-per-doc 100)
 
@@ -69,16 +84,16 @@
   ;; "Elapsed time: 23715.407992 msecs" 1e5 inserts
   ;; "Elapsed time: 122185.781407 msecs" (* 2 1e5) inserts
 
+  (point-query-estimates history-n (range 0 10))
+
+
   (d/status n)
-
-
-  (time (count (q '{:find [e #_(count e)] :where [($ :ints {:xt/id e})]})))
 
   (System/setProperty "xtdb.current.rowid.cache.enabled" "true")
   (System/setProperty "xtdb.current.rowid.cache.enabled" "false")
 
   ;; no content selectivity
-  (time (count (q '{:find [n] :where [($ :ints {:n n})]})))
+  (time (q '{:find [n] :where [($ :ints {:n n})]}))
 
   (time (count (q '{:find [n] :where [($ :ints {:n n} {:for-valid-time :all-time})]})))
 

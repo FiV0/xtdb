@@ -278,6 +278,9 @@
 
   )
 
+
+(def scan-counter (atom 0))
+
 (deftype Grid [^ArrowBuf arrow-buf
                ^objects scales
                ^longs mins
@@ -362,6 +365,7 @@
                                     end-idx (if partial-match-last-axis?
                                               (dec n)
                                               (binary-search-rightmost access-fn n (+ (* slope max-r) base) max-r))]
+                                (swap! scan-counter + (- end-idx start-idx))
                                 (if deletes?
                                   (if (zero? cell-axis-mask)
                                     (loop [idx start-idx]
