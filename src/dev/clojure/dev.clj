@@ -9,7 +9,8 @@
             [xtdb.util :as util]
             [integrant.core :as i]
             [integrant.repl :as ir]
-            [xtdb.datalog :as xt])
+            [xtdb.datalog :as xt]
+            [xtdb.api :as api])
   (:import java.time.Duration))
 
 (def dev-node-dir
@@ -115,10 +116,10 @@
                         [:put :posts {:xt/id 3 :user-id 2 :text "foo"}]])
     )
 
-  (require '[xtdb.sql :as sql])
+  (require '[xtdb.api :as api])
 
   ;; uses single-join
-  (def query "
+  (def query1 "
 select
   users.xt$id,
   (
@@ -126,7 +127,12 @@ select
       from posts
       where posts.user_id = users.xt$id
   ) as post_count
-from users")
+from users
+")
+
+  (api/q node [query1])
+
+
 
   ;; before
   [:project
@@ -146,6 +152,7 @@ from users")
         [:select
          (= posts__58_user_id ?users__108_xt$id)
          [:rename posts__58 [:scan {:table posts} [xt$id user_id]]]]]]]]]]
+
   ;; after
   [:rename
    {x1 xt$id, x6 post_count}
@@ -162,8 +169,205 @@ from users")
        {xt$id x3, user_id x4}
        [:scan {:table posts} [xt$id user_id]]]]]]]
 
-  (sql/q node [query])
 
 
+
+
+  (def query2 "
+SELECT
+  p.p_partkey,
+  p.p_mfgr,
+  ps.ps_supplycost
+FROM
+  part AS p,
+  partsupp AS ps
+WHERE
+  p.p_partkey = ps.ps_partkey
+  AND ps.ps_supplycost = (
+    SELECT MIN(ps.ps_supplycost)
+    FROM
+      partsupp AS ps
+    WHERE
+      p.p_partkey = ps.ps_partkey
+  )")
+
+
+  (api/q node [query2])
+
+  (def query3 "
+SELECT
+  o.o_orderpriority,
+  COUNT(*) AS order_count
+FROM orders AS  o
+WHERE EXISTS (
+SELECT *
+FROM lineitem AS l
+WHERE
+l.l_orderkey = o.o_orderkey
+AND l.l_commitdate < l.l_receiptdate
+)
+GROUP BY
+o.o_orderpriority")
+
+
+  (api/q node [query3])
+
+
+  (def query4 "
+SELECT SUM(l.l_extendedprice) / 7.0 AS avg_yearly
+FROM
+  lineitem AS l,
+  part AS p
+WHERE
+  p.p_partkey = l.l_partkey
+  AND l.l_quantity < (
+    SELECT 0.2 * AVG(l.l_quantity)
+    FROM
+      lineitem AS l
+    WHERE
+      l.l_partkey = p.p_partkey
+  )")
+
+  (api/q node [query4])
+
+  (api/submit-tx node [[:put :orders {:xt/id 1 :foo :bar :nb-items 10}]
+                       [:put :orders {:xt/id 2 :foo :bar}]])
+
+
+  (api/q node ['{:find [o]
+                 :where [(match :orders [{:xt/* o} nb-items])
+                         [(<= 10 nb-items)]]}])
+
+  ;; uncleaned
+  (clojure.core/fn
+    [rel22620 params22621 out_vec24304]
+    (clojure.core/let
+        [lit50918
+         10
+         nb_items
+         (.polyReader
+          (.vectorForName rel22620 "nb-items")
+          '[:union #{:absent :i64}])
+         out_writer_sym24305
+         (xtdb.vector.writer/->writer out_vec24304)
+         row-count__50769__auto__
+         (.rowCount rel22620)]
+      (clojure.core/dotimes
+          [idx22619 row-count__50769__auto__]
+        (clojure.core/case
+            (.read nb_items idx22619)
+          0
+          (.writeBoolean
+           out_writer_sym24305
+           (clojure.core/neg? (clojure.core/compare lit50918 nil)))
+          1
+          (.writeBoolean
+           out_writer_sym24305
+           (< lit50918 (.readLong nb_items)))))))
+
+  ;;
+  (fn [relation out-vec]
+    (let [literal 10
+          nb_items (.polyReader (.vectorForName relation "nb-items") '[:union #{:absent :i64}])
+          out_writer (xtdb.vector.writer/->writer out-vec)
+          row-count (.rowCount relation)]
+      (dotimes [idx row-count]
+        (case (.read nb_items idx)
+          0 (.writeBoolean out_writer (neg? (compare literal nil)))
+          1 (.writeBoolean out_writer (<= literal (.readLong nb_items)))))))
+
+
+  ;; uncleaned
+  (clojure.core/fn
+    [rel22620 params22621 out_vec24304]
+    (clojure.core/let
+        [lit50820
+         10
+         nb_items
+         (.monoReader (.vectorForName rel22620 "nb-items") ':absent)
+         out_writer_sym24305
+         (xtdb.vector.writer/->writer out_vec24304)
+         row-count__50769__auto__
+         (.rowCount rel22620)]
+      (clojure.core/dotimes
+          [idx22619 row-count__50769__auto__]
+        (.writeBoolean
+         out_writer_sym24305
+         (clojure.core/neg? (clojure.core/compare lit50820 nil))))))
+
+  ;; cleaned
+  (eval '(fn [relation params out_vec]
+           (let [literal 10
+                 nb_items (.monoReader (.vectorForName relation "nb-items") ':absent)
+                 out_writer (xtdb.vector.writer/->writer out_vec)
+                 row-count (.rowCount relation)]
+             (dotimes [idx row-count]
+               (.writeBoolean out_writer (neg? (compare literal nil)))))))
+
+
+  (def expr->fn
+    (-> (fn [expr]
+          (-> expr
+              build-fn
+              eval))
+        memoize))
 
   )
+
+(api/q node ['{:find [o]
+               :where [(match :orders [{:xt/* o} nb-items])
+                       [(<= 10 nb-items)]]}])
+
+
+{:find [o]
+ :where [(match :orders [{:xt/* o} nb-items])
+         [(<= 10 nb-items)]]}
+
+(compare 10 nil)
+
+
+;; before
+[:project
+ [{xt$id users__108_xt$id} {post_count subquery__25_$column_1$}]
+ [:apply
+  :single-join
+  {users__108_xt$id ?users__108_xt$id}
+  [:rename users__108
+   [:scan {:table users} [xt$id]]]
+  [:rename
+   subquery__25
+   [:project
+    [{$column_1$ $agg_out__27_34$}]
+    [:group-by
+     [{$agg_out__27_34$ (count $agg_in__27_34$)}]
+     [:map
+      [{$agg_in__27_34$ posts__58_xt$id}]
+      [:select
+       (= posts__58_user_id ?users__108_xt$id)
+       [:rename posts__58
+        [:scan {:table posts} [xt$id user_id]]]]]]]]]]
+
+;; after
+[:rename
+ {x1 xt$id, x6 post_count}
+ [:project
+  [x1 x6]
+  [:group-by
+   [x1 $row_number$ {x6 (count x3)}]
+   [:left-outer-join
+    [{x1 x4}]
+    [:map
+     [{$row_number$ (row-number)}]
+     [:rename {xt$id x1}
+      [:scan {:table users} [xt$id]]]]
+    [:rename
+     {xt$id x3, user_id x4}
+     [:scan {:table posts} [xt$id user_id]]]]]]]
+
+
+(def expr->fn
+  (-> (fn [expr]
+        (-> expr
+            build-fn
+            eval))
+      memoize))
