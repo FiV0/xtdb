@@ -12,6 +12,7 @@ val defaultJvmArgs = listOf(
     "-Dio.netty.tryReflectionSetAccessible=true",
     "-Djdk.attach.allowAttachSelf",
     "-XX:-OmitStackTraceInFastThrow",
+    "-Darrow.memory.debug.allocator=true",
 )
 
 allprojects {

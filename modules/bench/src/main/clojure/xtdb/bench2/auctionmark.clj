@@ -283,6 +283,8 @@
                (str/join " ")
                (str description " ")))]
 
+    (log/info "i_id-raw" i_id-raw)
+
     (->> (concat
           [[:put :item
             {:xt/id i_id
@@ -385,19 +387,19 @@
 (defn load-stats-into-worker [{:keys [sut] :as worker}]
   (index-item-status-groups worker)
   (log/info "query for user")
-  (b2/set-domain worker user-id (or (largest-id sut :user 2) 0))
+  (b2/set-domain worker user-id  99999 #_(or (largest-id sut :user 2) 0))
   (log/info "query for region")
-  (b2/set-domain worker region-id (or (largest-id sut :region 2) 0))
+  (b2/set-domain worker region-id 74 #_(or (largest-id sut :region 2) 0))
   (log/info "query for item")
-  (b2/set-domain worker item-id (or (largest-id sut :item 2) 0))
+  (b2/set-domain worker item-id 999999 #_(or (largest-id sut :item 2) 0))
   (log/info "query for item-bid")
-  (b2/set-domain worker item-bid-id (or (largest-id sut :item-bid 3) 0))
+  (b2/set-domain worker item-bid-id 0 #_(or (largest-id sut :item-bid 3) 0))
   (log/info "query for category")
-  (b2/set-domain worker category-id (or (largest-id sut :category 2) 0))
+  (b2/set-domain worker category-id 16907 #_(or (largest-id sut :category 2) 0))
   (log/info "query for gag")
-  (b2/set-domain worker gag-id (or (largest-id sut :gag 4) 0))
+  (b2/set-domain worker gag-id 0 #_(or (largest-id sut :gag 4) 0))
   (log/info "query for gav")
-  (b2/set-domain worker gav-id (or (largest-id sut :gav 4) 0)))
+  (b2/set-domain worker gav-id 0 #_(or (largest-id sut :gav 4) 0)))
 
 (defn log-stats [worker]
   (log/info "#user " (.get (b2/counter worker user-id)))
@@ -588,7 +590,7 @@
     {:title "Auction Mark OLTP"
      :seed seed
      :tasks
-     [{:t :do
+     [#_{:t :do
          :stage :load
          :tasks [{:t :call, :f (fn [_] (log/info "start load stage"))}
                  {:t :call, :f [bxt2/install-tx-fns {:apply-seller-fee tx-fn-apply-seller-fee, :new-bid tx-fn-new-bid}]}
@@ -599,26 +601,28 @@
                  {:t :call, :f [bxt2/generate :user-attribute generate-user-attributes (* sf 1e6 1.3)]}
                  {:t :call, :f [bxt2/generate :item generate-item (* sf 1e6 10)]}
                  {:t :call, :f (fn [_] (log/info "finished load stage"))}]}
+
       {:t :do
        :stage :setup-worker
        :tasks [{:t :call, :f (fn [_] (log/info "setting up worker with stats"))}
                {:t :call, :f load-stats-into-worker}
                {:t :call, :f log-stats}
                {:t :call, :f (fn [_] (log/info "finished setting up worker with stats"))}]}
+
       {:t :concurrently
        :stage :oltp
        :duration duration
        :join-wait (Duration/ofSeconds 5)
        :thread-tasks [{:t :pool
                        :duration duration
-                       :join-wait (Duration/ofMinutes 5)
+                       :join-wait (Duration/ofMinutes 30)
                        :thread-count threads
                        :think Duration/ZERO
                        :pooled-task {:t :pick-weighted
                                      :choices [[{:t :call, :transaction :get-item, :f proc-get-item} 12.0]
-                                               [{:t :call, :transaction :new-user, :f proc-new-user} 0.5]
-                                               [{:t :call, :transaction :new-item, :f proc-new-item} 1.0]
-                                               [{:t :call, :transaction :new-bid,  :f proc-new-bid} 2.0]]}}
+                                               #_[{:t :call, :transaction :new-user, :f proc-new-user} 0.5]
+                                               #_[{:t :call, :transaction :new-item, :f proc-new-item} 1.0]
+                                               #_[{:t :call, :transaction :new-bid,  :f proc-new-bid} 2.0]]}}
                       {:t :freq-job
                        :duration duration
                        :freq (Duration/ofMillis (* 0.2 (.toMillis duration)))

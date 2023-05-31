@@ -256,6 +256,9 @@
              (when level
                (Level/valueOf (name level)))))
 
+(comment
+  (set-log-level! "org.apache.arrow" :info))
+
 (defn get-log-level! [ns]
   (some->> (.getLevel ^Logger (LoggerFactory/getLogger (name ns)))
            (str)

@@ -75,7 +75,13 @@
         (let [i (.iterator (.values buffers))]
           (while (.hasNext i)
             (util/try-close (.next i))
-            (.remove i)))
+            (.remove i)
+            #_(let [sb (StringBuilder.)
+                    b (.next i)]
+                (.print b sb 0)
+                (println (.toString sb))
+                (util/try-close b)
+                (.remove i))))
         (finally
           (.unlock buffers-lock stamp))))))
 
