@@ -8,6 +8,7 @@
             [xtdb.error :as err]
             xtdb.indexer.internal-id-manager
             xtdb.indexer.log-indexer
+            xtdb.indexer.temporal-log-indexer
             xtdb.live-chunk
             [xtdb.metadata :as meta]
             xtdb.object-store
@@ -66,7 +67,10 @@
   (^org.apache.arrow.vector.complex.DenseUnionVector indexOp [^long tx-op-idx]
    "returns a tx-ops-vec of more operations (mostly for `:call`)"))
 
-(defn- ->put-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr ^ILogOpIndexer log-op-idxer, ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk
+(defn- ->put-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr ^ILogOpIndexer log-op-idxer,
+                                              ^ILogOpIndexer temporal-log-op-idxer,
+                                              ^ITemporalTxIndexer temporal-idxer,
+                                              ^ILiveChunkTx live-chunk
                                               ^DenseUnionVector tx-ops-vec, ^Instant current-time]
   (let [put-vec (.getStruct tx-ops-vec 1)
         ^DenseUnionVector doc-duv (.getChild put-vec "document" DenseUnionVector)
@@ -112,11 +116,14 @@
                                        :valid-to (util/micros->instant valid-to)})))
 
             (.logPut log-op-idxer iid row-id valid-from valid-to)
+            (.logPut temporal-log-op-idxer iid row-id valid-from valid-to)
             (.indexPut temporal-idxer iid row-id valid-from valid-to new-entity?)))
 
         nil))))
 
-(defn- ->delete-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr, ^ILogOpIndexer log-op-idxer, ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk
+(defn- ->delete-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr, ^ILogOpIndexer log-op-idxer,
+                                                 ^ILogOpIndexer temporal-log-op-idxer,
+                                                 ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk
                                                  ^DenseUnionVector tx-ops-vec, ^Instant current-time]
   (let [delete-vec (.getStruct tx-ops-vec 2)
         ^VarCharVector table-vec (.getChild delete-vec "table" VarCharVector)
@@ -144,6 +151,7 @@
                                      :valid-to (util/micros->instant valid-to)})))
 
           (.logDelete log-op-idxer iid valid-from valid-to)
+          (.logDelete temporal-log-op-idxer iid valid-from valid-to)
           (.indexDelete temporal-idxer iid row-id valid-from valid-to new-entity?))
 
         nil))))
@@ -547,6 +555,7 @@
                   ^IInternalIdManager iid-mgr
                   ^IRaQuerySource ra-src
                   ^ILogIndexer log-indexer
+                  ^ILogIndexer temporal-log-indexer
                   ^ILiveChunk live-chunk
 
                   ^:volatile-mutable ^TransactionInstant latest-completed-tx
@@ -562,6 +571,8 @@
 
             log-op-idxer (.startTx log-indexer tx-key)
             temporal-idxer (.startTx temporal-mgr tx-key)
+            temporal-log-op-idxer (.startTx temporal-log-indexer tx-key)
+
 
             wm-src (reify IWatermarkSource
                      (openWatermark [_ _tx]
@@ -575,8 +586,8 @@
                      :tx-key tx-key}]
 
         (letfn [(index-tx-ops [^DenseUnionVector tx-ops-vec]
-                  (let [!put-idxer (delay (->put-indexer iid-mgr log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec system-time))
-                        !delete-idxer (delay (->delete-indexer iid-mgr log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec system-time))
+                  (let [!put-idxer (delay (->put-indexer iid-mgr log-op-idxer temporal-log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec system-time))
+                        !delete-idxer (delay (->delete-indexer iid-mgr log-op-idxer temporal-log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec system-time))
                         !evict-idxer (delay (->evict-indexer iid-mgr log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec))
                         !call-idxer (delay (->call-indexer allocator ra-src wm-src scan-emitter tx-ops-vec tx-opts))
                         !sql-idxer (delay (->sql-indexer allocator metadata-mgr buffer-pool iid-mgr
@@ -634,7 +645,8 @@
                       ;; TODO create work item
                       ))
 
-                  (.commit log-op-idxer)))
+                  (.commit log-op-idxer)
+                  (.commit temporal-log-op-idxer)))
 
               (set! (.-latest-completed-tx this) tx-key)
 
@@ -685,6 +697,7 @@
     (try
       (.finishBlock live-chunk)
       (.finishBlock log-indexer)
+      (.finishBlock temporal-log-indexer)
 
       (let [wm-lock-stamp (.writeLock wm-lock)]
         (try
@@ -705,6 +718,7 @@
     (let [chunk-idx (.chunkIdx live-chunk)]
       (.registerNewChunk temporal-mgr chunk-idx)
       @(.finishChunk log-indexer chunk-idx)
+      @(.finishChunk temporal-log-indexer chunk-idx)
       @(.finishChunk live-chunk latest-completed-tx))
 
     (let [wm-lock-stamp (.writeLock wm-lock)]
@@ -719,12 +733,14 @@
           (.unlock wm-lock wm-lock-stamp))))
 
     (.nextChunk log-indexer)
+    (.nextChunk temporal-log-indexer)
 
     (log/debug "finished chunk."))
 
   Closeable
   (close [_]
     (.close log-indexer)
+    (.close temporal-log-indexer)
     (some-> shared-wm .close)))
 
 (defmethod ig/prep-key :xtdb/indexer [_ opts]
@@ -737,17 +753,18 @@
           :live-chunk (ig/ref :xtdb/live-chunk)
           :buffer-pool (ig/ref ::bp/buffer-pool)
           :log-indexer (ig/ref :xtdb.indexer/log-indexer)
+          :temporal-log-indexer (ig/ref :xtdb.indexer/temporal-log-indexer)
           :ra-src (ig/ref ::op/ra-query-source)}
          opts))
 
 (defmethod ig/init-key :xtdb/indexer
   [_ {:keys [allocator object-store metadata-mgr scan-emitter buffer-pool ^ITemporalManager temporal-mgr, ra-src
-             internal-id-mgr log-indexer live-chunk]}]
+             internal-id-mgr log-indexer live-chunk temporal-log-indexer]}]
 
   (let [{:keys [latest-completed-tx]} (meta/latest-chunk-metadata metadata-mgr)]
 
     (Indexer. allocator object-store metadata-mgr scan-emitter buffer-pool temporal-mgr internal-id-mgr
-              ra-src log-indexer live-chunk
+              ra-src log-indexer temporal-log-indexer live-chunk
 
               latest-completed-tx
 

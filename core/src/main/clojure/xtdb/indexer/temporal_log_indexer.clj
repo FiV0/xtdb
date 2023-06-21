@@ -13,10 +13,11 @@
    (java.util.concurrent.atomic AtomicInteger)
    (java.util.function Consumer)
    (org.apache.arrow.memory BufferAllocator)
-   (org.apache.arrow.vector.util VectorSchemaRootAppender)
    (org.apache.arrow.vector VectorLoader VectorSchemaRoot VectorUnloader)
    org.apache.arrow.vector.types.UnionMode
+   (org.apache.arrow.memory RootAllocator)
    (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
+   (org.apache.arrow.vector.util VectorSchemaRootAppender)
    (xtdb ICursor)
    (xtdb.indexer.log_indexer ILogOpIndexer ILogIndexer)
    (xtdb.object_store ObjectStore)
@@ -59,19 +60,8 @@
                            'valid-from nullable-inst-type
                            'valid-to nullable-inst-type}]}]]}])
 
-(.getName (types/col-type->field log-ops-col-type))
-
-
 
 (def ^:private nullable-inst-type [:union #{:null [:timestamp-tz :micro "UTC"]}])
-
-(def ^:private put-op-col-type [:struct {'iid [:fixed-size-binary 16]
-                                         'row-id :i64
-                                         'valid-from nullable-inst-type
-                                         'valid-to nullable-inst-type}])
-(def ^:private delete-op-col-type [:struct {'iid [:fixed-size-binary 16]
-                                            'valid-from nullable-inst-type
-                                            'valid-to nullable-inst-type}])
 
 (def temporal-log-schema
   (Schema. [(types/col-type->field "tx-id" :i64)
@@ -105,6 +95,9 @@
       (.clear src-vsr)
       des-vrs)))
 
+(defn long->byte-hash [^long l]
+  (byte-array 16 (.getBytes (Long/toHexString l))))
+
 (defmethod ig/init-key :xtdb.indexer/temporal-log-indexer [_ {:keys [^BufferAllocator allocator, ^ObjectStore object-store]}]
   (let [log-root (VectorSchemaRoot/create temporal-log-schema allocator)
         transient-log-root (VectorSchemaRoot/create temporal-log-schema allocator)
@@ -122,7 +115,6 @@
 
         delete-wtr (.writerForTypeId tx-ops-el-wtr (byte 1))
         delete-iid-wtr (.structKeyWriter delete-wtr "iid")
-        delete-row-id-wtr (.structKeyWriter delete-wtr "row-id")
         delete-vf-wtr (.structKeyWriter delete-wtr "valid-from")
         delete-vt-wtr (.structKeyWriter delete-wtr "valid-to")
 
@@ -134,31 +126,37 @@
         (.writeLong tx-id-wtr (.tx-id tx-key))
         (vw/write-value! (.system-time tx-key) system-time-wtr)
 
-        (.startList tx-ops-el-wtr)
+        (.startList tx-ops-wtr)
         (reify ILogOpIndexer
           (logPut [_ iid row-id app-time-start app-time-end]
+            (println "log put" iid)
             (.startStruct put-wtr)
-            (.writeBytes put-iid-wtr (ByteBuffer/wrap iid))
+            (.writeBytes put-iid-wtr (ByteBuffer/wrap (long->byte-hash iid)))
             (.writeLong put-row-id-wtr row-id)
             (.writeLong put-vf-wtr app-time-start)
-            (.writeNull put-vt-wtr app-time-end)
+            (.writeLong put-vt-wtr app-time-end)
             (.endStruct put-wtr))
 
           (logDelete [_ iid app-time-start app-time-end]
             (.startStruct delete-wtr)
-            (.writeNull delete-row-id-wtr nil)
-            (.writeBytes delete-iid-wtr (ByteBuffer/wrap iid))
+            (.writeBytes delete-iid-wtr (ByteBuffer/wrap (long->byte-hash iid)))
             (.writeLong delete-vf-wtr app-time-start)
-            (.writeLong delete-vt-wtr  app-time-end)
+            (.writeLong delete-vt-wtr app-time-end)
             (.endStruct delete-wtr))
 
           (logEvict [_ _iid]
             (throw (UnsupportedOperationException.)))
 
           (commit [_]
-            (.endList tx-ops-el-wtr)
-            (VectorSchemaRootAppender/append log-root [transient-log-root])
+            (println "transient before")
+            (.setRowCount transient-log-root !page-row-count)
+            (println (.contentToTSVString transient-log-root))
+            (.endList tx-ops-wtr)
+            (VectorSchemaRootAppender/append log-root (into-array VectorSchemaRoot [transient-log-root]))
             (.clear transient-log-root)
+            (.setRowCount log-root (inc (.getRowCount log-root)))
+            (println "root after")
+            (println (.contentToTSVString log-root))
             (.getAndIncrement !page-row-count))
 
           (abort [_]
@@ -171,21 +169,22 @@
             ;; (.getAndIncrement !page-row-count)
             )))
 
-      (finishPage [_]
+      (finishBlock [_]
         (.add page-row-counts (.getAndSet !page-row-count 0)))
 
       (finishChunk [_ chunk-idx]
+        (println (.contentToTSVString log-root))
         (let [log-bytes (with-open [write-root (VectorSchemaRoot/create (.getSchema log-root) allocator)]
                           (let [loader (VectorLoader. write-root)]
                             (with-open [^ICursor slices (blocks/->slices log-root page-row-counts)]
                               (util/build-arrow-ipc-byte-buffer write-root :file
-                                (fn [write-batch!]
-                                  (.forEachRemaining slices
-                                                     (reify Consumer
-                                                       (accept [_ sliced-root]
-                                                         (with-open [arb (.getRecordBatch (VectorUnloader. sliced-root))]
-                                                           (.load loader arb)
-                                                           (write-batch!))))))))))]
+                                                                (fn [write-batch!]
+                                                                  (.forEachRemaining slices
+                                                                                     (reify Consumer
+                                                                                       (accept [_ sliced-root]
+                                                                                         (with-open [arb (.getRecordBatch (VectorUnloader. sliced-root))]
+                                                                                           (.load loader arb)
+                                                                                           (write-batch!))))))))))]
 
           (.putObject object-store (->log-obj-key chunk-idx) log-bytes)))
 
@@ -197,3 +196,17 @@
       (close [_]
         (.close transient-log-root)
         (.close log-root)))))
+
+(comment
+  (with-open [al (RootAllocator.)
+              vsr1 (VectorSchemaRoot/create (Schema. [(types/col-type->field "tx-id" :i64)]) al)
+              vsr2 (VectorSchemaRoot/create (Schema. [(types/col-type->field "tx-id" :i64)]) al)]
+    (let [tx-id-wrt1 (vw/->writer (.getVector vsr1 "tx-id"))
+          tx-id-wrt2 (vw/->writer (.getVector vsr2 "tx-id"))]
+      (.writeLong tx-id-wrt1 1)
+      (.setRowCount vsr1 1)
+      (println (.contentToTSVString vsr1))
+      (.writeLong tx-id-wrt2 2)
+      (.setRowCount vsr2 1)
+      (VectorSchemaRootAppender/append vsr2 (into-array VectorSchemaRoot [vsr1]))
+      (println (.contentToTSVString vsr2)))))
