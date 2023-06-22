@@ -415,8 +415,15 @@
 
 ;;; union
 
+(defn- union-types->named-union-types [col-types]
+  (if (set? col-types)
+    (into {} (map-indexed (fn [idx col-type]
+                            [(str (col-type->field-name col-type) "-" idx) col-type]) col-types))
+    col-types))
+
 (defmethod col-type->field* :union [col-name nullable? col-type]
-  (let [col-types (cond-> (flatten-union-types col-type)
+  (let [named-union-types (union-types->named-union-types (or (second col-type) #{}))
+        col-types (cond-> (set (vals named-union-types))
                     nullable? (conj :null))
         nullable? (contains? col-types :null)
         without-null (disj col-types :null)]
@@ -425,9 +432,10 @@
       1 (col-type->field* col-name nullable? (first without-null))
 
       (apply ->field col-name (.getType Types$MinorType/DENSEUNION) false
-             (map-indexed (fn [idx col-type]
-                            (col-type->field (str (col-type->field-name col-type) "-" idx) col-type))
-                          col-types)))))
+             (map (fn [[name col-type]]
+                    (col-type->field name col-type))
+                  (cond-> named-union-types
+                    nullable? (assoc (col-type->field-name :null) :null)))))))
 
 (defmethod arrow-type->col-type ArrowType$Union [_ & child-fields]
   (->> child-fields
