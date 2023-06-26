@@ -596,29 +596,24 @@
 (defn- duv->duv-copier ^xtdb.vector.IRowCopier [^IVectorWriter dest-col, ^DenseUnionVector src-vec]
   (let [src-field (.getField src-vec)
         src-type (.getType src-field)
-        type-ids (.getTypeIds ^ArrowType$Union src-type)
         child-fields (.getChildren src-field)
         child-count (count child-fields)
-        copier-mapping (object-array child-count)]
+        copier-mapping (HashMap.)]
 
     (dotimes [n child-count]
-      (let [src-type-id (or (when type-ids (aget type-ids n))
-                            n)
-            ^Field field (.get child-fields n)
-            field-name (.getName field)
-            col-type (types/field->col-type (.get child-fields n))]
-        (aset copier-mapping src-type-id
-              (if (types/generated-column? field-name)
-                (.rowCopier (.writerForType dest-col col-type)
-                            (.getVectorByType src-vec src-type-id))
-                (.rowCopier (.writerForName dest-col field-name col-type)
-                            (.getVectorByType src-vec src-type-id))))))
+      (let [^Field field (.get child-fields n)
+            field-name (.getName field)]
+        (.put copier-mapping field-name
+              (.rowCopier (.writerForName dest-col field-name)
+                          (.getChild src-vec field-name)))))
 
     (reify IRowCopier
       (copyRow [_ src-idx]
-        (let [type-id (.getTypeId src-vec src-idx)]
-          (assert (not (neg? type-id)))
-          (-> ^IRowCopier (aget copier-mapping type-id)
+        (let [type-id (.getTypeId src-vec src-idx)
+              field-name (-> (.getVectorByType src-vec type-id)
+                             (.getName))]
+          (assert (.containsKey copier-mapping field-name))
+          (-> ^IRowCopier (.get copier-mapping field-name)
               (.copyRow (.getOffset src-vec src-idx))))))))
 
 (defn- vec->duv-copier ^xtdb.vector.IRowCopier [^IVectorWriter dest-col, ^ValueVector src-vec]
@@ -642,9 +637,9 @@
   DenseUnionVector
   (->writer [duv]
     (let [wp (IWriterPosition/build (.getValueCount duv))
-          child-names (map #(.getName ^Field %) (.getChildren (.getField duv)))
-          writers-by-type-id (ArrayList.)
-          writers-by-type (HashMap.)
+          field (.getField duv)
+          ;; TODO check that the type-id's are in the same order
+          child-fields (.getChildren field)
           writers-by-name (HashMap.)]
 
       (letfn [(->child-writer [^long type-id]
@@ -657,22 +652,16 @@
                                                         (let [pos (.getPositionAndIncrement wp)]
                                                           (.setTypeId duv pos type-id)
                                                           (.setOffset duv pos (.getPosition child-wp))))))]
-                  (.add writers-by-type-id type-id child-wtr)
                   child-wtr))]
 
-        (doseq [[type-id child-name] (map-indexed #(vector %1 %2) child-names)]
-          (let [child-wtr (->child-writer type-id)
-                col-type (-> (.getVectorByType duv type-id)
-                             (.getField)
-                             (types/field->col-type)
-                             (types/col-type->duv-leg-key))]
-            (.put writers-by-type col-type child-wtr)
-            (.put writers-by-name child-name child-wtr)
+        (doseq [[type-id ^Field child-field] (map-indexed #(vector %1 %2) child-fields)]
+          (let [child-wtr (->child-writer type-id)]
+            (.put writers-by-name (.getName child-field) child-wtr)
             child-wtr))
 
         (reify IVectorWriter
           (getVector [_] (doto duv (.setValueCount (.getPosition wp))))
-          (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) writers-by-type-id))
+          (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) writers-by-name))
           (rowCopier [this-writer src-vec]
             (let [inner-copier (if (instance? DenseUnionVector src-vec)
                                  (duv->duv-copier this-writer src-vec)
@@ -686,10 +675,9 @@
             (let [type-id (.registerNewTypeId duv field)
                   new-vec (.createVector field (.getAllocator duv))]
               (.addVector duv type-id new-vec)
-              (->child-writer type-id)
+              (.put writers-by-name (.getName field) (->child-writer type-id))
               type-id))
 
-          ;; TODO do we need (.put writers-by-type ...) here ?
           (writerForName [this field-name]
             (.computeIfAbsent writers-by-name field-name
                               (reify Function
@@ -723,32 +711,30 @@
                                     wtr)))))
 
           (writerForType [this col-type]
-            (.computeIfAbsent writers-by-type (types/col-type->duv-leg-key col-type)
-                              (reify Function
-                                (apply [_ _]
-                                  (let [field-name (types/col-type->field-name col-type)
-
-                                        ^Field field (case (types/col-type-head col-type)
-                                                       :list
-                                                       (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
-
-                                                       :set
-                                                       (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
-
-                                                       :struct
-                                                       (types/->field field-name ArrowType$Struct/INSTANCE false)
-
-                                                       (types/col-type->field field-name col-type))
-
-                                        type-id (.registerNewType this field)
-
-                                        wtr (.writerForTypeId this type-id)]
-
-                                    (.put writers-by-name field-name wtr)
-                                    wtr)))))
+            (.writerForName this (types/col-type->field-name col-type) col-type))
 
           (writerForTypeId [_ type-id]
-            (.get writers-by-type-id type-id)))))))
+            (sc.api/spy)
+            (.get writers-by-name (-> (.getVectorByType duv type-id) (.getName)))))))))
+
+(comment
+  (require 'sc.api)
+
+  (sc.api/letsc [30 -2]
+                [type-id
+                 writers-by-name
+                 (.getField duv)
+
+                 field])
+
+
+  (sc.api/letsc [3 -2]
+
+
+                )
+
+
+  )
 
 (extend-protocol WriterFactory
   ExtensionTypeVector

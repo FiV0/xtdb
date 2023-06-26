@@ -17,7 +17,7 @@
            org.apache.arrow.vector.types.UnionMode
            (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            (xtdb.log Log LogRecord)
-           xtdb.vector.IValueWriter))
+           (xtdb.vector IValueWriter IVectorWriter)))
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
 (definterface ITxProducer
@@ -132,6 +132,7 @@
 (def ^:private nullable-inst-type [:union #{:null [:timestamp-tz :micro "UTC"]}])
 
 (def ^:private ^org.apache.arrow.vector.types.pojo.Field tx-ops-field
+  ;; TODO rename to tx-op
   (types/->field "tx-ops" (ArrowType$Union. UnionMode/Dense (int-array (range 6))) false
                  (types/col-type->field 'sql [:struct {'query :utf8
                                                        'params [:union #{:null :varbinary}]}])
@@ -188,7 +189,7 @@
         (run! util/try-close vecs)))))
 
 (defn- ->sql-writer [^IValueWriter op-writer, ^BufferAllocator allocator]
-  (let [sql-writer (.writerForTypeId op-writer 0)
+  (let [sql-writer (.writerForName op-writer "sql")
         query-writer (.structKeyWriter sql-writer "query")
         params-writer (.structKeyWriter sql-writer "params")]
     (fn write-sql! [{{:keys [sql param-groups]} :sql+params}]
@@ -202,28 +203,22 @@
 
       (.endStruct sql-writer))))
 
-(defn- ->put-writer [^IValueWriter op-writer]
-  (let [put-writer (.writerForTypeId op-writer 1)
+(defn- ->put-writer [^IVectorWriter op-writer]
+  (let [put-writer (.writerForName op-writer "put")
         doc-writer (.structKeyWriter put-writer "document")
         valid-time-start-writer (.structKeyWriter put-writer "xt$valid_from")
-        valid-time-end-writer (.structKeyWriter put-writer "xt$valid_to")
-        table-doc-writers (HashMap.)]
+        valid-time-end-writer (.structKeyWriter put-writer "xt$valid_to")]
     (fn write-put! [{:keys [doc table], {:keys [valid-time-start valid-time-end]} :app-time-opts}]
       (.startStruct put-writer)
-      (let [table-doc-writer (.computeIfAbsent table-doc-writers table
-                                               (util/->jfn
-                                                 (fn [table]
-                                                   (let [type-id (.registerNewType doc-writer (types/col-type->field (name table) [:struct {}]))]
-                                                     (.writerForTypeId doc-writer type-id)))))]
-        (vw/write-value! doc table-doc-writer))
+      (vw/write-value! doc (.writerForName doc-writer (name table) [:struct {}]) )
 
       (vw/write-value! valid-time-start valid-time-start-writer)
       (vw/write-value! valid-time-end valid-time-end-writer)
 
       (.endStruct put-writer))))
 
-(defn- ->delete-writer [^IValueWriter op-writer]
-  (let [delete-writer (.writerForTypeId op-writer 2)
+(defn- ->delete-writer [^IVectorWriter op-writer]
+  (let [delete-writer (.writerForName op-writer "delete")
         table-writer (.structKeyWriter delete-writer "table")
         id-writer (.structKeyWriter delete-writer "xt$id")
         valid-time-start-writer (.structKeyWriter delete-writer "xt$valid_from")
@@ -239,7 +234,7 @@
       (.endStruct delete-writer))))
 
 (defn- ->evict-writer [^IValueWriter op-writer]
-  (let [evict-writer (.writerForTypeId op-writer 3)
+  (let [evict-writer (.writerForName op-writer "evict")
         table-writer (.structKeyWriter evict-writer "_table")
         id-writer (.structKeyWriter evict-writer "xt$id")]
     (fn [{:keys [id table]}]
@@ -249,7 +244,7 @@
       (.endStruct evict-writer))))
 
 (defn- ->call-writer [^IValueWriter op-writer]
-  (let [call-writer (.writerForTypeId op-writer 4)
+  (let [call-writer (.writerForName op-writer "call")
         fn-id-writer (.structKeyWriter call-writer "fn-id")
         args-list-writer (.structKeyWriter call-writer "args")]
     (fn write-call! [{:keys [fn-id args]}]
@@ -261,14 +256,14 @@
       (.endStruct call-writer))))
 
 (defn- ->abort-writer [^IValueWriter op-writer]
-  (let [abort-writer (.writerForTypeId op-writer 5)]
+  (let [abort-writer (.writerForName op-writer "abort")]
     (fn [_]
       (.writeNull abort-writer nil))))
 
 (defn open-tx-ops-vec ^org.apache.arrow.vector.ValueVector [^BufferAllocator allocator]
   (.createVector tx-ops-field allocator))
 
-(defn write-tx-ops! [^BufferAllocator allocator, ^IValueWriter op-writer, tx-ops]
+(defn write-tx-ops! [^BufferAllocator allocator, ^IVectorWriter op-writer, tx-ops]
   (let [tx-ops (conform-tx-ops tx-ops)
         op-count (count tx-ops)
 
