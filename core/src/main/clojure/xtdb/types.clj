@@ -415,10 +415,17 @@
 
 ;;; union
 
+;; NOTE: when field names start with `xt/` merge-col-type can rejuggle them into
+;; an equivalent type (but better suited for
+
+
+(defn generated-column? [field-name]
+  (str/starts-with? field-name "xt/"))
+
 (defn- union-types->named-union-types [col-types]
   (if (set? col-types)
     (into {} (map-indexed (fn [idx col-type]
-                            [(str (col-type->field-name col-type) "-" idx) col-type]) col-types))
+                            [(str "xt/" (col-type->field-name col-type) "-" idx) col-type]) col-types))
     col-types))
 
 (defmethod col-type->field* :union [col-name nullable? col-type]
@@ -437,10 +444,22 @@
                   (cond-> named-union-types
                     nullable? (assoc (col-type->field-name :null) :null)))))))
 
+(defn- union-field-prefix [field-name]
+  (if (generated-column? field-name)
+    "xt"
+    field-name))
+
 (defmethod arrow-type->col-type ArrowType$Union [_ & child-fields]
-  (->> child-fields
-       (into #{} (map field->col-type))
-       (apply merge-col-types)))
+  (let [res (->
+             (reduce (fn [m child-field] (update m (union-field-prefix (.getName ^Field child-field)) (fnil conj #{}) (field->col-type child-field))) {} child-fields)
+             (update-vals (partial apply merge-col-types)))]
+    (case (count res)
+      0 :null
+      1 (-> res first val)
+      [:union res]))
+  #_(->> child-fields
+         (into #{} (map field->col-type))
+         (apply merge-col-types)))
 
 ;;; number
 

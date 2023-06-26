@@ -34,6 +34,9 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     @Override
     IVectorWriter writerForType(Object colType);
 
+    IVectorWriter writerForName(String name);
+    IVectorWriter writerForName(String name, Object colType);
+
     @Override
     IVectorWriter writerForTypeId(byte typeId);
 

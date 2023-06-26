@@ -604,9 +604,15 @@
     (dotimes [n child-count]
       (let [src-type-id (or (when type-ids (aget type-ids n))
                             n)
+            ^Field field (.get child-fields n)
+            field-name (.getName field)
             col-type (types/field->col-type (.get child-fields n))]
-        (aset copier-mapping src-type-id (.rowCopier (.writerForType dest-col col-type)
-                                                     (.getVectorByType src-vec src-type-id)))))
+        (aset copier-mapping src-type-id
+              (if (types/generated-column? field-name)
+                (.rowCopier (.writerForType dest-col col-type)
+                            (.getVectorByType src-vec src-type-id))
+                (.rowCopier (.writerForName dest-col field-name col-type)
+                            (.getVectorByType src-vec src-type-id))))))
 
     (reify IRowCopier
       (copyRow [_ src-idx]
@@ -636,7 +642,7 @@
   DenseUnionVector
   (->writer [duv]
     (let [wp (IWriterPosition/build (.getValueCount duv))
-          type-count (count (.getChildren (.getField duv)))
+          child-names (map #(.getName ^Field %) (.getChildren (.getField duv)))
           writers-by-type-id (ArrayList.)
           writers-by-type (HashMap.)
           writers-by-name (HashMap.)]
@@ -654,13 +660,14 @@
                   (.add writers-by-type-id type-id child-wtr)
                   child-wtr))]
 
-        (dotimes [type-id type-count]
+        (doseq [[type-id child-name] (map-indexed #(vector %1 %2) child-names)]
           (let [child-wtr (->child-writer type-id)
                 col-type (-> (.getVectorByType duv type-id)
                              (.getField)
                              (types/field->col-type)
                              (types/col-type->duv-leg-key))]
             (.put writers-by-type col-type child-wtr)
+            (.put writers-by-name child-name child-wtr)
             child-wtr))
 
         (reify IVectorWriter
@@ -682,38 +689,63 @@
               (->child-writer type-id)
               type-id))
 
-          (writerForField [this field]
-            ;; doesn't add into writers-by-type because we might have more than one field with similar types
-            ;; so don't use both writerForField and writerForType on one writer.
-            (.computeIfAbsent writers-by-name (.getName field)
+          ;; TODO do we need (.put writers-by-type ...) here ?
+          (writerForName [this field-name]
+            (.computeIfAbsent writers-by-name field-name
                               (reify Function
-                                (apply [_ field-name]
-                                  (.writerForTypeId this (.registerNewType this field))))))
+                                (apply [_ _]
+                                  (let [^Field field (types/->field field-name types/dense-union-type false)
+                                        type-id (.registerNewType this field)
+                                        wtr (.writerForTypeId this type-id)]
+
+                                    wtr)))))
+
+          (writerForName [this field-name col-type]
+            (.computeIfAbsent writers-by-name field-name
+                              (reify Function
+                                (apply [_ _]
+                                  (let [^Field field (case (types/col-type-head col-type)
+                                                       :list
+                                                       (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+
+                                                       :set
+                                                       (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+
+                                                       :struct
+                                                       (types/->field field-name ArrowType$Struct/INSTANCE false)
+
+                                                       (types/col-type->field field-name col-type))
+
+                                        type-id (.registerNewType this field)
+
+                                        wtr (.writerForTypeId this type-id)]
+
+                                    wtr)))))
 
           (writerForType [this col-type]
             (.computeIfAbsent writers-by-type (types/col-type->duv-leg-key col-type)
-                      (reify Function
-                        (apply [_ _]
-                          (let [field-name (types/col-type->field-name col-type)
+                              (reify Function
+                                (apply [_ _]
+                                  (let [field-name (types/col-type->field-name col-type)
 
-                                ^Field field (case (types/col-type-head col-type)
-                                               :list
-                                               (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                                        ^Field field (case (types/col-type-head col-type)
+                                                       :list
+                                                       (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
 
-                                               :set
-                                               (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                                                       :set
+                                                       (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
 
-                                               :struct
-                                               (types/->field field-name ArrowType$Struct/INSTANCE false)
+                                                       :struct
+                                                       (types/->field field-name ArrowType$Struct/INSTANCE false)
 
-                                               (types/col-type->field field-name col-type))
+                                                       (types/col-type->field field-name col-type))
 
-                                type-id (.registerNewType this field)
+                                        type-id (.registerNewType this field)
 
-                                wtr (.writerForTypeId this type-id)]
+                                        wtr (.writerForTypeId this type-id)]
 
-                            (.put writers-by-name field-name wtr)
-                            wtr)))))
+                                    (.put writers-by-name field-name wtr)
+                                    wtr)))))
 
           (writerForTypeId [_ type-id]
             (.get writers-by-type-id type-id)))))))
