@@ -234,6 +234,8 @@
 (def num-types (descendants col-type-hierarchy :num))
 (def date-time-types (descendants col-type-hierarchy :date-time))
 
+(declare col-type->field-name)
+
 (defn flatten-union-types [col-type]
   (if (= :union (col-type-head col-type))
     (second col-type)
