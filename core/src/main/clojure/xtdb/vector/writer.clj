@@ -595,7 +595,6 @@
 
 (defn- duv->duv-copier ^xtdb.vector.IRowCopier [^IVectorWriter dest-col, ^DenseUnionVector src-vec]
   (let [src-field (.getField src-vec)
-        src-type (.getType src-field)
         child-fields (.getChildren src-field)
         child-count (count child-fields)
         copier-mapping (HashMap.)]
@@ -604,7 +603,7 @@
       (let [^Field field (.get child-fields n)
             field-name (.getName field)]
         (.put copier-mapping field-name
-              (.rowCopier (.writerForName dest-col field-name)
+              (.rowCopier (.writerForName dest-col field-name (types/field->col-type field))
                           (.getChild src-vec field-name)))))
 
     (reify IRowCopier
@@ -618,7 +617,7 @@
 
 (defn- vec->duv-copier ^xtdb.vector.IRowCopier [^IVectorWriter dest-col, ^ValueVector src-vec]
   (let [field (.getField src-vec)
-        inner-types (types/flatten-union-types (types/field->col-type field))
+        inner-types (set (vals (types/flatten-union-types (types/field->col-type field))))
         without-null (disj inner-types :null)]
     (assert (<= (count without-null) 1))
     (let [non-null-copier (when-let [nn-col-type (first without-null)]
@@ -661,7 +660,7 @@
 
         (reify IVectorWriter
           (getVector [_] (doto duv (.setValueCount (.getPosition wp))))
-          (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) writers-by-name))
+          (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter (val %)) writers-by-name))
           (rowCopier [this-writer src-vec]
             (let [inner-copier (if (instance? DenseUnionVector src-vec)
                                  (duv->duv-copier this-writer src-vec)
@@ -678,17 +677,17 @@
               (.put writers-by-name (.getName field) (->child-writer type-id))
               type-id))
 
-          (writerForName [this field-name]
+          (writerForName [_ field-name]
             (.computeIfAbsent writers-by-name field-name
                               (reify Function
                                 (apply [_ _]
                                   (let [^Field field (types/->field field-name types/dense-union-type false)
-                                        type-id (.registerNewType this field)
-                                        wtr (.writerForTypeId this type-id)]
+                                        type-id (.registerNewTypeId duv field)
+                                        new-vec (.createVector field (.getAllocator duv))]
+                                    (.addVector duv type-id new-vec)
+                                    (->child-writer type-id))))))
 
-                                    wtr)))))
-
-          (writerForName [this field-name col-type]
+          (writerForName [_ field-name col-type]
             (.computeIfAbsent writers-by-name field-name
                               (reify Function
                                 (apply [_ _]
@@ -704,11 +703,10 @@
 
                                                        (types/col-type->field field-name col-type))
 
-                                        type-id (.registerNewType this field)
-
-                                        wtr (.writerForTypeId this type-id)]
-
-                                    wtr)))))
+                                        type-id (.registerNewTypeId duv field)
+                                        new-vec (.createVector field (.getAllocator duv))]
+                                    (.addVector duv type-id new-vec)
+                                    (->child-writer type-id))))))
 
           (writerForType [this col-type]
             (.writerForName this (types/col-type->field-name col-type) col-type))
