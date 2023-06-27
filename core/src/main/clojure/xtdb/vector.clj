@@ -363,7 +363,8 @@
 (extend-protocol PolyFactory
   DenseUnionVector
   (->poly-reader [duv [_ inner-types]]
-    (let [leg-count (count inner-types)]
+    (let [inner-types (vals inner-types)
+          leg-count (count inner-types)]
       (if (= 1 leg-count)
         (->MonoToPolyReader (->mono-reader duv (first inner-types)) 0 0)
 
@@ -386,7 +387,7 @@
 
   ValueVector
   (->poly-reader [arrow-vec [_ inner-types]]
-    (let [ordered-col-types (vec inner-types)
+    (let [ordered-col-types (vec (vals inner-types))
           field (.getField arrow-vec)
           null-type-id (.indexOf ^List ordered-col-types :null)
           nn-type-id (case null-type-id 0 1, 1 0)

@@ -1052,14 +1052,14 @@
                        [500 50 5 nil])))
 
     (t/is (= {:res ["big" "small" nil nil]
-              :res-type [:union #{:null :utf8}]}
+              :res-type (types/->union :null :utf8)}
              (run-test '(cond (> x 100) "big", (> x 10) "small")
                        [500 50 5 nil])))))
 
 (t/deftest test-let
   (with-open [rel (tu/open-rel [(tu/open-vec "x" [1 2 3 nil])])]
     (t/is (= {:res [6 9 12 nil]
-              :res-type [:union #{:null :i64}]}
+              :res-type  #{:null :i64}}
              (run-projection rel '(let [y (* x 2)
                                         y (+ y 3)]
                                     (+ x y)))))))

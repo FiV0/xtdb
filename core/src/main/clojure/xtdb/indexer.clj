@@ -22,7 +22,8 @@
             [xtdb.vector :as vec]
             [xtdb.vector.indirect :as iv]
             [xtdb.vector.writer :as vw]
-            [xtdb.watermark :as wm])
+            [xtdb.watermark :as wm]
+            [xtdb.types :as types])
   (:import (java.io ByteArrayInputStream Closeable)
            java.lang.AutoCloseable
            (java.nio.channels ClosedByInterruptException)
@@ -537,7 +538,7 @@
     (doto (.writerForName writer "xt$committed?" :bool)
       (.writeBoolean (nil? t)))
 
-    (let [e-wtr (.writerForName writer "xt$error" [:union #{:null :clj-form}])]
+    (let [e-wtr (.writerForName writer "xt$error" (types/->union :null :clj-form))]
       (if (or (nil? t) (= t abort-exn))
         (doto (.writerForType e-wtr :null)
           (.writeNull nil))

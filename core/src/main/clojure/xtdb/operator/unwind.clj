@@ -108,6 +108,7 @@
                    (fn [col-types]
                      (let [unwind-col-type (->> (get col-types from-col)
                                                 types/flatten-union-types
+                                                vals
                                                 (keep (fn [col-type]
                                                         (zmatch col-type
                                                                 [:list inner-type] inner-type

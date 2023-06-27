@@ -62,7 +62,7 @@
                            'valid-to nullable-inst-type}]}]]}])
 
 
-(def ^:private nullable-inst-type [:union #{:null [:timestamp-tz :micro "UTC"]}])
+(def ^:private nullable-inst-type (types/->union  :null [:timestamp-tz :micro "UTC"]))
 
 (def temporal-log-schema
   (Schema. [(types/col-type->field "tx-id" :i64)
@@ -112,7 +112,8 @@
           foo-wrt (.writerForTypeId u-wrt (byte 0))
           foo-field (.structKeyWriter foo-wrt "foo")
           bar-wrt (.writerForTypeId u-wrt (byte 1))
-          bar-field (.structKeyWriter foo-wrt "bar")]
+          bar-field (.structKeyWriter foo-wrt "bar")
+          copier (.rowCopier wrt2 (vw/rel-wtr->rdr wrt2))]
 
       ;; (-> u-wrt (.getVector) (.getField))
       (.startStruct foo-wrt)
@@ -127,13 +128,15 @@
 
       (println (rel-wrt->tsv-string wrt))
 
-      (-> (bean u-wrt) :vector (.getField) #_(.getChildren) #_#_first (.getChildren))
-      (vw/append-rel wrt2 (vw/rel-wtr->rdr wrt))
+      (.copyRow copier 0)
+
+      ;; (-> (bean u-wrt) :vector (.getField) #_(.getChildren) #_#_first (.getChildren))
+      ;; (vw/append-rel wrt2 (vw/rel-wtr->rdr wrt))
 
       (println (rel-wrt->tsv-string wrt2))
 
-      (-> (seq wrt) first val (.getVector) (.getField))
-      ;; (-> (seq wrt2) first val (.getVector) (.getField))
+      (-> (seq wrt) first val (.getVector) (.getField) types/field->col-type)
+      ;; (-> wrt2 seq #_#_#_(.getVector) (.getField) types/field->col-type)
 
       ))
 

@@ -26,7 +26,8 @@
 (defn call-meta-expr [{:keys [f args] :as expr} {:keys [col-types] :as opts}]
   (letfn [(var-param-expr [f meta-value field {:keys [param-type] :as param-expr}]
             (let [base-col-types (-> (get col-types field)
-                                     types/flatten-union-types)]
+                                     types/flatten-union-types
+                                     vals)]
               (simplify-and-or-expr
                 {:op :call
                  :f :or

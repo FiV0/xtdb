@@ -242,26 +242,27 @@
 (defn merge-col-types [& col-types]
   (letfn [(merge-col-type* [acc col-type]
             (zmatch col-type
-              [:union inner-types] (reduce merge-col-type* acc inner-types)
+              [:union inner-types] (update acc :union (fnil (partial merge-with merge-col-types) {}) inner-types)
               [:list inner-type] (update acc :list merge-col-type* inner-type)
               [:fixed-size-list el-count inner-type] (update acc [:fixed-size-list el-count] merge-col-type* inner-type)
               [:struct struct-col-types] (update acc :struct
                                                  (fn [acc]
                                                    (let [default-col-type (if acc {:absent nil} nil)]
                                                      (as-> acc acc
-                                                       (reduce-kv (fn [acc col-name col-type]
-                                                                    (update acc col-name (fnil merge-col-type* default-col-type) col-type))
-                                                                  acc
-                                                                  struct-col-types)
-                                                       (reduce (fn [acc absent-k]
-                                                                 (update acc absent-k merge-col-type* :absent))
-                                                               acc
-                                                               (set/difference (set (keys acc))
-                                                                               (set (keys struct-col-types))))))))
+                                                           (reduce-kv (fn [acc col-name col-type]
+                                                                        (update acc col-name (fnil merge-col-type* default-col-type) col-type))
+                                                                      acc
+                                                                      struct-col-types)
+                                                           (reduce (fn [acc absent-k]
+                                                                     (update acc absent-k merge-col-type* :absent))
+                                                                   acc
+                                                                   (set/difference (set (keys acc))
+                                                                                   (set (keys struct-col-types))))))))
               (assoc acc col-type nil)))
 
-          (kv->col-type [[head opts]]
+          (kv->col-type [[head opts :as kv]]
             (case (if (vector? head) (first head) head)
+              :union (if (zero? (count opts)) :null kv)
               :list [:list (map->col-type opts)]
               :fixed-size-list [:fixed-size-list (second head) (map->col-type opts)]
               :struct [:struct (->> (for [[col-name col-type-map] opts]
@@ -439,7 +440,7 @@
 ;; NOTE this will lose field if they are named the same
 (defmethod arrow-type->col-type ArrowType$Union [_ & child-fields]
   [:union (->> child-fields
-               (into {} (map (juxt #(.getName ^Field %) field->col-type))))])
+               (into {} (map (juxt (comp symbol #(.getName ^Field %)) field->col-type))))])
 
 (defn ->union [& types]
   [:union (->> (apply merge-col-types types)

@@ -191,13 +191,17 @@
                                     '[:struct {a :utf8}]))))
 
   (t/testing "named union legs"
+    (t/is (= :null
+             (types/merge-col-types [:union {}])))
 
-    (t/is (= :null (types/merge-col-types [:union {}])))
+    (t/is (= '[:union {foo :i32}]
+             (types/merge-col-types [:union {'foo :i32}])))
 
-    (t/is (= '[:union {foo :i32}] (types/merge-col-types [:union {'foo :i32}])))
+    (t/is (= '[:union {foo :f64, bar :f64}]
+             (types/merge-col-types [:union {'foo :f64}] [:union {'bar :f64}])))
 
-    (t/is (= '[:union {foo :f64, bar :f64}] (types/merge-col-types [:union {'foo :f64}] [:union {'bar :f64}])))
+    (t/is (= '[:union {foo :f64}]
+             (types/merge-col-types [:union {'foo :f64}] [:union {'foo :f64}])))
 
-    (t/is (= '[:union {foo :f64}] (types/merge-col-types [:union {'foo :f64}] [:union {'foo :f64}])))
-
-    (t/is (= '[:union {foo [:union {f64 :f64, i64 :i64}]}] (types/merge-col-types [:union {'foo :f64}] [:union {'foo :i64}])))))
+    (t/is (= '[:union {foo [:union {f64 :f64, i64 :i64}]}]
+             (types/merge-col-types [:union {'foo :f64}] [:union {'foo :i64}])))))

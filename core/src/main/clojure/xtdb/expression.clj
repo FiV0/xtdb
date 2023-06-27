@@ -1242,6 +1242,7 @@
                                 ~@(->> poly-vals
                                        (mapcat (fn [[field {:keys [return-type continue]}]]
                                                  (let [type-ids (->> (second return-type)
+                                                                     vals
                                                                      (into {} (map-indexed (fn [idx val-type]
                                                                                              [val-type idx]))))]
                                                    [(str field)

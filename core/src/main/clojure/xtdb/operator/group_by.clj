@@ -253,6 +253,7 @@
 
 (defmethod ->aggregate-factory :sum [{:keys [from-name from-type] :as agg-opts}]
   (let [to-type (->> (types/flatten-union-types from-type)
+                     vals
                      ;; TODO handle non-num types, if appropriate? (durations?)
                      ;; do we want to runtime error, or treat them as nulls?
                      (filter (comp #(isa? types/col-type-hierarchy % :num) types/col-type-head))
@@ -430,6 +431,7 @@
   [compare-kw {:keys [from-name from-type] :as agg-opts}]
 
   (let [from-types (-> (types/flatten-union-types from-type)
+                       vals set
                        (disj :null))
         to-type (types/least-upper-bound from-types)]
     (assert-supported-min-max-types from-types to-type)

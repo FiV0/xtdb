@@ -151,15 +151,15 @@
     cm))
 
 (def ^org.apache.arrow.vector.types.pojo.Schema table-metadata-schema
-  (Schema. [(types/col-type->field 'block-idx [:union #{:null :i32}]) ; null for whole chunk
+  (Schema. [(types/col-type->field 'block-idx (types/->union :null :i32)) ; null for whole chunk
             (types/col-type->field 'columns
                                    [:list
                                     [:struct
-                                     '{col-name :utf8
-                                       root-col? :bool
-                                       count :i64
-                                       types [:struct {}]
-                                       bloom [:union #{:null :varbinary}]}]])]))
+                                     {'col-name :utf8
+                                      'root-col? :bool
+                                      'count :i64
+                                      'types [:struct {}]
+                                      'bloom (types/->union :null :varbinary)}]])]))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ContentMetadataWriter

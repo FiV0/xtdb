@@ -3,7 +3,8 @@
             [xtdb.blocks :as blocks]
             [xtdb.util :as util]
             [xtdb.vector :as vec]
-            [xtdb.vector.writer :as vw])
+            [xtdb.vector.writer :as vw]
+            [xtdb.types :as types])
   (:import (java.io Closeable)
            java.util.ArrayList
            java.util.concurrent.atomic.AtomicInteger
@@ -31,13 +32,13 @@
   (^void close []))
 
 (def ^:private log-ops-col-type
-  '[:union #{:null
-             [:list
-              [:struct {iid :i64
-                        row-id [:union #{:null :i64}]
-                        application-time-start [:timestamp-tz :micro "UTC"]
-                        application-time-end [:timestamp-tz :micro "UTC"]
-                        evict? :bool}]]}])
+  (types/->union :null
+                 [:list
+                  [:struct {'iid :i64
+                            'row-id (types/->union :null :i64)
+                            'application-time-start [:timestamp-tz :micro "UTC"]
+                            'application-time-end [:timestamp-tz :micro "UTC"]
+                            'evict? :bool}]]))
 
 (defn- ->log-obj-key [chunk-idx]
   (format "chunk-%s/log.arrow" (util/->lex-hex-string chunk-idx)))

@@ -712,7 +712,7 @@
             (.writerForName this (types/col-type->field-name col-type) col-type))
 
           (writerForTypeId [_ type-id]
-            (sc.api/spy)
+            #_(throw (UnsupportedOperationException.))
             (.get writers-by-name (-> (.getVectorByType duv type-id) (.getName)))))))))
 
 (comment
