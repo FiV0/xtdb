@@ -155,17 +155,17 @@
 (t/deftest test-merge-col-types
   (t/is (= :utf8 (types/merge-col-types :utf8 :utf8)))
 
-  (t/is (= [:union #{:utf8 :i64}]
+  (t/is (= (types/->union :utf8 :i64)
            (types/merge-col-types :utf8 :i64)))
 
-  (t/is (= [:union #{:utf8 :i64 :f64}]
-           (types/merge-col-types [:union #{:utf8 :i64}] :f64)))
+  (t/is (= (types/->union :utf8 :i64 :f64)
+           (types/merge-col-types (types/->union :utf8 :i64) :f64)))
 
   (t/testing "merges list types"
     (t/is (= [:list :utf8]
              (types/merge-col-types [:list :utf8] [:list :utf8])))
 
-    (t/is (= [:list [:union #{:utf8 :i64}]]
+    (t/is (= [:list (types/->union :utf8 :i64)]
              (types/merge-col-types [:list :utf8] [:list :i64]))))
 
   (t/testing "merges struct types"
@@ -173,19 +173,31 @@
              (types/merge-col-types '[:struct {a :utf8, b :utf8}]
                                     '[:struct {a :utf8, b :utf8}])))
 
-    (t/is (= '[:struct {a :utf8
-                        b [:union #{:utf8 :i64}]}]
+    (t/is (= [:struct {'a :utf8
+                       'b (types/->union :utf8 :i64)}]
 
              (types/merge-col-types '[:struct {a :utf8, b :utf8}]
                                     '[:struct {a :utf8, b :i64}])))
 
     (let [struct0 '[:struct {a :utf8, b :utf8}]
           struct1 '[:struct {b :utf8, c :i64}]]
-      (t/is (= '[:struct {a [:union #{:utf8 :absent}]
-                          b :utf8
-                          c [:union #{:i64 :absent}]}]
+      (t/is (= [:struct {'a (types/->union :utf8 :absent)
+                         'b :utf8
+                         'c (types/->union :i64 :absent)}]
                (types/merge-col-types struct0 struct1))))
 
-    (t/is (= '[:union #{:f64 [:struct {a [:union #{:i64 :utf8}]}]}]
-             (types/merge-col-types '[:union #{:f64, [:struct {a :i64}]}]
-                                    '[:struct {a :utf8}])))))
+    (t/is (= (types/->union :f64 [:struct {'a (types/->union :i64 :utf8)}])
+             (types/merge-col-types (types/->union :f64 [:struct {'a :i64}])
+                                    '[:struct {a :utf8}]))))
+
+  (t/testing "named union legs"
+
+    (t/is (= :null (types/merge-col-types [:union {}])))
+
+    (t/is (= '[:union {foo :i32}] (types/merge-col-types [:union {'foo :i32}])))
+
+    (t/is (= '[:union {foo :f64, bar :f64}] (types/merge-col-types [:union {'foo :f64}] [:union {'bar :f64}])))
+
+    (t/is (= '[:union {foo :f64}] (types/merge-col-types [:union {'foo :f64}] [:union {'foo :f64}])))
+
+    (t/is (= '[:union {foo [:union {f64 :f64, i64 :i64}]}] (types/merge-col-types [:union {'foo :f64}] [:union {'foo :i64}])))))

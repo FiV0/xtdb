@@ -237,7 +237,7 @@
 (defn flatten-union-types [col-type]
   (if (= :union (col-type-head col-type))
     (second col-type)
-    #{col-type}))
+    {(col-type->field-name col-type) col-type}))
 
 (defn merge-col-types [& col-types]
   (letfn [(merge-col-type* [acc col-type]
@@ -273,7 +273,10 @@
             (case (count col-type-map)
               0 :null
               1 (kv->col-type (first col-type-map))
-              [:union (into #{} (map kv->col-type) col-type-map)]))]
+              [:union (merge-with merge-col-types
+                                  (or (:union col-type-map) {})
+                                  (into {} (map (comp (juxt (comp symbol col-type->field-name) identity) kv->col-type))
+                                        (dissoc col-type-map :union)))]))]
 
     (-> (transduce (comp (remove nil?) (distinct)) (completing merge-col-type*) {} col-types)
         (map->col-type))))
@@ -419,47 +422,28 @@
 ;; an equivalent type (but better suited for
 
 
-(defn generated-column? [field-name]
-  (str/starts-with? field-name "xt/"))
 
-(defn- union-types->named-union-types [col-types]
-  (if (set? col-types)
-    (into {} (map-indexed (fn [idx col-type]
-                            [(str "xt/" (col-type->field-name col-type) "-" idx) col-type]) col-types))
-    col-types))
 
 (defmethod col-type->field* :union [col-name nullable? col-type]
-  (let [named-union-types (union-types->named-union-types (or (second col-type) #{}))
-        col-types (cond-> (set (vals named-union-types))
-                    nullable? (conj :null))
-        nullable? (contains? col-types :null)
-        without-null (disj col-types :null)]
+  (let [col-types (cond-> (second col-type)
+                    nullable? (assoc (col-type->field-name :null) :null))
+        without-null (dissoc col-types (col-type->field-name :null))]
     (case (count without-null)
       0 (col-type->field* col-name true :null)
-      1 (col-type->field* col-name nullable? (first without-null))
-
+      1 (col-type->field* col-name nullable? (-> without-null first second))
       (apply ->field col-name (.getType Types$MinorType/DENSEUNION) false
              (map (fn [[name col-type]]
                     (col-type->field name col-type))
-                  (cond-> named-union-types
-                    nullable? (assoc (col-type->field-name :null) :null)))))))
+                  (cond-> without-null nullable? (assoc (col-type->field-name :null) :null)))))))
 
-(defn- union-field-prefix [field-name]
-  (if (generated-column? field-name)
-    "xt"
-    field-name))
-
+;; NOTE this will lose field if they are named the same
 (defmethod arrow-type->col-type ArrowType$Union [_ & child-fields]
-  (let [res (->
-             (reduce (fn [m child-field] (update m (union-field-prefix (.getName ^Field child-field)) (fnil conj #{}) (field->col-type child-field))) {} child-fields)
-             (update-vals (partial apply merge-col-types)))]
-    (case (count res)
-      0 :null
-      1 (-> res first val)
-      [:union res]))
-  #_(->> child-fields
-         (into #{} (map field->col-type))
-         (apply merge-col-types)))
+  [:union (->> child-fields
+               (into {} (map (juxt #(.getName ^Field %) field->col-type))))])
+
+(defn ->union [& types]
+  [:union (->> (apply merge-col-types types)
+               flatten-union-types)])
 
 ;;; number
 

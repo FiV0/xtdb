@@ -253,12 +253,13 @@
 (defn- continue-read [f col-type reader-sym & args]
   (zmatch col-type
     [:union inner-types]
-    `(case (.read ~reader-sym ~@args)
-       ~@(->> inner-types
-              (sequence
-               (comp (map-indexed (fn [type-id col-type]
-                                    [type-id (f col-type (read-value-code col-type reader-sym))]))
-                     cat))))
+    (let [inner-types (vals inner-types)]
+      `(case (.read ~reader-sym ~@args)
+         ~@(->> inner-types
+                (sequence
+                 (comp (map-indexed (fn [type-id col-type]
+                                      [type-id (f col-type (read-value-code col-type reader-sym))]))
+                       cat)))))
     (f col-type (apply read-value-code col-type reader-sym args))))
 
 (defmethod read-value-code :list [[_ el-type] & args]
@@ -379,11 +380,13 @@
 (defn- wrap-boxed-poly-return [{:keys [return-type continue] :as emitted-expr} _]
   (zmatch return-type
     [:union inner-types]
-    (let [box-sym (gensym 'box)
+    (let [inner-types (vals inner-types)
+          box-sym (gensym 'box)
 
           types (->> inner-types
                      (into {} (map-indexed (fn [idx val-type]
                                              (MapEntry/create val-type {:type-id (byte idx)
+
                                                                         :sym (symbol (str box-sym "w" idx))})))))]
       (-> emitted-expr
           (update :batch-bindings (fnil into []) (into [[box-sym `(ValueBox.)]]
@@ -464,7 +467,7 @@
 
 (defmethod codegen-expr :let [{:keys [local expr body]} opts]
   (let [{local-type :return-type, continue-expr :continue, :as emitted-expr} (codegen-expr expr opts)
-        emitted-bodies (->> (for [local-type (types/flatten-union-types local-type)]
+        emitted-bodies (->> (for [local-type (vals (types/flatten-union-types local-type))]
                               (MapEntry/create local-type
                                                (codegen-expr body (assoc-in opts [:local-types local] local-type))))
                             (into {}))
@@ -481,7 +484,7 @@
   (let [{continue-expr :continue, expr-ret :return-type, :as emitted-expr}
         (codegen-expr expr opts)
 
-        expr-rets (types/flatten-union-types expr-ret)
+        expr-rets (set (vals (types/flatten-union-types expr-ret)))
 
         emitted-thens (->> (for [local-type (disj expr-rets :null)]
                              (MapEntry/create local-type
@@ -540,12 +543,12 @@
     `(long (if ~code 1 -1))))
 
 (defn- nullable? [col-type]
-  (contains? (types/flatten-union-types col-type) :null))
+  (contains? (set (vals (types/flatten-union-types col-type))) :null))
 
 (defn- codegen-and [[{l-ret :return-type, l-cont :continue}
                      {r-ret :return-type, r-cont :continue}]]
   (let [nullable? (or (nullable? l-ret) (nullable? r-ret))]
-    {:return-type (if nullable? [:union #{:bool :null}] :bool)
+    {:return-type (if nullable? (types/->union :bool :null) :bool)
      :continue (if-not nullable?
                  (fn [f]
                    (f :bool `(and ~(l-cont (fn [_ code] `(boolean ~code)))
@@ -587,7 +590,7 @@
 
         all-arg-types (reduce (fn [acc {:keys [return-type]}]
                                 (for [el acc
-                                      return-type (types/flatten-union-types return-type)]
+                                      return-type (vals (types/flatten-union-types return-type))]
                                   (conj el return-type)))
                               [[]]
                               emitted-args)
@@ -1095,7 +1098,7 @@
     (throw (err/illegal-arg :xtdb.expression/arity-error
                             {::err/message "Arity error, concat requires at least two arguments"
                              :expr (dissoc expr :emitted-args :arg-types)})))
-  (let [possible-types (into #{} (mapcat (comp types/flatten-union-types :return-type)) emitted-args)
+  (let [possible-types (into #{} (mapcat (comp vals types/flatten-union-types :return-type)) emitted-args)
         value-types (disj possible-types :null)
         _ (when (< 1 (count value-types))
             (throw (err/illegal-arg :xtdb.expression/type-error
@@ -1276,8 +1279,8 @@
 
       (let [inner-calls (->> (for [field fields]
                                (MapEntry/create field
-                                                (->> (for [l-val-type (-> (get l-field-types field) types/flatten-union-types)
-                                                           r-val-type (-> (get r-field-types field) types/flatten-union-types)]
+                                                (->> (for [l-val-type (-> (get l-field-types field) types/flatten-union-types vals)
+                                                           r-val-type (-> (get r-field-types field) types/flatten-union-types vals)]
                                                        (MapEntry/create [l-val-type r-val-type]
                                                                         (if (or (= :null l-val-type) (= :null r-val-type))
                                                                           {:return-type :null, :->call-code (constantly nil)}
@@ -1285,7 +1288,7 @@
                                                      (into {}))))
                              (into {}))]
 
-        {:return-type [:union #{:bool :null}]
+        {:return-type (types/->union :bool :null)
          :continue-call (fn [f [l-code r-code]]
                           (let [res-sym (gensym 'res)]
                             `(let [~res-sym
@@ -1309,7 +1312,8 @@
                                  ~(f :bool `(== 1 ~res-sym))))))}))))
 
 (defn- codegen-poly-list [[_list [_union inner-types] :as return-type] emitted-els]
-  (let [box-sym (gensym 'box)]
+  (let [inner-types (vals inner-types)
+        box-sym (gensym 'box)]
     {:batch-bindings [[box-sym `(ValueBox.)]]
      :continue (fn [f]
                  (f return-type
@@ -1344,7 +1348,7 @@
                                         [_ target-el-type :as target-type] :target-type}]
   (assert (types/union? target-el-type))
   (if (types/union? source-el-type)
-    (let [target-types ^List (vec (second target-el-type))
+    (let [target-types ^List (vals (second target-el-type))
           type-id-mapping (->> (second source-el-type)
                                (mapv (fn [source-type]
                                        (.indexOf target-types source-type))))]
@@ -1454,15 +1458,15 @@
   (let [n-sym (gensym 'n)
         len-sym (gensym 'len)
         res-sym (gensym 'res)
-        inner-calls (->> (for [l-el-type (types/flatten-union-types l-el-type)
-                               r-el-type (types/flatten-union-types r-el-type)]
+        inner-calls (->> (for [l-el-type (vals (types/flatten-union-types l-el-type))
+                               r-el-type (vals (types/flatten-union-types r-el-type))]
                            (MapEntry/create [l-el-type r-el-type]
                                             (if (or (= :null l-el-type) (= :null r-el-type))
                                               {:return-type :null, :->call-code (constantly nil)}
                                               (codegen-call {:f :=, :arg-types [l-el-type r-el-type]}))))
                          (into {}))]
 
-    {:return-type [:union #{:bool :null}]
+    {:return-type (types/->union :bool :null)
      :continue-call (fn continue-list= [f [l-code r-code]]
                       (let [l-sym (gensym 'l), r-sym (gensym 'r)]
                         ;; this is essentially `(every? = ...)` but with 3VL
@@ -1505,7 +1509,8 @@
 (defn write-value-out-code [return-type]
   (zmatch return-type
     [:union inner-types]
-    (let [writer-syms (->> inner-types
+    (let [inner-types (vals inner-types)
+          writer-syms (->> inner-types
                            (into {} (map (juxt identity (fn [_] (gensym 'out-writer))))))]
       {:writer-bindings (into [out-writer-sym `(vw/->writer ~out-vec-sym)]
                               (mapcat (fn [[value-type writer-sym]]
