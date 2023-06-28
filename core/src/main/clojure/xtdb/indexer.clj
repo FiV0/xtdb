@@ -5,6 +5,7 @@
             [xtdb.buffer-pool :as bp]
             [xtdb.datalog :as d]
             [xtdb.error :as err]
+            xtdb.indexer.content-log-indexer
             xtdb.indexer.internal-id-manager
             xtdb.indexer.live-tries
             xtdb.indexer.log-indexer
@@ -23,28 +24,29 @@
             [xtdb.vector :as vec]
             [xtdb.vector.indirect :as iv]
             [xtdb.vector.writer :as vw]
-            [xtdb.watermark :as wm]
-            [xtdb.types :as types])
+            [xtdb.watermark :as wm])
   (:import (java.io ByteArrayInputStream Closeable)
            java.lang.AutoCloseable
            java.nio.ByteBuffer
            (java.nio.channels ClosedByInterruptException)
            java.security.MessageDigest
            (java.time Instant ZoneId)
-           (java.util Arrays UUID)
+           (java.util Arrays)
            (java.util.concurrent.locks StampedLock)
            (java.util.function Consumer IntPredicate Supplier ToIntFunction)
            (java.util.stream IntStream StreamSupport)
            (org.apache.arrow.memory BufferAllocator)
-           (org.apache.arrow.vector BigIntVector BitVector TimeStampVector VarBinaryVector VarCharVector VectorSchemaRoot)
+           (org.apache.arrow.vector BigIntVector BitVector TimeStampVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot)
            (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
            (org.apache.arrow.vector.ipc ArrowStreamReader)
            org.roaringbitmap.RoaringBitmap
            (xtdb.api.protocols ClojureForm TransactionInstant)
            xtdb.buffer_pool.IBufferPool
+           (xtdb.indexer.content_log_indexer IContentIndexer IContentOpIndexer)
            xtdb.indexer.internal_id_manager.IInternalIdManager
            (xtdb.indexer.live_tries ILiveTries ILiveTrieTx ILiveTriesTx)
            (xtdb.indexer.log_indexer ILogIndexer ILogOpIndexer)
+           (xtdb.indexer.temporal_log_indexer ILogIndexer2 ILogOpIndexer2)
            (xtdb.live_chunk ILiveChunk ILiveChunkTx ILiveTableTx)
            xtdb.metadata.IMetadataManager
            xtdb.object_store.ObjectStore
@@ -91,7 +93,7 @@
         (Arrays/copyOfRange 0 16))))
 
 (defn- ->put-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr ^ILogOpIndexer log-op-idxer,
-                                              ^ILogOpIndexer temporal-lop-op-idxer,
+                                              ^ILogOpIndexer2 temporal-log-op-idxer, ^IContentOpIndexer content-log-op-idxer
                                               ^ITemporalTxIndexer temporal-idxer,
                                               ^ILiveChunkTx live-chunk, ^ILiveTriesTx live-tries-tx
                                               ^DenseUnionVector tx-ops-vec, ^Instant system-time]
@@ -120,17 +122,20 @@
                                              :iid-wtr (.writerForName rel-writer "xt$iid")
                                              :valid-from-wtr (.writerForName rel-writer "xt$valid_from")
                                              :sys-from-wtr (.writerForName rel-writer "xt$system_from")
-                                             :doc-copier (.rowCopier (.writerForName rel-writer "xt$doc") table-vec)})}))))]
+                                             :doc-copier (.rowCopier (.writerForName rel-writer "xt$doc") table-vec)})
+                               :table-vec table-vec}))))]
 
     (reify OpIndexer
       (indexOp [_ tx-op-idx]
         (let [row-id (.nextRowId live-chunk)
               put-offset (.getOffset tx-ops-vec tx-op-idx)
 
-              {:keys [table-name, ^DenseUnionVector id-duv, live-table, live-trie]} (nth tables (.getTypeId doc-duv put-offset))
+              {:keys [table-name, ^DenseUnionVector id-duv, live-table, live-trie, table-vec]}
+              (nth tables (.getTypeId doc-duv put-offset))
               doc-offset (.getOffset doc-duv put-offset)
 
-              eid (t/get-object id-duv doc-offset)]
+              eid (t/get-object id-duv doc-offset)
+              byte-eid (->iid eid)]
 
           (let [{:keys [^ILiveTableTx live-table, ^IRowCopier table-copier]} live-table]
             (.writeRowId live-table row-id)
@@ -153,7 +158,7 @@
             (let [{:keys [^ILiveTrieTx live-trie, ^IRelationWriter rel-writer, ^IRowCopier doc-copier,
                           ^IVectorWriter iid-wtr, ^IVectorWriter valid-from-wtr, ^IVectorWriter sys-from-wtr]} live-trie
                   pos (.getPosition (.writerPosition rel-writer))]
-              (.writeBytes iid-wtr (ByteBuffer/wrap (->iid eid)))
+              (.writeBytes iid-wtr (ByteBuffer/wrap byte-eid))
               (.writeLong valid-from-wtr valid-from)
               (.writeLong sys-from-wtr system-time-µs)
               (.copyRow doc-copier doc-offset)
@@ -161,13 +166,14 @@
               (.addRow live-trie pos))
 
             (.logPut log-op-idxer iid row-id valid-from valid-to)
-            (.logPut temporal-log-op-idxer iid row-id valid-from valid-to)
+            (.logPut temporal-log-op-idxer byte-eid row-id valid-from valid-to)
+            (.logPut content-log-op-idxer table-name table-vec doc-offset)
             (.indexPut temporal-idxer iid row-id valid-from valid-to new-entity?)))
 
         nil))))
 
 (defn- ->delete-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr, ^ILogOpIndexer log-op-idxer,
-                                                 ^ILogOpIndexer temporal-log-op-idxer,
+                                                 ^ILogOpIndexer2 temporal-log-op-idxer,
                                                  ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk
                                                  ^DenseUnionVector tx-ops-vec, ^Instant current-time]
   (let [delete-vec (.getStruct tx-ops-vec 2)
@@ -196,13 +202,13 @@
                                      :valid-to (util/micros->instant valid-to)})))
 
           (.logDelete log-op-idxer iid valid-from valid-to)
-          (.logDelete temporal-log-op-idxer iid valid-from valid-to)
+          (.logDelete temporal-log-op-idxer (->iid eid) valid-from valid-to)
           (.indexDelete temporal-idxer iid row-id valid-from valid-to new-entity?))
 
         nil))))
 
 (defn- ->evict-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr ^ILogOpIndexer log-op-idxer,
-                                                ^ILogOpIndexer temporal-log-op-idxer
+                                                ^ILogOpIndexer2 temporal-log-op-idxer
                                                 ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk
                                                 ^DenseUnionVector tx-ops-vec]
 
@@ -217,7 +223,7 @@
               eid (t/get-object id-vec evict-offset)
               iid (.getOrCreateInternalId iid-mgr table eid row-id)]
           (.logEvict log-op-idxer iid)
-          (.logEvict temporal-log-op-idxer iid)
+          (.logEvict temporal-log-op-idxer (->iid eid))
           (.indexEvict temporal-idxer iid))
 
         nil))))
@@ -335,8 +341,9 @@
 (definterface SqlOpIndexer
   (^void indexOp [^xtdb.vector.IIndirectRelation inRelation, queryOpts]))
 
-(defn- ->sql-insert-indexer ^xtdb.indexer.SqlOpIndexer [^IInternalIdManager iid-mgr, ^ILogOpIndexer log-op-idxer,
-                                                        ^ILogOpIndexer temporal-log-op-idxer
+(defn- ->sql-insert-indexer ^xtdb.indexer.SqlOpIndexer [^BufferAllocator allocator,
+                                                        ^IInternalIdManager iid-mgr, ^ILogOpIndexer log-op-idxer,
+                                                        ^ILogOpIndexer2 temporal-log-op-idxer, ^IContentOpIndexer content-op-idxer
                                                         ^ITemporalTxIndexer temporal-idxer
                                                         ^ILiveChunkTx live-chunk, {{:keys [^Instant current-time]} :basis}]
 
@@ -358,28 +365,31 @@
                                      (.polyReader [:union [:null t/temporal-col-type]]))
               valid-to-rdr (some-> (.vectorForName in-rel "xt$valid_to")
                                    (.polyReader [:union [:null t/temporal-col-type]]))]
-          (dotimes [idx row-count]
-            (let [row-id (.nextRowId live-chunk)]
-              (.writeRowId live-table row-id)
-              (.copyRow table-copier idx)
+          ;; TODO revisit to check if copying to content log can be done more efficiently (see also sql-update)
+          (with-open [^ValueVector content-vec (vw/irel->struct-vec allocator content-rel)]
+            (dotimes [idx row-count]
+              (let [row-id (.nextRowId live-chunk)]
+                (.writeRowId live-table row-id)
+                (.copyRow table-copier idx)
 
-              (let [eid (t/get-object (.getVector id-col) (.getIndex id-col idx))
-                    new-entity? (not (.isKnownId iid-mgr table eid))
-                    iid (.getOrCreateInternalId iid-mgr table eid row-id)
-                    valid-from (if (and valid-from-rdr (= 1 (.read valid-from-rdr idx)))
-                                 (.readLong valid-from-rdr)
-                                 current-time-µs)
-                    valid-to (if (and valid-to-rdr (= 1 (.read valid-to-rdr idx)))
-                               (.readLong valid-to-rdr)
-                               util/end-of-time-μs)]
-                (when (> valid-from valid-to)
-                  (throw (err/runtime-err :xtdb.indexer/invalid-valid-times
-                                          {:valid-from (util/micros->instant valid-from)
-                                           :valid-to (util/micros->instant valid-to)})))
+                (let [eid (t/get-object (.getVector id-col) (.getIndex id-col idx))
+                      new-entity? (not (.isKnownId iid-mgr table eid))
+                      iid (.getOrCreateInternalId iid-mgr table eid row-id)
+                      valid-from (if (and valid-from-rdr (= 1 (.read valid-from-rdr idx)))
+                                   (.readLong valid-from-rdr)
+                                   current-time-µs)
+                      valid-to (if (and valid-to-rdr (= 1 (.read valid-to-rdr idx)))
+                                 (.readLong valid-to-rdr)
+                                 util/end-of-time-μs)]
+                  (when (> valid-from valid-to)
+                    (throw (err/runtime-err :xtdb.indexer/invalid-valid-times
+                                            {:valid-from (util/micros->instant valid-from)
+                                             :valid-to (util/micros->instant valid-to)})))
 
-                (.logPut log-op-idxer iid row-id valid-from valid-to)
-                (.logPut temporal-log-op-idxer iid row-id valid-from valid-to)
-                (.indexPut temporal-idxer iid row-id valid-from valid-to new-entity?)))))))))
+                  (.logPut log-op-idxer iid row-id valid-from valid-to)
+                  (.logPut temporal-log-op-idxer (->iid eid) row-id valid-from valid-to)
+                  (.logPut content-op-idxer table content-vec idx)
+                  (.indexPut temporal-idxer iid row-id valid-from valid-to new-entity?))))))))))
 
 (defn- row-id->idx [buf, ^long block-idx, ^long row-id]
   (with-open [chunks (util/->chunks buf {:block-idxs (doto (RoaringBitmap.)
@@ -398,24 +408,32 @@
         (.findFirst)
         (.getAsInt))))
 
-(defn- ->sql-update-indexer ^xtdb.indexer.SqlOpIndexer [^IMetadataManager metadata-mgr, ^IBufferPool buffer-pool
-                                                        ^ILogOpIndexer log-op-idxer, ^ILogOpIndexer temporal-log-op-idxer,
+;; TODO replace the use of this with ->iid in sql update, delete and evict
+(defn- long->byte-hash [^long l]
+  (byte-array 16 (.getBytes (Long/toHexString l))))
+
+(defn- ->sql-update-indexer ^xtdb.indexer.SqlOpIndexer [^BufferAllocator allocator
+                                                        ^IMetadataManager metadata-mgr, ^IBufferPool buffer-pool
+                                                        ^ILogOpIndexer log-op-idxer, ^ILogOpIndexer2 temporal-log-op-idxer,
+                                                        ^IContentOpIndexer content-op-idxer,
                                                         ^ITemporalTxIndexer temporal-idxer ^ILiveChunkTx live-chunk]
   (reify SqlOpIndexer
     (indexOp [_ in-rel {:keys [table]}]
       (let [row-count (.rowCount in-rel)
-            ^IIndirectRelation in-rel (iv/->indirect-rel (map (fn [^IIndirectVector vec]
-                                                                (.withName vec (util/str->normal-form-str (.getName vec)))) in-rel)
-                                                         row-count)
+            ^IIndirectRelation content-rel (iv/->indirect-rel (->> in-rel
+                                                                   (remove (comp temporal/temporal-column?
+                                                                                 #(.getName ^IIndirectVector %)))
+                                                                   (map (fn [^IIndirectVector vec]
+                                                                          (.withName vec (util/str->normal-form-str (.getName vec))))))
+                                                              row-count)
             table (util/str->normal-form-str table)
             live-table (.liveTable live-chunk table)
             live-table-wtr (.writer live-table)]
         (letfn [(->live-row-copier ^xtdb.vector.IRowCopier [^IIndirectVector col]
                   (.rowCopier col (.writerForName live-table-wtr (.getName col))))]
 
-          (let [update-col-copiers (->> (for [^IIndirectVector in-col in-rel
-                                              :let [col-name (.getName in-col)]
-                                              :when (not (temporal/temporal-column? col-name))]
+          (let [update-col-copiers (->> (for [^IIndirectVector in-col content-rel
+                                              :let [col-name (.getName in-col)]]
                                           [col-name (->live-row-copier in-col)])
                                         (into {}))
                 iid-rdr (.monoReader (.vectorForName in-rel "_iid") :i64)
@@ -426,54 +444,63 @@
                                  (.monoReader t/temporal-col-type))]
 
             ;; once the SQL planner has select-star we can likely re-use a lot of that instead of the below...
-            (dotimes [idx row-count]
-              (let [old-row-id (.readLong row-id-rdr idx)
-                    new-row-id (.nextRowId live-chunk)
-                    iid (.readLong iid-rdr idx)
-                    valid-from (.readLong valid-from-rdr idx)
-                    valid-to (.readLong valid-to-rdr idx)]
-                (when (> valid-from valid-to)
-                  (throw (err/runtime-err :xtdb.indexer/invalid-valid-times
-                                          {:valid-from (util/micros->instant valid-from)
-                                           :valid-to (util/micros->instant valid-to)})))
+            (with-open [^ValueVector content-vec (vw/irel->struct-vec allocator content-rel)]
+              (let [content-wrt (vw/->writer content-vec)]
+                (letfn [(->content-vec-copier ^xtdb.vector.IRowCopier [^IIndirectVector col]
+                          (.rowCopier col (.structKeyWriter content-wrt (.getName col))))]
+                  (dotimes [idx row-count]
+                    (let [old-row-id (.readLong row-id-rdr idx)
+                          new-row-id (.nextRowId live-chunk)
+                          iid (.readLong iid-rdr idx)
+                          valid-from (.readLong valid-from-rdr idx)
+                          valid-to (.readLong valid-to-rdr idx)]
+                      (when (> valid-from valid-to)
+                        (throw (err/runtime-err :xtdb.indexer/invalid-valid-times
+                                                {:valid-from (util/micros->instant valid-from)
+                                                 :valid-to (util/micros->instant valid-to)})))
 
-                (.writeRowId live-table new-row-id)
+                      (.writeRowId live-table new-row-id)
 
-                (doseq [^IRowCopier update-col-copier (vals update-col-copiers)]
-                  (.copyRow update-col-copier idx))
+                      (doseq [^IRowCopier update-col-copier (vals update-col-copiers)]
+                        (.copyRow update-col-copier idx))
 
-                (if-let [live-row (.liveRow live-table old-row-id)]
-                  (doseq [^IIndirectVector live-col live-row
-                          :when (not (contains? update-col-copiers (.getName live-col)))]
-                    (doto ^IRowCopier (->live-row-copier live-col)
-                      (.copyRow 0)))
+                      (if-let [live-row (.liveRow live-table old-row-id)]
+                        (doseq [^IIndirectVector live-col live-row
+                                :when (not (contains? update-col-copiers (.getName live-col)))]
+                          (doto ^IRowCopier (->live-row-copier live-col)
+                            (.copyRow 0))
+                          (doto ^IRowCopier (->content-vec-copier live-col)
+                            (.copyRow 0)))
+                        (-> (when-let [{:keys [^long chunk-idx ^long block-idx, col-names]}
+                                       (meta/row-id->chunk metadata-mgr table old-row-id)]
+                              (let [idx @(-> (.getBuffer buffer-pool (meta/->chunk-obj-key chunk-idx table "_row_id"))
+                                             (util/then-apply #(row-id->idx % block-idx old-row-id)))]
 
-                  (-> (when-let [{:keys [^long chunk-idx ^long block-idx, col-names]}
-                                 (meta/row-id->chunk metadata-mgr table old-row-id)]
-                        (let [idx @(-> (.getBuffer buffer-pool (meta/->chunk-obj-key chunk-idx table "_row_id"))
-                                       (util/then-apply #(row-id->idx % block-idx old-row-id)))]
+                                (doseq [^String col-name col-names
+                                        :when (not (contains? update-col-copiers col-name))]
+                                  @(-> (.getBuffer buffer-pool (meta/->chunk-obj-key chunk-idx table col-name))
+                                       (util/then-apply
+                                         (fn [buf]
+                                           (with-open [chunks (util/->chunks buf {:block-idxs (doto (RoaringBitmap.)
+                                                                                                (.add block-idx))
+                                                                                  :close-buffer? true})]
+                                             (-> chunks
+                                                 (.forEachRemaining (reify Consumer
+                                                                      (accept [_ block-root]
+                                                                        (let [col (iv/->direct-vec (.getVector ^VectorSchemaRoot block-root col-name))]
+                                                                          (doto ^IRowCopier (->live-row-copier col)
+                                                                            (.copyRow idx))
+                                                                          (doto ^IRowCopier (->content-vec-copier col)
+                                                                            (.copyRow idx))))))))))))))
+                            (util/rethrowing-cause)))
 
-                          (doseq [^String col-name col-names
-                                  :when (not (contains? update-col-copiers col-name))]
-                            @(-> (.getBuffer buffer-pool (meta/->chunk-obj-key chunk-idx table col-name))
-                                 (util/then-apply
-                                   (fn [buf]
-                                     (with-open [chunks (util/->chunks buf {:block-idxs (doto (RoaringBitmap.)
-                                                                                          (.add block-idx))
-                                                                            :close-buffer? true})]
-                                       (-> chunks
-                                           (.forEachRemaining (reify Consumer
-                                                                (accept [_ block-root]
-                                                                  (let [col (iv/->direct-vec (.getVector ^VectorSchemaRoot block-root col-name))]
-                                                                    (doto ^IRowCopier (->live-row-copier col)
-                                                                      (.copyRow idx))))))))))))))
-                      (util/rethrowing-cause)))
+                      (.logPut log-op-idxer iid new-row-id valid-from valid-to)
+                      ;; TODO scan does not currently pass through eid, so not possible to do eid -> iid
+                      (.logPut temporal-log-op-idxer (long->byte-hash iid) new-row-id valid-from valid-to)
+                      (.logPut content-op-idxer table content-vec idx)
+                      (.indexPut temporal-idxer iid new-row-id valid-from valid-to false))))))))))))
 
-                (.logPut log-op-idxer iid new-row-id valid-from valid-to)
-                (.logPut temporal-log-op-idxer iid new-row-id valid-from valid-to)
-                (.indexPut temporal-idxer iid new-row-id valid-from valid-to false)))))))))
-
-(defn- ->sql-delete-indexer ^xtdb.indexer.SqlOpIndexer [^ILogOpIndexer log-op-idxer, ^ILogOpIndexer temporal-log-op-idxer,
+(defn- ->sql-delete-indexer ^xtdb.indexer.SqlOpIndexer [^ILogOpIndexer log-op-idxer, ^ILogOpIndexer2 temporal-log-op-idxer,
                                                         ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk]
   (reify SqlOpIndexer
     (indexOp [_ in-rel _query-opts]
@@ -492,10 +519,10 @@
                                        :valid-to (util/micros->instant valid-to)})))
 
             (.logDelete log-op-idxer iid valid-from valid-to)
-            (.logDelete temporal-log-op-idxer iid valid-from valid-to)
+            (.logDelete temporal-log-op-idxer (long->byte-hash iid) valid-from valid-to)
             (.indexDelete temporal-idxer iid row-id valid-from valid-to false)))))))
 
-(defn- ->sql-erase-indexer ^xtdb.indexer.SqlOpIndexer [^ILogOpIndexer log-op-idxer, ^ILogOpIndexer temporal-log-op-idxer,
+(defn- ->sql-erase-indexer ^xtdb.indexer.SqlOpIndexer [^ILogOpIndexer log-op-idxer, ^ILogOpIndexer2 temporal-log-op-idxer,
                                                        ^ITemporalTxIndexer temporal-idxer]
   (reify SqlOpIndexer
     (indexOp [_ in-rel _query-opts]
@@ -504,19 +531,22 @@
         (dotimes [idx row-count]
           (let [iid (.readLong iid-rdr idx)]
             (.logEvict log-op-idxer iid)
-            (.logEvict temporal-log-op-idxer iid)
+            (.logEvict temporal-log-op-idxer (long->byte-hash iid))
             (.indexEvict temporal-idxer iid)))))))
 
 (defn- ->sql-indexer ^xtdb.indexer.OpIndexer [^BufferAllocator allocator, ^IMetadataManager metadata-mgr, ^IBufferPool buffer-pool, ^IInternalIdManager iid-mgr
-                                              ^ILogOpIndexer log-op-idxer, ^ILogOpIndexer temporal-log-op-idxer,
+                                              ^ILogOpIndexer log-op-idxer, ^ILogOpIndexer2 temporal-log-op-idxer,
+                                              ^IContentOpIndexer content-log-op-idxer
                                               ^ITemporalTxIndexer temporal-idxer, ^ILiveChunk doc-idxer
                                               ^DenseUnionVector tx-ops-vec, ^IRaQuerySource ra-src, wm-src, ^IScanEmitter scan-emitter
                                               {:keys [default-all-valid-time? basis default-tz] :as tx-opts}]
   (let [sql-vec (.getStruct tx-ops-vec 0)
         ^VarCharVector query-vec (.getChild sql-vec "query" VarCharVector)
         ^VarBinaryVector params-vec (.getChild sql-vec "params" VarBinaryVector)
-        insert-idxer (->sql-insert-indexer iid-mgr log-op-idxer temporal-log-op-idxer temporal-idxer doc-idxer tx-opts)
-        update-idxer (->sql-update-indexer metadata-mgr buffer-pool log-op-idxer temporal-log-op-idxer temporal-idxer doc-idxer)
+        insert-idxer (->sql-insert-indexer allocator iid-mgr log-op-idxer temporal-log-op-idxer
+                                           content-log-op-idxer temporal-idxer doc-idxer tx-opts)
+        update-idxer (->sql-update-indexer allocator metadata-mgr buffer-pool log-op-idxer temporal-log-op-idxer
+                                           content-log-op-idxer temporal-idxer doc-idxer)
         delete-idxer (->sql-delete-indexer log-op-idxer temporal-log-op-idxer temporal-idxer doc-idxer)
         erase-idxer (->sql-erase-indexer log-op-idxer temporal-log-op-idxer temporal-idxer)]
     (reify OpIndexer
@@ -614,7 +644,8 @@
                   ^IInternalIdManager iid-mgr
                   ^IRaQuerySource ra-src
                   ^ILogIndexer log-indexer
-                  ^ILogIndexer temporal-log-indexer
+                  ^ILogIndexer2 temporal-log-indexer
+                  ^IContentIndexer content-log-indexer
                   ^ILiveChunk live-chunk
                   ^ILiveTries live-tries
 
@@ -633,7 +664,7 @@
             log-op-idxer (.startTx log-indexer tx-key)
             temporal-idxer (.startTx temporal-mgr tx-key)
             temporal-log-op-idxer (.startTx temporal-log-indexer tx-key)
-
+            content-log-op-idxer (.startTx content-log-indexer)
 
             wm-src (reify IWatermarkSource
                      (openWatermark [_ _tx]
@@ -647,12 +678,13 @@
                      :tx-key tx-key}]
 
         (letfn [(index-tx-ops [^DenseUnionVector tx-ops-vec]
-                  (let [!put-idxer (delay (->put-indexer iid-mgr log-op-idxer temporal-log-op-idxer temporal-idxer live-chunk-tx live-tries-tx tx-ops-vec system-time))
+                  (let [!put-idxer (delay (->put-indexer iid-mgr log-op-idxer temporal-log-op-idxer content-log-op-idxer
+                                                         temporal-idxer live-chunk-tx live-tries-tx tx-ops-vec system-time))
                         !delete-idxer (delay (->delete-indexer iid-mgr log-op-idxer temporal-log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec system-time))
                         !evict-idxer (delay (->evict-indexer iid-mgr log-op-idxer temporal-log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec))
                         !call-idxer (delay (->call-indexer allocator ra-src wm-src scan-emitter tx-ops-vec tx-opts))
                         !sql-idxer (delay (->sql-indexer allocator metadata-mgr buffer-pool iid-mgr
-                                                         log-op-idxer temporal-log-op-idxer
+                                                         log-op-idxer temporal-log-op-idxer content-log-op-idxer
                                                          temporal-idxer live-chunk-tx
                                                          tx-ops-vec ra-src wm-src scan-emitter tx-opts))]
                     (dotimes [tx-op-idx (.getValueCount tx-ops-vec)]
@@ -689,6 +721,7 @@
                     (log/debug e "aborted tx"))
                   (.abort temporal-idxer)
                   (.abort temporal-log-op-idxer)
+                  (.abort content-log-op-idxer)
                   (.abort log-op-idxer)
 
                   (with-open [live-chunk-tx (.startTx live-chunk)]
@@ -710,7 +743,8 @@
                       ))
 
                   (.commit log-op-idxer)
-                  (.commit temporal-log-op-idxer)))
+                  (.commit temporal-log-op-idxer)
+                  (.commit content-log-op-idxer)))
 
               (set! (.-latest-completed-tx this) tx-key)
 
@@ -762,6 +796,7 @@
       (.finishBlock live-chunk)
       (.finishBlock log-indexer)
       (.finishBlock temporal-log-indexer)
+      (.finishBlock content-log-indexer)
 
       (let [wm-lock-stamp (.writeLock wm-lock)]
         (try
@@ -783,6 +818,7 @@
       (.registerNewChunk temporal-mgr chunk-idx)
       @(.finishChunk log-indexer chunk-idx)
       @(.finishChunk temporal-log-indexer chunk-idx)
+      @(.finishChunk content-log-indexer chunk-idx)
       @(.finishChunk live-chunk latest-completed-tx)
 
       ;; TODO this should be row-id not tx-id, just throwing a number in for now
@@ -801,6 +837,7 @@
 
     (.nextChunk log-indexer)
     (.nextChunk temporal-log-indexer)
+    (.nextChunk content-log-indexer)
 
     (log/debug "finished chunk."))
 
@@ -808,6 +845,7 @@
   (close [_]
     (.close log-indexer)
     (.close temporal-log-indexer)
+    (.close content-log-indexer)
     (some-> shared-wm .close)))
 
 (defmethod ig/prep-key :xtdb/indexer [_ opts]
@@ -822,17 +860,18 @@
           :buffer-pool (ig/ref ::bp/buffer-pool)
           :log-indexer (ig/ref :xtdb.indexer/log-indexer)
           :temporal-log-indexer (ig/ref :xtdb.indexer/temporal-log-indexer)
+          :content-log-indexer (ig/ref :xtdb.indexer/content-log-indexer)
           :ra-src (ig/ref ::op/ra-query-source)}
          opts))
 
 (defmethod ig/init-key :xtdb/indexer
   [_ {:keys [allocator object-store metadata-mgr scan-emitter buffer-pool ^ITemporalManager temporal-mgr, ra-src
-             internal-id-mgr log-indexer temporal-log-indexer live-chunk live-tries]}]
+             internal-id-mgr log-indexer temporal-log-indexer content-log-indexer live-chunk live-tries]}]
 
   (let [{:keys [latest-completed-tx]} (meta/latest-chunk-metadata metadata-mgr)]
 
     (Indexer. allocator object-store metadata-mgr scan-emitter buffer-pool temporal-mgr internal-id-mgr
-              ra-src log-indexer temporal-log-indexer live-chunk live-tries
+              ra-src log-indexer temporal-log-indexer content-log-indexer live-chunk live-tries
 
               latest-completed-tx
 

@@ -15,9 +15,8 @@
            (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime ZoneOffset ZonedDateTime)
            (java.util ArrayList Date HashMap LinkedHashMap List Map Set UUID)
            (java.util.function Function)
-           java.util.function.Function
            (org.apache.arrow.memory BufferAllocator)
-           (org.apache.arrow.vector BigIntVector BitVector DecimalVector Decimal256Vector DateDayVector DateMilliVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot)
+           (org.apache.arrow.vector BigIntVector BitVector DecimalVector DateDayVector DateMilliVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot)
            (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
            (org.apache.arrow.vector.types.pojo ArrowType$List ArrowType$Struct ArrowType$Union Field FieldType)
            xtdb.api.protocols.ClojureForm
@@ -399,6 +398,21 @@
         (dotimes [_ absents]
           (.writeNull absent-writer nil))))))
 
+(defn irel->struct-vec [^BufferAllocator allocator, ^IIndirectRelation src-rel]
+  (let [sv (StructVector/empty "$data" allocator)
+        writer (->writer sv)
+        row-count (.rowCount src-rel)
+        copiers (for [^IIndirectVector src-col src-rel
+                      :let [v (.getVector src-col)
+                            name (.getName src-col)]]
+                  (.rowCopier (.structKeyWriter writer name) v))]
+    (dotimes [i row-count]
+      (.startStruct writer)
+      (doseq [^IRowCopier copier copiers]
+        (.copyRow copier i))
+      (.endStruct writer))
+    sv))
+
 (extend-protocol WriterFactory
   ListVector
   (->writer [arrow-vec]
@@ -696,33 +710,33 @@
             ;; so don't use both writerForField and writerForType on one writer.
             (.computeIfAbsent writers-by-name (.getName field)
                               (reify Function
-                                (apply [_ field-name]
+                                (apply [_ _]
                                   (.writerForTypeId this (.registerNewType this field))))))
 
           (writerForType [this col-type]
             (.computeIfAbsent writers-by-type (types/col-type->duv-leg-key col-type)
-                      (reify Function
-                        (apply [_ _]
-                          (let [field-name (types/col-type->field-name col-type)
+                              (reify Function
+                                (apply [_ _]
+                                  (let [field-name (types/col-type->field-name col-type)
 
-                                ^Field field (case (types/col-type-head col-type)
-                                               :list
-                                               (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                                        ^Field field (case (types/col-type-head col-type)
+                                                       :list
+                                                       (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
 
-                                               :set
-                                               (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                                                       :set
+                                                       (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
 
-                                               :struct
-                                               (types/->field field-name ArrowType$Struct/INSTANCE false)
+                                                       :struct
+                                                       (types/->field field-name ArrowType$Struct/INSTANCE false)
 
-                                               (types/col-type->field field-name col-type))
+                                                       (types/col-type->field field-name col-type))
 
-                                type-id (.registerNewType this field)
+                                        type-id (.registerNewType this field)
 
-                                wtr (.writerForTypeId this type-id)]
+                                        wtr (.writerForTypeId this type-id)]
 
-                            (.put writers-by-name field-name wtr)
-                            wtr)))))
+                                    (.put writers-by-name field-name wtr)
+                                    wtr)))))
 
           (writerForTypeId [_ type-id]
             (.get writers-by-type-id type-id)))))))
