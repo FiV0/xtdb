@@ -428,16 +428,17 @@
 
 
 (defmethod col-type->field* :union [col-name nullable? col-type]
-  (let [col-types (cond-> (second col-type)
-                    nullable? (assoc (col-type->field-name :null) :null))
-        without-null (dissoc col-types (col-type->field-name :null))]
+  (let [null-name (symbol (col-type->field-name :null))
+        col-types (cond-> (second col-type)
+                    nullable? (assoc null-name :null))
+        without-null (dissoc col-types null-name)]
     (case (count without-null)
       0 (col-type->field* col-name true :null)
       1 (col-type->field* col-name nullable? (-> without-null first second))
       (apply ->field col-name (.getType Types$MinorType/DENSEUNION) false
              (map (fn [[name col-type]]
                     (col-type->field name col-type))
-                  (cond-> without-null nullable? (assoc (col-type->field-name :null) :null)))))))
+                  (cond-> without-null nullable? (assoc null-name :null)))))))
 
 ;; NOTE this will lose field if they are named the same
 (defmethod arrow-type->col-type ArrowType$Union [_ & child-fields]
