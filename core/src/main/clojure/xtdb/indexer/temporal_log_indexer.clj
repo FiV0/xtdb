@@ -47,9 +47,9 @@
 (def temporal-log-schema
   (Schema. [(types/col-type->field "tx-id" :i64)
             (types/col-type->field "system-time" types/temporal-col-type)
-            (types/->field "tx-ops" types/list-type false
-                           ;; a null value indicates an abort
-                           (types/->field "$data" (ArrowType$Union. UnionMode/Dense (int-array (range 3))) true
+            ;; a null value indicates an abort
+            (types/->field "tx-ops" types/list-type true
+                           (types/->field "$data" (ArrowType$Union. UnionMode/Dense (int-array (range 3))) false
                                           (types/col-type->field "put" [:struct {'iid [:fixed-size-binary 16]
                                                                                  'row-id :i64
                                                                                  'valid-from nullable-inst-type
@@ -159,7 +159,5 @@
 
       Closeable
       (close [_]
-        (.close transient-log-writer)
-        (.close log-writer)
         (.close transcient-log-root)
         (.close log-root)))))

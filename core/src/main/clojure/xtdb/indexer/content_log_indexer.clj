@@ -17,15 +17,16 @@
    (xtdb.object_store ObjectStore)))
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
-(definterface IContentOpIndexer
-  (^void logPut [^String table-name, ^org.apache.arrow.vector.ValueVector doc-rel, ^long doc-offset])
-  ;; (^void logPut [^String table-name, ^xtdb.vector.IIndirectRelation doc-rel, ^long doc-offset])
+(definterface IContentLogTx
+  (^xtdb.vector.IRelationWriter writer [^String table-name])
+  (^void endRow [])
   (^void commit [])
   (^void abort []))
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
-(definterface IContentIndexer
-  (^xtdb.indexer.content_log_indexer.IContentOpIndexer startTx [])
+(definterface IContentLog
+  (^xtdb.indexer.content_log_indexer.IContentLogTx startTx [])
+
   (^void finishBlock [])
   (^java.util.concurrent.CompletableFuture finishChunk [^long chunkIdx])
   (^void nextChunk [])
@@ -52,30 +53,30 @@
 
         block-row-counts (ArrayList.)
         !block-row-count (AtomicInteger.)
-        !transient-block-row-count (AtomicInteger.)]
+        transient-writer-pos (.writerPosition transient-content-wrt)]
 
-    (reify IContentIndexer
+    (reify IContentLog
       (startTx [_]
-        (reify IContentOpIndexer
-          (logPut [_ table-name table-vec doc-offset]
-            (let [field (types/->field table-name types/dense-union-type false)
-                  copier (.rowCopier (.writerForField document-wtr field) table-vec)]
-              (.copyRow copier doc-offset)
-              (.endRow transient-content-wrt)
-              (.getAndIncrement !transient-block-row-count)))
+        (reify IContentLogTx
+          (writer [_ table-name]
+            (->> (types/->field table-name types/struct-type false)
+                 (.writerForField document-wtr)
+                 (vw/struct-writer->rel-writer)))
+
+          (endRow [_]
+            (.endRow transient-content-wrt))
 
           (commit [_]
-            (when (pos? !transient-block-row-count)
-              (.syncRowCount transient-content-wrt)
+            (.syncRowCount transient-content-wrt)
+            (when (pos? (.getPosition transient-writer-pos))
               (.syncSchema transient-content-root)
               (vw/append-rel content-wrt (vw/rel-wtr->rdr transient-content-wrt))
 
-              (.clear transient-content-wrt)
-              (.addAndGet !block-row-count (.getAndSet !transient-block-row-count 0))))
+              (.addAndGet !block-row-count (.getPosition transient-writer-pos))
+              (.clear transient-content-wrt)))
 
           (abort [_]
-            (.clear transient-content-wrt)
-            (.set !transient-block-row-count 0))))
+            (.clear transient-content-wrt))))
 
       (finishBlock [_]
         (let [current-row-count (.getAndSet !block-row-count 0)]
@@ -106,7 +107,5 @@
 
       Closeable
       (close [_]
-        (.close transient-content-wrt)
-        (.close content-wrt)
         (.close transient-content-root)
         (.close content-root)))))

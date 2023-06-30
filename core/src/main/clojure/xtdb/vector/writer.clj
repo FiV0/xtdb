@@ -1,6 +1,5 @@
 (ns xtdb.vector.writer
   (:require [clojure.set :as set]
-            [clojure.string :as str]
             [xtdb.error :as err]
             [xtdb.types :as types]
             [xtdb.util :as util]
@@ -398,21 +397,6 @@
         (dotimes [_ absents]
           (.writeNull absent-writer nil))))))
 
-(defn irel->struct-vec [^BufferAllocator allocator, ^IIndirectRelation src-rel]
-  (let [sv (StructVector/empty "$data" allocator)
-        writer (->writer sv)
-        row-count (.rowCount src-rel)
-        copiers (for [^IIndirectVector src-col src-rel
-                      :let [v (.getVector src-col)
-                            name (.getName src-col)]]
-                  (.rowCopier (.structKeyWriter writer name) v))]
-    (dotimes [i row-count]
-      (.startStruct writer)
-      (doseq [^IRowCopier copier copiers]
-        (.copyRow copier i))
-      (.endStruct writer))
-    sv))
-
 (extend-protocol WriterFactory
   ListVector
   (->writer [arrow-vec]
@@ -624,7 +608,7 @@
             col-type (types/field->col-type child-field)]
         (aset copier-mapping src-type-id
               ;; HACK to make things work for named duv legs
-              (if-not (str/starts-with? child-field-name (types/col-type->field-name col-type))
+              (if-not (= child-field-name (types/col-type->field-name col-type))
                 (.rowCopier (.writerForField dest-col child-field)
                             (.getVectorByType src-vec src-type-id))
                 (.rowCopier (.writerForType dest-col col-type)
@@ -921,6 +905,43 @@
       AutoCloseable
       (close [this]
         (run! util/try-close (vals this))))))
+
+(defn struct-writer->rel-writer ^xtdb.vector.IRelationWriter [^xtdb.vector.IVectorWriter vec-wtr]
+  (let [wp (IWriterPosition/build)]
+    (reify IRelationWriter
+      (writerPosition [_] wp)
+
+      (startRow [_]
+        (.startStruct vec-wtr))
+
+      (endRow [_]
+        (.endStruct vec-wtr))
+
+      (writerForName [_ col-name]
+        (.structKeyWriter vec-wtr col-name))
+
+      (writerForName [_ col-name col-type]
+        (.structKeyWriter vec-wtr col-name col-type))
+
+      (rowCopier [this in-rel]
+        (let [copiers (for [^IIndirectVector src-vec in-rel]
+                        (.rowCopier (.writerForName this (.getName src-vec)) (.getVector src-vec)))]
+          (reify IRowCopier
+            (copyRow [_ src-idx]
+              (let [pos (.getPositionAndIncrement wp)]
+                (.startStruct vec-wtr)
+                (doseq [^IRowCopier copier copiers]
+                  (.copyRow copier src-idx))
+                (.endStruct vec-wtr)
+                pos)))))
+
+      (iterator [_] (throw (UnsupportedOperationException.)))
+
+      (syncRowCount [_]
+        (.setPosition wp (.getPosition (.writerPosition vec-wtr))))
+
+      AutoCloseable
+      (close [_]))))
 
 (defn open-vec
   (^org.apache.arrow.vector.ValueVector [allocator col-name vs]
