@@ -175,7 +175,8 @@
   ILiveTable
   (startTx [this-table]
     (let [transient-tries (HashMap. tries)
-          t1-trie-keys (TrieKeys. (into-array BaseFixedWidthVector [iid-vec]))]
+          t1-trie-keys (TrieKeys. (into-array BaseFixedWidthVector [iid-vec]))
+          t2-trie-keys (TrieKeys. (into-array BaseFixedWidthVector [iid-vec valid-to-vec]))]
       (reify ILiveTableTx
         (leafWriter [_] leaf)
 
@@ -183,15 +184,13 @@
           (let [trie-idx (+ (if (.isNull system-to-vec idx) 0 2)
                             (if (.isNull valid-to-vec idx) 0 1)
                             1)]
-
             ;; TODO later tries could be partitioned by various times
             (.compute transient-tries (format "t%d-diff" trie-idx)
                       (reify BiFunction
                         (apply [_ _trie-name {:keys [trie trie-keys]}]
                           (let [^MemoryHashTrie trie (or trie (MemoryHashTrie/emptyTrie))
 
-                                ;; FIXME different trie PK per trie-idx
-                                trie-keys (or trie-keys t1-trie-keys)]
+                                trie-keys (or trie-keys (case trie-idx 1 t1-trie-keys, 2 t2-trie-keys))]
 
                             {:trie (.add trie trie-keys idx)
                              :trie-keys trie-keys}))))))

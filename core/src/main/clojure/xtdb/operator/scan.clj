@@ -429,7 +429,7 @@
    (at-now? scan-opts) (>= (util/instant->micros (:current-time basis))
                            (util/instant->micros (:system-time (:tx basis))))))
 
-(deftype T1Cursor [^IIndirectRelation content-leaf, ^Iterator leaves]
+(deftype TrieCursor [^IIndirectRelation content-leaf, ^Iterator leaves]
   ICursor
   (tryAdvance [_ c]
     (if (.hasNext leaves)
@@ -440,9 +440,8 @@
 
   (close [_]))
 
-(defn- ->t1-cursor [^ILiveTableWatermark wm, col-names]
-  (let [{{^MemoryHashTrie t1-trie :trie, :keys [trie-keys]} "t1-diff"} (.tries wm)
-        !leaves (Stream/builder)
+(defn- ->4r-cursor [^ILiveTableWatermark wm, col-names]
+  (let [!leaves (Stream/builder)
         content-leaf (.leaf wm)
         doc-col (.structReader (.vectorForName content-leaf "xt$doc"))
         rel (iv/->indirect-rel (for [col-name col-names
@@ -453,15 +452,16 @@
                                      (.withName col-name)))
                                (.rowCount content-leaf))]
 
-    (-> (.compactLogs t1-trie trie-keys)
-        (.accept (reify MemoryHashTrie$Visitor
-                   (visitBranch [this branch]
-                     (run! #(.accept ^MemoryHashTrie % this) (.children branch)))
+    (doseq [{:keys [^MemoryHashTrie trie trie-keys]} (vals (.tries wm))]
+      (-> (.compactLogs trie trie-keys)
+          (.accept (reify MemoryHashTrie$Visitor
+                     (visitBranch [this branch]
+                       (run! #(.accept ^MemoryHashTrie % this) (.children branch)))
 
-                   (visitLeaf [_ trie-leaf]
-                     (.add !leaves trie-leaf)))))
+                     (visitLeaf [_ trie-leaf]
+                       (.add !leaves trie-leaf))))))
 
-    (T1Cursor. rel (.iterator (.build !leaves)))))
+    (TrieCursor. rel (.iterator (.build !leaves)))))
 
 (defn tables-with-cols [basis ^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
   (let [{:keys [tx, after-tx]} basis
@@ -570,7 +570,7 @@
                                              (get-current-row-ids watermark basis))]
                        (-> #_
                            (if (use-4r? watermark scan-opts basis)
-                             (->t1-cursor (some-> (.liveIndex watermark)
+                             (->4r-cursor (some-> (.liveIndex watermark)
                                                   (.liveTable normalized-table-name))
                                           (-> (set/union content-col-names temporal-col-names)
                                               (disj "_row_id"))))

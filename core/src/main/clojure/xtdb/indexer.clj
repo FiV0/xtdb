@@ -120,6 +120,7 @@
                                                   :leaf-writer leaf-writer
                                                   :iid-wtr (.writerForName leaf-writer "xt$iid")
                                                   :valid-from-wtr (.writerForName leaf-writer "xt$valid_from")
+                                                  :valid-to-wtr (.writerForName leaf-writer "xt$valid_to")
                                                   :sys-from-wtr (.writerForName leaf-writer "xt$system_from")
                                                   :doc-copier (.rowCopier (.writerForName leaf-writer "xt$doc") table-vec)})
 
@@ -157,10 +158,11 @@
                                        :valid-to (util/micros->instant valid-to)})))
 
             (let [{:keys [^xtdb.indexer.live_index.ILiveTableTx live-table, ^IRelationWriter leaf-writer, ^IRowCopier doc-copier,
-                          ^IVectorWriter iid-wtr, ^IVectorWriter valid-from-wtr, ^IVectorWriter sys-from-wtr]} live-idx-table
+                          ^IVectorWriter iid-wtr, ^IVectorWriter valid-from-wtr, ^IVectorWriter valid-to-wtr, ^IVectorWriter sys-from-wtr]} live-idx-table
                   pos (.getPosition (.writerPosition leaf-writer))]
               (.writeBytes iid-wtr (ByteBuffer/wrap (->iid eid)))
               (.writeLong valid-from-wtr valid-from)
+              (.writeLong valid-to-wtr valid-to)
               (.writeLong sys-from-wtr system-time-µs)
               (.copyRow doc-copier doc-offset)
               (.endRow leaf-writer)
