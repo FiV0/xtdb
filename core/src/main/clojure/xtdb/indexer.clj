@@ -162,7 +162,9 @@
                   pos (.getPosition (.writerPosition leaf-writer))]
               (.writeBytes iid-wtr (ByteBuffer/wrap (->iid eid)))
               (.writeLong valid-from-wtr valid-from)
-              (.writeLong valid-to-wtr valid-to)
+              (if (= util/end-of-time-μs valid-to)
+                (.writeNull valid-to-wtr nil)
+                (.writeLong valid-to-wtr valid-to))
               (.writeLong sys-from-wtr system-time-µs)
               (.copyRow doc-copier doc-offset)
               (.endRow leaf-writer)
