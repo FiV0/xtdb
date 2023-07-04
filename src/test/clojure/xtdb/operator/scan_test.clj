@@ -42,8 +42,18 @@
 
 (t/deftest test-scanning-temporal-cols
   (with-open [node (node/start-node {})]
-    (xt/submit-tx node [[:put :xt_docs {:xt/id :doc}
-                         {:for-valid-time [:in #inst "2021" #inst "3000"]}]])
+    (xt/submit-tx node [;; t1 valid
+                        [:put :xt_docs {:xt/id :doc1}
+                         {:for-valid-time [:from #inst "2021"]}]
+                        ;; t1 invalid
+                        [:put :xt_docs {:xt/id :doc2}
+                         {:for-valid-time [:from #inst "2021"]}]
+                        ;; t2 valid
+                        [:put :xt_docs {:xt/id :doc3}
+                         {:for-valid-time [:in #inst "2021" #inst "3000"]}]
+                        ;; t2 invalid
+                        [:put :xt_docs {:xt/id :doc4}
+                         {:for-valid-time [:in #inst "2021" #inst "2022"]}]])
 
     (let [res (first (tu/query-ra '[:scan {:table xt_docs}
                                     [xt/id
@@ -57,13 +67,13 @@
                (dissoc res :xt/system-from :xt/system-to))))
 
     (t/is (= {:xt/id :doc, :app-time-start (util/->zdt #inst "2021"), :app-time-end (util/->zdt #inst "3000")}
-             (-> (first (tu/query-ra '[:project [xt/id
-                                                 {app-time-start xt/valid-from}
-                                                 {app-time-end xt/valid-to}]
-                                       [:scan {:table xt_docs}
-                                        [xt/id xt/valid-from xt/valid-to]]]
-                                     {:node node}))
-                 (dissoc :xt/system-from :xt/system-to))))))
+             (-> (tu/query-ra '[:project [xt/id
+                                          {app-time-start xt/valid-from}
+                                          {app-time-end xt/valid-to}]
+                                [:scan {:table xt_docs}
+                                 [xt/id xt/valid-from xt/valid-to]]]
+                              {:node node})
+                 #_(dissoc :xt/system-from :xt/system-to))))))
 
 (t/deftest test-only-scanning-temporal-cols-45
   (with-open [node (node/start-node {})]

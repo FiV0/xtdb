@@ -429,20 +429,59 @@
    (at-now? scan-opts) (>= (util/instant->micros (:current-time basis))
                            (util/instant->micros (:system-time (:tx basis))))))
 
-#_ ; FIXME
-(deftype TrieCursor [^IIndirectRelation content-leaf, ^Iterator leaves]
+(comment
+  (require 'sc.api)
+  (sc.api/letsc [134 -18]
+                [trie-name (seq content-leaf)]
+                (first (seq content-leaf))
+                #_(.getObject (.getVector (first (seq content-leaf))) 0)
+
+                )
+
+  (sc.api/letsc [136 -19]
+                (seq irel))
+
+  )
+
+(defn temporal-content-leaf-filter ^IIndirectRelation [^IIndirectRelation irel, trie-name, ^longs temporal-min-range, ^longs temporal-max-range]
+  (sc.api/spy)
+  (case trie-name
+    "t1-diff" (let [max-valid-from (aget temporal-max-range temporal/app-time-end-idx)
+                    valid-from-vec (.vectorForName irel "xt/valid-from")
+                    sel (IntStream/builder)]
+                (dotimes [i (.getValueCount valid-from-vec)]
+                  (when (<= (.getIndex valid-from-vec i) max-valid-from)
+                    (.add sel i)))
+                (iv/select irel (.toArray (.build sel))))
+
+    "t2-diff" (let [min-valid-from (aget temporal-min-range temporal/app-time-start-idx)
+                    max-valid-to (aget temporal-max-range temporal/app-time-end-idx)
+                    valid-from-vec (.vectorForName irel "xt/valid-from")
+                    valid-to-vec (.vectorForName irel "xt/valid-to")
+                    sel (IntStream/builder)]
+                (dotimes [i (.getValueCount valid-from-vec)]
+                  (when (and (<= min-valid-from (.getIndex valid-to-vec i))
+                             (<= (.getIndex valid-from-vec i) max-valid-to))
+                    (.add sel i)))
+                (iv/select irel (.toArray (.build sel))))
+    (throw (UnsupportedOperationException.))))
+
+(deftype TrieCursor [^IIndirectRelation content-leaf,
+                     ^Iterator leaves,
+                     ^longs temporal-min-range,
+                     ^longs temporal-max-range]
   ICursor
   (tryAdvance [_ c]
     (if (.hasNext leaves)
-      (let [^MemoryHashTrie$Leaf trie-leaf (.next leaves)]
-        (.accept c (iv/select content-leaf (.data trie-leaf)))
+      (let [[trie-name ^MemoryHashTrie$Leaf trie-leaf] (.next leaves)]
+        (.accept c (-> (iv/select content-leaf (.data trie-leaf))
+                       (temporal-content-leaf-filter trie-name temporal-min-range temporal-max-range)))
         true)
       false))
 
   (close [_]))
 
-#_ ; FIXME
-(defn- ->4r-cursor [^ILiveTableWatermark wm, col-names]
+(defn- ->4r-cursor [^ILiveTableWatermark wm, col-names, ^longs temporal-min-range, ^longs temporal-max-range]
   (let [!leaves (Stream/builder)
         content-leaf (.leaf wm)
         doc-col (.structReader (.vectorForName content-leaf "xt$doc"))
@@ -461,9 +500,9 @@
                        (run! #(.accept ^WalTrie$Node % this) (.children branch)))
 
                      (visitLeaf [_ trie-leaf]
-                       (.add !leaves trie-leaf))))))
+                       (.add !leaves [trie-name trie-leaf]))))))
 
-    (TrieCursor. rel (.iterator (.build !leaves)))))
+    (TrieCursor. rel (.iterator (.build !leaves)) temporal-min-range temporal-max-range)))
 
 (defn tables-with-cols [basis ^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
   (let [{:keys [tx, after-tx]} basis
@@ -488,14 +527,14 @@
 
     (allTableColNames [_ wm]
       (merge-with
-        set/union
-        (update-vals
-          (.allColumnTypes metadata-mgr)
-          (comp set keys))
-        (update-vals
-          (some-> (.liveChunk wm)
-                  (.allColumnTypes))
-          (comp set keys))))
+       set/union
+       (update-vals
+        (.allColumnTypes metadata-mgr)
+        (comp set keys))
+       (update-vals
+        (some-> (.liveChunk wm)
+                (.allColumnTypes))
+        (comp set keys))))
 
     (scanColTypes [_ wm scan-cols]
 
@@ -551,13 +590,13 @@
 
             row-count (->> (meta/with-all-metadata metadata-mgr normalized-table-name
                              (util/->jbifn
-                              (fn [_chunk-idx ^ITableMetadata table-metadata]
-                                (let [id-col-idx (.rowIndex table-metadata "xt$id" -1)
-                                      ^BigIntVector count-vec (-> (.metadataRoot table-metadata)
-                                                                  ^ListVector (.getVector "columns")
-                                                                  ^StructVector (.getDataVector)
-                                                                  (.getChild "count"))]
-                                  (.get count-vec id-col-idx)))))
+                               (fn [_chunk-idx ^ITableMetadata table-metadata]
+                                 (let [id-col-idx (.rowIndex table-metadata "xt$id" -1)
+                                       ^BigIntVector count-vec (-> (.metadataRoot table-metadata)
+                                                                   ^ListVector (.getVector "columns")
+                                                                   ^StructVector (.getDataVector)
+                                                                   (.getChild "count"))]
+                                   (.get count-vec id-col-idx)))))
                            (reduce +))]
 
         {:col-types col-types
@@ -570,24 +609,27 @@
                            [temporal-min-range temporal-max-range] (->temporal-min-max-range params basis scan-opts selects)
                            current-row-ids (when (use-current-row-id-cache? watermark scan-opts basis temporal-col-names)
                                              (get-current-row-ids watermark basis))]
-                       (-> #_
-                           (if (use-4r? watermark scan-opts basis)
-                             (->4r-cursor (some-> (.liveIndex watermark)
-                                                  (.liveTable normalized-table-name))
-                                          (-> (set/union content-col-names temporal-col-names)
-                                              (disj "_row_id"))))
+                       (->
+                        (if (use-4r? watermark scan-opts basis)
 
-                           (ScanCursor. allocator metadata-mgr watermark
-                                        content-col-names temporal-col-names col-preds
-                                        temporal-min-range temporal-max-range current-row-ids
-                                        (util/->concat-cursor (->content-chunks allocator metadata-mgr buffer-pool
-                                                                                normalized-table-name normalized-content-col-names
-                                                                                metadata-pred)
-                                                              (some-> (.liveChunk watermark)
-                                                                      (.liveTable normalized-table-name)
-                                                                      (.liveBlocks normalized-content-col-names metadata-pred)))
-                                        params)
-                           (coalesce/->coalescing-cursor allocator))))}))))
+                          (->4r-cursor (some-> (.liveIndex watermark)
+                                               (.liveTable normalized-table-name))
+                                       (-> (set/union content-col-names temporal-col-names)
+                                           (disj "_row_id"))
+                                       temporal-min-range
+                                       temporal-max-range)
+
+                          (ScanCursor. allocator metadata-mgr watermark
+                                       content-col-names temporal-col-names col-preds
+                                       temporal-min-range temporal-max-range current-row-ids
+                                       (util/->concat-cursor (->content-chunks allocator metadata-mgr buffer-pool
+                                                                               normalized-table-name normalized-content-col-names
+                                                                               metadata-pred)
+                                                             (some-> (.liveChunk watermark)
+                                                                     (.liveTable normalized-table-name)
+                                                                     (.liveBlocks normalized-content-col-names metadata-pred)))
+                                       params))
+                        (coalesce/->coalescing-cursor allocator))))}))))
 
 (defmethod lp/emit-expr :scan [scan-expr {:keys [^IScanEmitter scan-emitter scan-col-types, param-types]}]
   (.emitScan scan-emitter scan-expr scan-col-types param-types))
