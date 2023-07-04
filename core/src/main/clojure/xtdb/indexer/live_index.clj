@@ -4,15 +4,16 @@
             xtdb.object-store
             [xtdb.types :as types]
             [xtdb.util :as util]
+            [xtdb.vector.indirect :as iv]
             [xtdb.vector.writer :as vw])
   (:import (java.lang AutoCloseable)
-           (java.util Arrays HashMap Map)
+           (java.util ArrayList Arrays HashMap Map)
            (java.util.concurrent CompletableFuture)
            (java.util.concurrent.atomic AtomicInteger)
            (java.util.function BiConsumer BiFunction Function IntConsumer)
            (java.util.stream IntStream)
            (org.apache.arrow.memory BufferAllocator)
-           (org.apache.arrow.vector BaseFixedWidthVector VectorSchemaRoot)
+           (org.apache.arrow.vector BaseFixedWidthVector FixedSizeBinaryVector TimeStampMicroTZVector VectorSchemaRoot)
            (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            org.apache.arrow.vector.types.UnionMode
            (xtdb.object_store ObjectStore)
@@ -20,7 +21,13 @@
            (xtdb.vector IIndirectRelation IIndirectVector IRelationWriter)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
+(definterface ILiveTableWatermark
+  (^xtdb.vector.IIndirectRelation leaf [])
+  (tries []))
+
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveTableTx
+  (^xtdb.indexer.live_index.ILiveTableWatermark openWatermark [^boolean retain])
   (^xtdb.vector.IRelationWriter leafWriter [])
   (^void addRow [idx])
   (^void commit [])
@@ -29,12 +36,18 @@
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveTable
   (^xtdb.indexer.live_index.ILiveTableTx startTx [])
+  (^xtdb.indexer.live_index.ILiveTableWatermark openWatermark [^boolean retain])
   (^java.util.concurrent.CompletableFuture #_<?> finishChunk [^long chunkIdx])
   (^void close []))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
+(definterface ILiveIndexWatermark
+  (^xtdb.indexer.live_index.ILiveTableWatermark liveTable [^String tableName]))
+
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveIndexTx
   (^xtdb.indexer.live_index.ILiveTableTx liveTable [^String tableName])
+  (^xtdb.indexer.live_index.ILiveIndexWatermark openWatermark [])
   (^void commit [])
   (^void close []))
 
@@ -42,6 +55,7 @@
 (definterface ILiveIndex
   (^xtdb.indexer.live_index.ILiveTable liveTable [^String tableName])
   (^xtdb.indexer.live_index.ILiveIndexTx startTx [])
+  (^xtdb.indexer.live_index.ILiveIndexWatermark openWatermark [])
   (^void finishChunk [^long chunkIdx])
   (^void close []))
 
@@ -141,29 +155,62 @@
 (defn- open-leaf-root ^xtdb.vector.IRelationWriter [^BufferAllocator allocator]
   (vw/root->writer (VectorSchemaRoot/create leaf-schema allocator)))
 
+(defn- open-wm-leaf ^xtdb.vector.IIndirectRelation [^IRelationWriter rel, retain?]
+  (let [out-cols (ArrayList.)]
+    (try
+      (doseq [^IIndirectVector v (vw/rel-wtr->rdr rel)]
+        (.add out-cols (iv/->direct-vec (cond-> (.getVector v)
+                                          retain? (util/slice-vec)))))
+
+      (iv/->indirect-rel out-cols)
+
+      (catch Throwable t
+        (when retain? (util/close out-cols))
+        (throw t)))))
+
 (deftype LiveTable [^BufferAllocator allocator, ^ObjectStore obj-store, ^String table-name
-                    ^IRelationWriter leaf,
-                    ^:unsynchronized-mutable ^Map tries]
+                    ^IRelationWriter leaf, ^:unsynchronized-mutable ^Map tries
+                    ^FixedSizeBinaryVector iid-vec
+                    ^TimeStampMicroTZVector valid-to-vec, ^TimeStampMicroTZVector system-to-vec]
   ILiveTable
   (startTx [this-table]
     (let [transient-tries (HashMap. tries)
-          t1-trie-keys (TrieKeys. (into-array BaseFixedWidthVector [(.getVector (.writerForName leaf "xt$iid"))]))]
+          t1-trie-keys (TrieKeys. (into-array BaseFixedWidthVector [iid-vec]))]
       (reify ILiveTableTx
         (leafWriter [_] leaf)
 
         (addRow [_ idx]
-          (.compute transient-tries "t1-diff"
-                    (reify BiFunction
-                      (apply [_ _trie-name {:keys [^MemoryHashTrie trie trie-keys]}]
-                        (let [^MemoryHashTrie
-                              transient-trie (or trie (MemoryHashTrie/emptyTrie))
-                              trie-keys (or trie-keys t1-trie-keys)]
+          (let [trie-idx (+ (if (.isNull system-to-vec idx) 0 2)
+                            (if (.isNull valid-to-vec idx) 0 1)
+                            1)]
 
-                          {:trie (.add transient-trie trie-keys idx)
-                           :trie-keys trie-keys})))))
+            ;; TODO later tries could be partitioned by various times
+            (.compute transient-tries (format "t%d-diff" trie-idx)
+                      (reify BiFunction
+                        (apply [_ _trie-name {:keys [trie trie-keys]}]
+                          (let [^MemoryHashTrie trie (or trie (MemoryHashTrie/emptyTrie))
+
+                                ;; FIXME different trie PK per trie-idx
+                                trie-keys (or trie-keys t1-trie-keys)]
+
+                            {:trie (.add trie trie-keys idx)
+                             :trie-keys trie-keys}))))))
+
+        (openWatermark [_ retain?]
+          (locking this-table
+            (let [wm-leaf (open-wm-leaf leaf retain?)
+                  wm-tries (into {} transient-tries)]
+              (reify ILiveTableWatermark
+                (leaf [_] wm-leaf)
+                (tries [_] wm-tries)
+
+                AutoCloseable
+                (close [_]
+                  (when retain? (util/close wm-leaf)))))))
 
         (commit [_]
-          (set! (.-tries this-table) transient-tries))
+          (locking this-table
+            (set! (.-tries this-table) transient-tries)))
 
         AutoCloseable
         (close [_]))))
@@ -175,13 +222,26 @@
               (write-trie! allocator obj-store table-name trie-name chunk-idx-str (-> trie (.compactLogs trie-keys)) (vw/rel-wtr->rdr leaf)))
             (into-array CompletableFuture)))))
 
+  (openWatermark [this retain?]
+    (locking this
+      (let [wm-leaf (open-wm-leaf leaf retain?)
+            wm-tries (into {} tries)]
+        (reify ILiveTableWatermark
+          (leaf [_] wm-leaf)
+          (tries [_] wm-tries)
+
+          AutoCloseable
+          (close [_]
+            (when retain? (util/close wm-leaf)))))))
+
   TestLiveTable
   (leaf-writer [_] leaf)
   (tries [_] tries)
 
   AutoCloseable
-  (close [_]
-    (util/close leaf)))
+  (close [this]
+    (locking this
+      (util/close leaf))))
 
 (defrecord LiveIndex [^BufferAllocator allocator, ^ObjectStore object-store, ^Map tables]
   ILiveIndex
@@ -190,7 +250,10 @@
                       (reify Function
                         (apply [_ table-name]
                           (util/with-close-on-catch [rel (open-leaf-root allocator)]
-                            (LiveTable. allocator object-store table-name rel (HashMap.)))))))
+                            (LiveTable. allocator object-store table-name rel (HashMap.)
+                                        (.getVector (.writerForName rel "xt$iid"))
+                                        (.getVector (.writerForName rel "xt$valid_to"))
+                                        (.getVector (.writerForName rel "xt$system_to"))))))))
 
   (startTx [live-idx]
     (let [table-txs (HashMap.)]
@@ -206,9 +269,35 @@
           (doseq [^ILiveTableTx table-tx (.values table-txs)]
             (.commit table-tx)))
 
+        (openWatermark [_]
+          (util/with-close-on-catch [wms (HashMap.)]
+            (doseq [[table-name ^ILiveTableTx live-table] table-txs]
+              (.put wms table-name (.openWatermark live-table false)))
+
+            (doseq [[table-name ^ILiveTable live-table] tables]
+              (.computeIfAbsent wms table-name
+                                (util/->jfn (fn [_] (.openWatermark live-table false)))))
+
+            (reify ILiveIndexWatermark
+              (liveTable [_ table-name] (.get wms table-name))
+
+              AutoCloseable
+              (close [_] (util/close wms)))))
+
         AutoCloseable
         (close [_]
           (util/close table-txs)))))
+
+  (openWatermark [_]
+    (util/with-close-on-catch [wms (HashMap.)]
+      (doseq [[table-name ^ILiveTable live-table] tables]
+        (.put wms table-name (.openWatermark live-table true)))
+
+      (reify ILiveIndexWatermark
+        (liveTable [_ table-name] (.get wms table-name))
+
+        AutoCloseable
+        (close [_] (util/close wms)))))
 
   (finishChunk [_ chunk-idx]
     @(CompletableFuture/allOf (->> (for [^ILiveTable table (.values tables)]

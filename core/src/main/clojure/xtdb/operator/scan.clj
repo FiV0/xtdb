@@ -8,6 +8,7 @@
             [xtdb.expression :as expr]
             [xtdb.expression.metadata :as expr.meta]
             [xtdb.expression.walk :as expr.walk]
+            xtdb.indexer.live-index
             [xtdb.logical-plan :as lp]
             [xtdb.metadata :as meta]
             [xtdb.temporal :as temporal]
@@ -17,9 +18,9 @@
             [xtdb.vector.indirect :as iv]
             xtdb.watermark)
   (:import (clojure.lang IPersistentSet MapEntry)
-           (java.util HashMap LinkedList List Map Queue Set)
+           (java.util HashMap Iterator LinkedList List Map Queue Set)
            (java.util.function BiFunction Consumer)
-           java.util.stream.IntStream
+           [java.util.stream IntStream Stream]
            org.apache.arrow.memory.BufferAllocator
            (org.apache.arrow.vector BigIntVector VarBinaryVector)
            (org.apache.arrow.vector.complex ListVector StructVector)
@@ -29,8 +30,10 @@
            xtdb.api.protocols.TransactionInstant
            xtdb.buffer_pool.IBufferPool
            xtdb.ICursor
+           (xtdb.indexer.live_index ILiveTableWatermark)
            (xtdb.metadata IMetadataManager ITableMetadata)
            xtdb.operator.IRelationSelector
+           [xtdb.trie MemoryHashTrie MemoryHashTrie$Leaf MemoryHashTrie$Visitor]
            (xtdb.vector IIndirectRelation IIndirectVector)
            (xtdb.watermark IWatermark IWatermarkSource Watermark)))
 
@@ -139,10 +142,10 @@
     (some-> current-cursor util/try-close)))
 
 (defn- ->content-chunks ^xtdb.ICursor [^BufferAllocator allocator
-                                        ^IMetadataManager metadata-mgr
-                                        ^IBufferPool buffer-pool
-                                        table-name content-col-names
-                                        metadata-pred]
+                                       ^IMetadataManager metadata-mgr
+                                       ^IBufferPool buffer-pool
+                                       table-name content-col-names
+                                       metadata-pred]
   (ContentChunkCursor. allocator metadata-mgr buffer-pool table-name content-col-names
                        (LinkedList. (or (meta/matching-chunks metadata-mgr table-name metadata-pred) []))
                        nil))
@@ -419,6 +422,47 @@
     (.temporalRootsSource watermark)
     (util/instant->micros (:current-time basis))))
 
+(defn use-4r? [^IWatermark watermark scan-opts basis]
+  (and
+   (.txBasis watermark) (= (:tx basis)
+                           (.txBasis watermark))
+   (at-now? scan-opts) (>= (util/instant->micros (:current-time basis))
+                           (util/instant->micros (:system-time (:tx basis))))))
+
+(deftype T1Cursor [^IIndirectRelation content-leaf, ^Iterator leaves]
+  ICursor
+  (tryAdvance [_ c]
+    (if (.hasNext leaves)
+      (let [^MemoryHashTrie$Leaf trie-leaf (.next leaves)]
+        (.accept c (iv/select content-leaf (.data trie-leaf)))
+        true)
+      false))
+
+  (close [_]))
+
+(defn- ->t1-cursor [^ILiveTableWatermark wm, col-names]
+  (let [{{^MemoryHashTrie t1-trie :trie, :keys [trie-keys]} "t1-diff"} (.tries wm)
+        !leaves (Stream/builder)
+        content-leaf (.leaf wm)
+        doc-col (.structReader (.vectorForName content-leaf "xt$doc"))
+        rel (iv/->indirect-rel (for [col-name col-names
+                                     :let [normalized-col-name (util/str->normal-form-str col-name)]]
+                                 (-> (if (and (temporal/temporal-column? normalized-col-name) (not= normalized-col-name "xt$id"))
+                                       (.vectorForName content-leaf normalized-col-name)
+                                       (.readerForKey doc-col normalized-col-name))
+                                     (.withName col-name)))
+                               (.rowCount content-leaf))]
+
+    (-> (.compactLogs t1-trie trie-keys)
+        (.accept (reify MemoryHashTrie$Visitor
+                   (visitBranch [this branch]
+                     (run! #(.accept ^MemoryHashTrie % this) (.children branch)))
+
+                   (visitLeaf [_ trie-leaf]
+                     (.add !leaves trie-leaf)))))
+
+    (T1Cursor. rel (.iterator (.build !leaves)))))
+
 (defn tables-with-cols [basis ^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
   (let [{:keys [tx, after-tx]} basis
         wm-tx (or tx after-tx)]
@@ -524,7 +568,14 @@
                            [temporal-min-range temporal-max-range] (->temporal-min-max-range params basis scan-opts selects)
                            current-row-ids (when (use-current-row-id-cache? watermark scan-opts basis temporal-col-names)
                                              (get-current-row-ids watermark basis))]
-                       (-> (ScanCursor. allocator metadata-mgr watermark
+                       (-> #_
+                           (if (use-4r? watermark scan-opts basis)
+                             (->t1-cursor (some-> (.liveIndex watermark)
+                                                  (.liveTable normalized-table-name))
+                                          (-> (set/union content-col-names temporal-col-names)
+                                              (disj "_row_id"))))
+
+                           (ScanCursor. allocator metadata-mgr watermark
                                         content-col-names temporal-col-names col-preds
                                         temporal-min-range temporal-max-range current-row-ids
                                         (util/->concat-cursor (->content-chunks allocator metadata-mgr buffer-pool

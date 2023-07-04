@@ -164,6 +164,7 @@
               (.writeLong sys-from-wtr system-time-µs)
               (.copyRow doc-copier doc-offset)
               (.endRow leaf-writer)
+              ;; just adds the row atm, doesn't replace rows.
               (.addRow live-table pos))
 
             (.logPut temporal-log-op-idxer byte-eid row-id valid-from valid-to)
@@ -669,7 +670,7 @@
 
             wm-src (reify IWatermarkSource
                      (openWatermark [_ _tx]
-                       (wm/->wm nil (.openWatermark live-chunk-tx) temporal-idxer false)))
+                       (wm/->wm nil (.openWatermark live-chunk-tx) (.openWatermark live-idx-tx) temporal-idxer false)))
 
             tx-opts {:basis {:tx tx-key, :current-time system-time}
                      :default-tz (ZoneId/of (str (-> (.getVector tx-root "default-tz")
@@ -778,7 +779,8 @@
               (or (maybe-existing-wm)
                   (let [^IWatermark old-wm (.shared-wm this)]
                     (try
-                      (let [^IWatermark shared-wm (wm/->wm latest-completed-tx (.openWatermark live-chunk) (.getTemporalWatermark temporal-mgr) true)]
+                      (let [^IWatermark shared-wm (wm/->wm latest-completed-tx (.openWatermark live-chunk) (.openWatermark live-idx)
+                                                           (.getTemporalWatermark temporal-mgr) true)]
                         (set! (.shared-wm this) shared-wm)
                         (doto shared-wm .retain))
                       (finally

@@ -6,7 +6,7 @@ import java.util.stream.Stream;
 
 import static xtdb.trie.TrieKeys.LEVEL_WIDTH;
 
-public interface MemoryHashTrie {
+public sealed interface MemoryHashTrie {
 
     int LOG_LIMIT = 64;
     int PAGE_LIMIT = 1024;
