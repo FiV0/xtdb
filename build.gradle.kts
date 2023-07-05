@@ -12,6 +12,7 @@ val defaultJvmArgs = listOf(
     "-Dio.netty.tryReflectionSetAccessible=true",
     "-Djdk.attach.allowAttachSelf",
     "-XX:-OmitStackTraceInFastThrow",
+    "--enable-preview"
 )
 
 allprojects {
@@ -31,6 +32,10 @@ allprojects {
 
             withSourcesJar()
             withJavadocJar()
+        }
+        
+        tasks.withType(JavaCompile::class.java) {
+            options.compilerArgs.add("--enable-preview")
         }
 
         tasks.javadoc {
