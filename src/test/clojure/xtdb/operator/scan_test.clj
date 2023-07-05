@@ -27,8 +27,8 @@
                         [:put :xt_docs {:xt/id :bar, :the-ns/col1 "bar1", :col2 "bar2"}]
                         [:put :xt_docs {:xt/id :foo, :the-ns/col2 "baz2"}]])
 
-    (t/is (= [{:xt/id :bar, :the-ns/col1 "bar1", :col2 "bar2"}
-              {:xt/id :foo}]
+    (t/is (= [{:xt/id :foo}
+              {:xt/id :bar, :the-ns/col1 "bar1", :col2 "bar2"}]
              (tu/query-ra '[:scan {:table xt_docs} [xt/id the-ns/col1 col2]]
                           {:node node})))))
 
@@ -40,9 +40,19 @@
              (tu/query-ra '[:scan {:table xt_docs} [xt/id xt/id]]
                           {:node node})))))
 
+(t/deftest test-content-pred
+  (with-open [node (node/start-node {})]
+    (xt/submit-tx node [[:put :xt_docs {:xt/id :ivan, :first-name "Ivan", :last-name "Ivanov"}]
+                        [:put :xt_docs {:xt/id :petr, :first-name "Petr", :last-name "Petrov"}]])
+    (t/is (= [{:first-name "Ivan", :xt/id :ivan}]
+             (tu/query-ra '[:scan
+                            {:table xt_docs, :for-valid-time nil, :for-system-time nil}
+                            [{first-name (= first-name "Ivan")} xt/id]]
+                          {:node node})))))
+
 (t/deftest test-scanning-temporal-cols
   (with-open [node (node/start-node {})]
-    (xt/submit-tx node [;; t1 valid
+    (xt/submit-tx node [ ;; t1 valid
                         [:put :xt_docs {:xt/id :doc1}
                          {:for-valid-time [:from #inst "2021"]}]
                         ;; t1 invalid

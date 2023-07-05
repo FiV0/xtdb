@@ -477,28 +477,39 @@
     "t3-diff" (throw (UnsupportedOperationException.))
     (throw (UnsupportedOperationException.))))
 
-(deftype TrieCursor [^IIndirectRelation content-leaf,
+(deftype TrieCursor [^BufferAllocator allocator,
+                     ^IIndirectRelation content-leaf,
                      ^Iterator leaves,
                      ^longs temporal-min-range,
                      ^longs temporal-max-range
-                     ^PersistentHashSet col-names]
+                     ^PersistentHashSet col-names
+                     ^Map col-preds
+                     params]
   ICursor
   (tryAdvance [_ c]
     (if (.hasNext leaves)
       (let [[trie-name ^MemoryHashTrie$Leaf trie-leaf] (.next leaves)
-            with-temporal-filters (-> (iv/select content-leaf (.data trie-leaf))
-                                      (temporal-content-leaf-filter trie-name temporal-min-range temporal-max-range))]
-        ;; filtering out unnessary temporal columns again
-        (.accept c (iv/->indirect-rel (for [col-name col-names
-                                            :let [normalized-col-name (util/str->normal-form-str col-name)]]
-                                        (-> (.vectorForName with-temporal-filters normalized-col-name)
-                                            (.withName col-name)))))
+
+            ^IIndirectRelation with-temporal-columns
+            (-> (iv/select content-leaf (.data trie-leaf))
+                (temporal-content-leaf-filter trie-name temporal-min-range temporal-max-range))]
+        (.accept c (as-> ;; filtering out unnecessary temporal columns again
+                       (iv/->indirect-rel (for [col-name col-names
+                                                :let [normalized-col-name (util/str->normal-form-str col-name)]]
+                                            (-> (.vectorForName with-temporal-columns normalized-col-name)
+                                                (.withName col-name)))) rel
+                       (reduce (fn [^IIndirectRelation rel, ^IRelationSelector col-pred]
+                                 (iv/select rel (.select col-pred allocator rel params)))
+                               rel
+                               (vals col-preds))))
         true)
       false))
 
   (close [_]))
 
-(defn- ->4r-cursor [^ILiveTableWatermark wm, col-names, ^longs temporal-min-range, ^longs temporal-max-range]
+(defn- ->4r-cursor [^BufferAllocator allocator,^ILiveTableWatermark wm, col-names,
+                    ^longs temporal-min-range, ^longs temporal-max-range, ^Map col-preds, params]
+  (prn col-preds)
   (let [!leaves (Stream/builder)
         content-leaf (.leaf wm)
         doc-col (.structReader (.vectorForName content-leaf "xt$doc"))
@@ -517,7 +528,7 @@
                      (visitLeaf [_ trie-leaf]
                        (.add !leaves [trie-name trie-leaf]))))))
 
-    (TrieCursor. rel (.iterator (.build !leaves)) temporal-min-range temporal-max-range col-names)))
+    (TrieCursor. allocator rel (.iterator (.build !leaves)) temporal-min-range temporal-max-range col-names col-preds params)))
 
 (defn tables-with-cols [basis ^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
   (let [{:keys [tx, after-tx]} basis
@@ -627,12 +638,15 @@
                        (->
                         (if (use-4r? watermark scan-opts basis)
 
-                          (->4r-cursor (some-> (.liveIndex watermark)
+                          (->4r-cursor allocator
+                                       (some-> (.liveIndex watermark)
                                                (.liveTable normalized-table-name))
                                        (-> (set/union content-col-names temporal-col-names)
                                            (disj "_row_id"))
                                        temporal-min-range
-                                       temporal-max-range)
+                                       temporal-max-range
+                                       col-preds
+                                       params)
 
                           (ScanCursor. allocator metadata-mgr watermark
                                        content-col-names temporal-col-names col-preds
