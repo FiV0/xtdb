@@ -7,35 +7,40 @@
             [xtdb.vector.indirect :as iv]
             [xtdb.vector.writer :as vw])
   (:import (java.lang AutoCloseable)
+           [java.nio ByteBuffer]
            (java.util ArrayList Arrays HashMap Map)
            (java.util.concurrent CompletableFuture)
            (java.util.concurrent.atomic AtomicInteger)
-           (java.util.function BiConsumer BiFunction Function IntConsumer)
+           (java.util.function BiConsumer Function IntConsumer)
            (java.util.stream IntStream)
            (org.apache.arrow.memory BufferAllocator)
-           (org.apache.arrow.vector BaseFixedWidthVector FixedSizeBinaryVector TimeStampMicroTZVector VectorSchemaRoot)
+           (org.apache.arrow.vector VectorSchemaRoot)
            (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            org.apache.arrow.vector.types.UnionMode
            (xtdb.object_store ObjectStore)
-           (xtdb.trie MemoryHashTrie MemoryHashTrie$Visitor TrieKeys)
-           (xtdb.vector IIndirectRelation IIndirectVector IRelationWriter)))
+           (xtdb.trie WalTrie WalTrie$Node WalTrie$NodeVisitor WalTrieKeys)
+           (xtdb.vector IIndirectRelation IIndirectVector IRelationWriter IVectorWriter)))
 
+;;
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveTableWatermark
-  (^xtdb.vector.IIndirectRelation leaf [])
-  (tries []))
+  ;; FIXME what's the API here?
+  (^xtdb.vector.IIndirectRelation logRelation [])
+  (^xtdb.trie.WalTrie logTrie []))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveTableTx
   (^xtdb.indexer.live_index.ILiveTableWatermark openWatermark [^boolean retain])
-  (^xtdb.vector.IRelationWriter leafWriter [])
-  (^void addRow [idx])
+  (^xtdb.vector.IRelationWriter documentWriter [])
+  (^void logPut [^bytes iid, ^long validFrom, ^long validTo, ^xtdb.vector.IRowCopier doc-copier, ^int doc-src-idx])
+  (^void logDelete [^bytes iid, ^long validFrom, ^long validTo])
+  (^void logEvict [^bytes iid])
   (^void commit [])
   (^void close []))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveTable
-  (^xtdb.indexer.live_index.ILiveTableTx startTx [])
+  (^xtdb.indexer.live_index.ILiveTableTx startTx [^xtdb.api.protocols.TransactionInstant txKey])
   (^xtdb.indexer.live_index.ILiveTableWatermark openWatermark [^boolean retain])
   (^java.util.concurrent.CompletableFuture #_<?> finishChunk [^long chunkIdx])
   (^void close []))
@@ -54,14 +59,14 @@
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveIndex
   (^xtdb.indexer.live_index.ILiveTable liveTable [^String tableName])
-  (^xtdb.indexer.live_index.ILiveIndexTx startTx [])
+  (^xtdb.indexer.live_index.ILiveIndexTx startTx [^xtdb.api.protocols.TransactionInstant txKey])
   (^xtdb.indexer.live_index.ILiveIndexWatermark openWatermark [])
   (^void finishChunk [^long chunkIdx])
   (^void close []))
 
 (defprotocol TestLiveTable
-  (^xtdb.vector.IRelationWriter leaf-writer [test-live-table])
-  (^java.util.Map tries [test-live-table]))
+  (^xtdb.trie.WalTrie log-trie [test-live-table])
+  (^xtdb.vector.IRelationWriter log-rel [test-live-table]))
 
 (def ^org.apache.arrow.vector.types.pojo.Schema trie-schema
   (Schema. [(types/->field "nodes" (ArrowType$Union. UnionMode/Dense (int-array (range 3))) false
@@ -72,10 +77,10 @@
 
 (defn- write-trie!
   ^java.util.concurrent.CompletableFuture [^BufferAllocator allocator, ^ObjectStore obj-store,
-                                           ^String table-name, ^String trie-name, ^String chunk-idx,
-                                           ^MemoryHashTrie trie, ^IIndirectRelation leaf]
+                                           ^String table-name, ^String chunk-idx,
+                                           ^WalTrie trie, ^IIndirectRelation log-rel]
 
-  (util/with-close-on-catch [leaf-vsr (VectorSchemaRoot/create (Schema. (for [^IIndirectVector rdr leaf]
+  (util/with-close-on-catch [leaf-vsr (VectorSchemaRoot/create (Schema. (for [^IIndirectVector rdr log-rel]
                                                                           (.getField (.getVector rdr))))
                                                                allocator)
                              trie-vsr (VectorSchemaRoot/create trie-schema allocator)]
@@ -91,17 +96,17 @@
           leaf-wtr (.writerForTypeId node-wtr (byte 2))
           page-idx-wtr (.structKeyWriter leaf-wtr "page-idx")
           !page-idx (AtomicInteger. 0)
-          copier (vw/->rel-copier leaf-rel-wtr leaf)]
+          copier (vw/->rel-copier leaf-rel-wtr log-rel)]
 
       (-> (.putObject obj-store
-                      (format "tables/%s/%s/leaf-c%s.arrow" table-name trie-name chunk-idx)
+                      (format "tables/%s/wal/leaf-c%s.arrow" table-name chunk-idx)
                       (util/build-arrow-ipc-byte-buffer leaf-vsr :file
                         (fn [write-batch!]
                           (.accept trie
-                                   (reify MemoryHashTrie$Visitor
+                                   (reify WalTrie$NodeVisitor
                                      (visitBranch [visitor branch]
                                        (let [!page-idxs (IntStream/builder)]
-                                         (doseq [^MemoryHashTrie child (.children branch)]
+                                         (doseq [^WalTrie$Node child (.children branch)]
                                            (.add !page-idxs (if child
                                                               (do
                                                                 (.accept child visitor)
@@ -136,7 +141,7 @@
             (fn [_]
               (.syncRowCount trie-rel-wtr)
               (.putObject obj-store
-                          (format "tables/%s/%s/trie-c%s.arrow" table-name trie-name chunk-idx)
+                          (format "tables/%s/wal/trie-c%s.arrow" table-name chunk-idx)
                           (util/root->arrow-ipc-byte-buffer trie-vsr :file))))
 
           (.whenComplete (reify BiConsumer
@@ -144,18 +149,28 @@
                              (util/try-close trie-vsr)
                              (util/try-close leaf-vsr))))))))
 
+(def ^:private put-field
+  (types/col-type->field "put" [:struct {'xt$valid_from types/temporal-col-type
+                                         'xt$valid_to types/temporal-col-type
+                                         'xt$doc [:union #{:null [:struct {}]}]}]))
+
+(def ^:private delete-field
+  (types/col-type->field "delete" [:struct {'xt$valid_from types/temporal-col-type
+                                            'xt$valid_to types/temporal-col-type}]))
+
+(def ^:private evict-field
+  (types/col-type->field "evict" :null))
+
 (def ^:private ^org.apache.arrow.vector.types.pojo.Schema leaf-schema
   (Schema. [(types/col-type->field "xt$iid" [:fixed-size-binary 16])
-            (types/col-type->field "xt$valid_from" types/nullable-temporal-type)
-            (types/col-type->field "xt$valid_to" types/nullable-temporal-type)
-            (types/col-type->field "xt$system_from" types/nullable-temporal-type)
-            (types/col-type->field "xt$system_to" types/nullable-temporal-type)
-            (types/col-type->field "xt$doc" [:struct {}])]))
+            (types/col-type->field "xt$system_from" types/temporal-col-type)
+            (types/->field "op" (ArrowType$Union. UnionMode/Dense (int-array (range 3))) false
+                           put-field delete-field evict-field)]))
 
 (defn- open-leaf-root ^xtdb.vector.IRelationWriter [^BufferAllocator allocator]
   (vw/root->writer (VectorSchemaRoot/create leaf-schema allocator)))
 
-(defn- open-wm-leaf ^xtdb.vector.IIndirectRelation [^IRelationWriter rel, retain?]
+(defn- open-wm-log-rel ^xtdb.vector.IIndirectRelation [^IRelationWriter rel, retain?]
   (let [out-cols (ArrayList.)]
     (try
       (doseq [^IIndirectVector v (vw/rel-wtr->rdr rel)]
@@ -169,78 +184,103 @@
         (throw t)))))
 
 (deftype LiveTable [^BufferAllocator allocator, ^ObjectStore obj-store, ^String table-name
-                    ^IRelationWriter leaf, ^:unsynchronized-mutable ^Map tries
-                    ^FixedSizeBinaryVector iid-vec
-                    ^TimeStampMicroTZVector valid-to-vec, ^TimeStampMicroTZVector system-to-vec]
+                    ^IRelationWriter log-rel, ^:unsynchronized-mutable ^WalTrie log-trie
+                    ^IVectorWriter iid-wtr, ^IVectorWriter system-from-wtr
+                    ^IVectorWriter put-wtr ^IVectorWriter put-valid-from-wtr, ^IVectorWriter put-valid-to-wtr, ^IVectorWriter put-doc-wtr
+                    ^IVectorWriter delete-wtr ^IVectorWriter delete-valid-from-wtr, ^IVectorWriter delete-valid-to-wtr]
   ILiveTable
-  (startTx [this-table]
-    (let [transient-tries (HashMap. tries)
-          t1-trie-keys (TrieKeys. (into-array BaseFixedWidthVector [iid-vec]))
-          t2-trie-keys (TrieKeys. (into-array BaseFixedWidthVector [iid-vec valid-to-vec]))]
+  (startTx [this-table tx-key]
+    (let [!transient-trie (atom log-trie)
+          system-from-µs (util/instant->micros (.system-time tx-key))]
       (reify ILiveTableTx
-        (leafWriter [_] leaf)
+        (documentWriter [_]
+          (vw/struct-writer->rel-writer put-doc-wtr))
 
-        (addRow [_ idx]
-          (let [trie-idx (+ (if (.isNull system-to-vec idx) 0 2)
-                            (if (.isNull valid-to-vec idx) 0 1)
-                            1)]
-            ;; TODO later tries could be partitioned by various times
-            (.compute transient-tries (format "t%d-diff" trie-idx)
-                      (reify BiFunction
-                        (apply [_ _trie-name {:keys [trie trie-keys]}]
-                          (let [^MemoryHashTrie trie (or trie (MemoryHashTrie/emptyTrie))
+        (logPut [_ iid valid-from valid-to put-doc-copier doc-src-idx]
+          (.startRow log-rel)
 
-                                trie-keys (or trie-keys (case trie-idx 1 t1-trie-keys, 2 t2-trie-keys))]
+          (.writeBytes iid-wtr (ByteBuffer/wrap iid))
+          (.writeLong system-from-wtr system-from-µs)
 
-                            {:trie (.add trie trie-keys idx)
-                             :trie-keys trie-keys}))))))
+          (.startStruct put-wtr)
+          (.writeLong put-valid-from-wtr valid-from)
+          (.writeLong put-valid-to-wtr valid-to)
+          (.copyRow put-doc-copier doc-src-idx)
+          (.endStruct put-wtr)
+
+          (.endRow log-rel)
+
+          (swap! !transient-trie #(.add ^WalTrie % (dec (.getPosition (.writerPosition log-rel))))))
+
+        (logDelete [_ iid valid-from valid-to]
+          (.writeBytes iid-wtr (ByteBuffer/wrap iid))
+          (.writeLong system-from-wtr system-from-µs)
+
+          (.startStruct delete-wtr)
+          (.writeLong delete-valid-from-wtr valid-from)
+          (.writeLong delete-valid-to-wtr valid-to)
+          (.endStruct delete-wtr)
+
+          (.endRow log-rel)
+
+          (swap! !transient-trie #(.add ^WalTrie % (dec (.getPosition (.writerPosition log-rel))))))
 
         (openWatermark [_ retain?]
           (locking this-table
-            (let [wm-leaf (open-wm-leaf leaf retain?)
-                  wm-tries (into {} transient-tries)]
+            (let [wm-content-rel (open-wm-log-rel log-rel retain?)
+                  wm-log-trie log-trie]
               (reify ILiveTableWatermark
-                (leaf [_] wm-leaf)
-                (tries [_] wm-tries)
+                (logRelation [_] wm-content-rel)
+                (logTrie [_] wm-log-trie)
 
                 AutoCloseable
                 (close [_]
-                  (when retain? (util/close wm-leaf)))))))
+                  (when retain? (util/close wm-content-rel)))))))
 
         (commit [_]
           (locking this-table
-            (set! (.-tries this-table) transient-tries)))
+            (set! (.-log-trie this-table) @!transient-trie)))
 
         AutoCloseable
         (close [_]))))
 
   (finishChunk [_ chunk-idx]
     (let [chunk-idx-str (util/->lex-hex-string chunk-idx)]
-      (CompletableFuture/allOf
-       (->> (for [[trie-name {:keys [^MemoryHashTrie trie trie-keys]}] tries]
-              (write-trie! allocator obj-store table-name trie-name chunk-idx-str (-> trie (.compactLogs trie-keys)) (vw/rel-wtr->rdr leaf)))
-            (into-array CompletableFuture)))))
+      (write-trie! allocator obj-store table-name chunk-idx-str
+                   (-> log-trie (.compactLogs)) (vw/rel-wtr->rdr log-rel))))
 
   (openWatermark [this retain?]
     (locking this
-      (let [wm-leaf (open-wm-leaf leaf retain?)
-            wm-tries (into {} tries)]
+      (let [wm-log-rel (open-wm-log-rel log-rel retain?)
+            wm-log-trie log-trie]
         (reify ILiveTableWatermark
-          (leaf [_] wm-leaf)
-          (tries [_] wm-tries)
+          (logRelation [_] wm-log-rel)
+          (logTrie [_] wm-log-trie)
 
           AutoCloseable
           (close [_]
-            (when retain? (util/close wm-leaf)))))))
+            (when retain? (util/close wm-log-rel)))))))
 
   TestLiveTable
-  (leaf-writer [_] leaf)
-  (tries [_] tries)
+  (log-trie [_] log-trie)
+  (log-rel [_] log-rel)
 
   AutoCloseable
   (close [this]
     (locking this
-      (util/close leaf))))
+      (util/close log-rel))))
+
+(defn- ->live-table [allocator object-store table-name]
+  (util/with-close-on-catch [rel (open-leaf-root allocator)]
+    (let [iid-wtr (.writerForName rel "xt$iid")
+          op-wtr (.writerForName rel "op")
+          put-wtr (.writerForField op-wtr put-field)
+          delete-wtr (.writerForField op-wtr delete-field)]
+      (LiveTable. allocator object-store table-name rel
+                  (WalTrie/emptyTrie (WalTrieKeys. (.getVector iid-wtr)))
+                  iid-wtr (.writerForName rel "xt$system_from")
+                  put-wtr (.structKeyWriter put-wtr "xt$valid_from") (.structKeyWriter put-wtr "xt$valid_to") (.structKeyWriter put-wtr "xt$doc")
+                  delete-wtr (.structKeyWriter delete-wtr "xt$valid_from") (.structKeyWriter delete-wtr "xt$valid_to")))))
 
 (defrecord LiveIndex [^BufferAllocator allocator, ^ObjectStore object-store, ^Map tables]
   ILiveIndex
@@ -248,13 +288,9 @@
     (.computeIfAbsent tables table-name
                       (reify Function
                         (apply [_ table-name]
-                          (util/with-close-on-catch [rel (open-leaf-root allocator)]
-                            (LiveTable. allocator object-store table-name rel (HashMap.)
-                                        (.getVector (.writerForName rel "xt$iid"))
-                                        (.getVector (.writerForName rel "xt$valid_to"))
-                                        (.getVector (.writerForName rel "xt$system_to"))))))))
+                          (->live-table allocator object-store table-name)))))
 
-  (startTx [live-idx]
+  (startTx [live-idx tx-key]
     (let [table-txs (HashMap.)]
       (reify ILiveIndexTx
         (liveTable [_ table-name]
@@ -262,7 +298,7 @@
                             (reify Function
                               (apply [_ table-name]
                                 (-> (.liveTable live-idx table-name)
-                                    (.startTx))))))
+                                    (.startTx tx-key))))))
 
         (commit [_]
           (doseq [^ILiveTableTx table-tx (.values table-txs)]

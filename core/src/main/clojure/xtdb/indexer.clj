@@ -114,15 +114,10 @@
                                                    {:live-table live-table
                                                     :table-copier (.rowCopier (.writer live-table) table-rdr)})
 
-                               :live-idx-table (let [live-table (.liveTable live-idx-tx table-name)
-                                                     leaf-writer (.leafWriter live-table)]
+                               :live-idx-table (let [live-table (.liveTable live-idx-tx table-name)]
                                                  {:live-table live-table
-                                                  :leaf-writer leaf-writer
-                                                  :iid-wtr (.writerForName leaf-writer "xt$iid")
-                                                  :valid-from-wtr (.writerForName leaf-writer "xt$valid_from")
-                                                  :valid-to-wtr (.writerForName leaf-writer "xt$valid_to")
-                                                  :sys-from-wtr (.writerForName leaf-writer "xt$system_from")
-                                                  :doc-copier (.rowCopier (.writerForName leaf-writer "xt$doc") table-vec)})
+                                                  :doc-copier (-> (.documentWriter live-table)
+                                                                  (.rowCopier table-rdr))})
 
                                :content-log-copier (-> (content-log/content-writer->table-writer content-wtr table-name)
                                                        (.rowCopier table-rdr))}))))]
@@ -157,19 +152,8 @@
                                       {:valid-from (util/micros->instant valid-from)
                                        :valid-to (util/micros->instant valid-to)})))
 
-            (let [{:keys [^xtdb.indexer.live_index.ILiveTableTx live-table, ^IRelationWriter leaf-writer, ^IRowCopier doc-copier,
-                          ^IVectorWriter iid-wtr, ^IVectorWriter valid-from-wtr, ^IVectorWriter valid-to-wtr, ^IVectorWriter sys-from-wtr]} live-idx-table
-                  pos (.getPosition (.writerPosition leaf-writer))]
-              (.writeBytes iid-wtr (ByteBuffer/wrap (->iid eid)))
-              (.writeLong valid-from-wtr valid-from)
-              (if (= util/end-of-time-μs valid-to)
-                (.writeNull valid-to-wtr nil)
-                (.writeLong valid-to-wtr valid-to))
-              (.writeLong sys-from-wtr system-time-µs)
-              (.copyRow doc-copier doc-offset)
-              (.endRow leaf-writer)
-              ;; just adds the row atm, doesn't replace rows.
-              (.addRow live-table pos))
+            (let [{:keys [^xtdb.indexer.live_index.ILiveTableTx live-table, ^IRowCopier doc-copier]} live-idx-table]
+              (.logPut live-table (->iid eid) valid-from valid-to doc-copier doc-offset))
 
             (.logPut temporal-log-op-idxer byte-eid row-id valid-from valid-to)
             (.copyRow content-log-copier doc-offset)
@@ -180,7 +164,7 @@
 
 (defn- ->delete-indexer ^xtdb.indexer.OpIndexer [^IInternalIdManager iid-mgr,
                                                  ^ILogOpIndexer temporal-log-op-idxer,
-                                                 ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk
+                                                 ^ITemporalTxIndexer temporal-idxer, ^ILiveChunkTx live-chunk, ^ILiveIndexTx live-idx-tx
                                                  ^DenseUnionVector tx-ops-vec, ^Instant current-time]
   (let [delete-vec (.getStruct tx-ops-vec 2)
         ^VarCharVector table-vec (.getChild delete-vec "table" VarCharVector)
@@ -206,6 +190,9 @@
             (throw (err/runtime-err :xtdb.indexer/invalid-valid-times
                                     {:valid-from (util/micros->instant valid-from)
                                      :valid-to (util/micros->instant valid-to)})))
+
+          (-> (.liveTable live-idx-tx table)
+              (.logDelete (->iid eid) valid-from valid-to))
 
           (.logDelete temporal-log-op-idxer (->iid eid) valid-from valid-to)
           (.indexDelete temporal-idxer iid row-id valid-from valid-to new-entity?))
@@ -664,7 +651,7 @@
   IIndexer
   (indexTx [this {:keys [system-time] :as tx-key} tx-root]
     (util/with-open [live-chunk-tx (.startTx live-chunk)
-                     live-idx-tx (.startTx live-idx)]
+                     live-idx-tx (.startTx live-idx tx-key)]
       (let [^DenseUnionVector tx-ops-vec (-> ^ListVector (.getVector tx-root "tx-ops")
                                              (.getDataVector))
 
@@ -686,7 +673,7 @@
         (letfn [(index-tx-ops [^DenseUnionVector tx-ops-vec]
                   (let [!put-idxer (delay (->put-indexer iid-mgr temporal-log-op-idxer content-log-tx
                                                          temporal-idxer live-chunk-tx live-idx-tx tx-ops-vec system-time))
-                        !delete-idxer (delay (->delete-indexer iid-mgr temporal-log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec system-time))
+                        !delete-idxer (delay (->delete-indexer iid-mgr temporal-log-op-idxer temporal-idxer live-chunk-tx live-idx-tx tx-ops-vec system-time))
                         !evict-idxer (delay (->evict-indexer iid-mgr temporal-log-op-idxer temporal-idxer live-chunk-tx tx-ops-vec))
                         !call-idxer (delay (->call-indexer allocator ra-src wm-src scan-emitter tx-ops-vec tx-opts))
                         !sql-idxer (delay (->sql-indexer allocator metadata-mgr buffer-pool iid-mgr

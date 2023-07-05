@@ -33,7 +33,7 @@
            (xtdb.indexer.live_index ILiveTableWatermark)
            (xtdb.metadata IMetadataManager ITableMetadata)
            xtdb.operator.IRelationSelector
-           [xtdb.trie MemoryHashTrie MemoryHashTrie$Leaf MemoryHashTrie$Visitor]
+           #_[xtdb.trie WalTrie WalTrie$Leaf WalTrie$NodeVisitor] ; FIXME
            (xtdb.vector IIndirectRelation IIndirectVector)
            (xtdb.watermark IWatermark IWatermarkSource Watermark)))
 
@@ -429,6 +429,7 @@
    (at-now? scan-opts) (>= (util/instant->micros (:current-time basis))
                            (util/instant->micros (:system-time (:tx basis))))))
 
+#_ ; FIXME
 (deftype TrieCursor [^IIndirectRelation content-leaf, ^Iterator leaves]
   ICursor
   (tryAdvance [_ c]
@@ -440,6 +441,7 @@
 
   (close [_]))
 
+#_ ; FIXME
 (defn- ->4r-cursor [^ILiveTableWatermark wm, col-names]
   (let [!leaves (Stream/builder)
         content-leaf (.leaf wm)
@@ -452,11 +454,11 @@
                                      (.withName col-name)))
                                (.rowCount content-leaf))]
 
-    (doseq [{:keys [^MemoryHashTrie trie trie-keys]} (vals (.tries wm))]
+    (doseq [{:keys [^WalTrie trie trie-keys]} (vals (.tries wm))]
       (-> (.compactLogs trie trie-keys)
-          (.accept (reify MemoryHashTrie$Visitor
+          (.accept (reify MemoryHashTrie$NodeVisitor
                      (visitBranch [this branch]
-                       (run! #(.accept ^MemoryHashTrie % this) (.children branch)))
+                       (run! #(.accept ^WalTrie$Node % this) (.children branch)))
 
                      (visitLeaf [_ trie-leaf]
                        (.add !leaves trie-leaf))))))

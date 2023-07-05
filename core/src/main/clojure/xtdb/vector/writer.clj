@@ -880,6 +880,7 @@
     (reify IRelationWriter
       (writerPosition [_] wp)
 
+      (startRow [_])
       (endRow [_]
         (let [pos (.getPositionAndIncrement wp)]
           (doseq [^IVectorWriter w (.values writers)]
@@ -907,41 +908,33 @@
         (run! util/try-close (vals this))))))
 
 (defn struct-writer->rel-writer ^xtdb.vector.IRelationWriter [^xtdb.vector.IVectorWriter vec-wtr]
-  (let [wp (IWriterPosition/build)]
-    (reify IRelationWriter
-      (writerPosition [_] wp)
+  (reify IRelationWriter
+    (writerPosition [_] (.writerPosition vec-wtr))
 
-      (startRow [_]
-        (.startStruct vec-wtr))
+    (startRow [_] (.startStruct vec-wtr))
+    (endRow [_] (.endStruct vec-wtr))
 
-      (endRow [_]
-        (.endStruct vec-wtr))
+    (writerForName [_ col-name] (.structKeyWriter vec-wtr col-name))
+    (writerForName [_ col-name col-type] (.structKeyWriter vec-wtr col-name col-type))
 
-      (writerForName [_ col-name]
-        (.structKeyWriter vec-wtr col-name))
+    (rowCopier [this in-rel]
+      (let [copiers (for [^IIndirectVector src-vec in-rel]
+                      (.rowCopier (.writerForName this (.getName src-vec)) (.getVector src-vec)))]
+        (reify IRowCopier
+          (copyRow [_ src-idx]
+            (let [pos (.getPosition (.writerPosition this))]
+              (.startStruct vec-wtr)
+              (doseq [^IRowCopier copier copiers]
+                (.copyRow copier src-idx))
+              (.endStruct vec-wtr)
+              pos)))))
 
-      (writerForName [_ col-name col-type]
-        (.structKeyWriter vec-wtr col-name col-type))
+    (iterator [_] (throw (UnsupportedOperationException.)))
 
-      (rowCopier [this in-rel]
-        (let [copiers (for [^IIndirectVector src-vec in-rel]
-                        (.rowCopier (.writerForName this (.getName src-vec)) (.getVector src-vec)))]
-          (reify IRowCopier
-            (copyRow [_ src-idx]
-              (let [pos (.getPositionAndIncrement wp)]
-                (.startStruct vec-wtr)
-                (doseq [^IRowCopier copier copiers]
-                  (.copyRow copier src-idx))
-                (.endStruct vec-wtr)
-                pos)))))
+    (syncRowCount [_] (.syncValueCount vec-wtr))
 
-      (iterator [_] (throw (UnsupportedOperationException.)))
-
-      (syncRowCount [_]
-        (.setPosition wp (.getPosition (.writerPosition vec-wtr))))
-
-      AutoCloseable
-      (close [_]))))
+    AutoCloseable
+    (close [_] (.close vec-wtr))))
 
 (defn open-vec
   (^org.apache.arrow.vector.ValueVector [allocator col-name vs]
