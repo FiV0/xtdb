@@ -438,32 +438,43 @@
 
                 )
 
-  (sc.api/letsc [136 -19]
-                (seq irel))
+  (sc.api/letsc [1 -1]
+                [(aget temporal-max-range temporal/app-time-start-idx)
+                 (aget temporal-min-range temporal/app-time-end-idx)]
+                #_(seq irel)
+                #_(.getVector valid-from-vec)
+
+
+                )
+
+  (prn (map util/micros->instant [min-valid-from (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i))
+                                  (.getObject (.getVector valid-to-vec) (.getIndex valid-to-vec i)) max-valid-to]))
+
+  (util/micros->instant 32503680000000000)
 
   )
 
 (defn temporal-content-leaf-filter ^IIndirectRelation [^IIndirectRelation irel, trie-name, ^longs temporal-min-range, ^longs temporal-max-range]
-  (sc.api/spy)
   (case trie-name
-    "t1-diff" (let [max-valid-from (aget temporal-max-range temporal/app-time-end-idx)
+    "t1-diff" (let [max-valid-to (aget temporal-min-range temporal/app-time-end-idx)
                     valid-from-vec (.vectorForName irel "xt/valid-from")
                     sel (IntStream/builder)]
                 (dotimes [i (.getValueCount valid-from-vec)]
-                  (when (<= (.getIndex valid-from-vec i) max-valid-from)
+                  (when (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
                     (.add sel i)))
                 (iv/select irel (.toArray (.build sel))))
 
-    "t2-diff" (let [min-valid-from (aget temporal-min-range temporal/app-time-start-idx)
-                    max-valid-to (aget temporal-max-range temporal/app-time-end-idx)
+    "t2-diff" (let [min-valid-from (aget temporal-max-range temporal/app-time-start-idx)
+                    max-valid-to (aget temporal-min-range temporal/app-time-end-idx)
                     valid-from-vec (.vectorForName irel "xt/valid-from")
                     valid-to-vec (.vectorForName irel "xt/valid-to")
                     sel (IntStream/builder)]
                 (dotimes [i (.getValueCount valid-from-vec)]
-                  (when (and (<= min-valid-from (.getIndex valid-to-vec i))
-                             (<= (.getIndex valid-from-vec i) max-valid-to))
+                  (when (and (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
+                             (<= min-valid-from (.getObject (.getVector valid-to-vec) (.getIndex valid-to-vec i))))
                     (.add sel i)))
                 (iv/select irel (.toArray (.build sel))))
+    "t3-diff" (throw (UnsupportedOperationException.))
     (throw (UnsupportedOperationException.))))
 
 (deftype TrieCursor [^IIndirectRelation content-leaf,

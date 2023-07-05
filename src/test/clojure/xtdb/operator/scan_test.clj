@@ -47,33 +47,42 @@
                          {:for-valid-time [:from #inst "2021"]}]
                         ;; t1 invalid
                         [:put :xt_docs {:xt/id :doc2}
-                         {:for-valid-time [:from #inst "2021"]}]
+                         {:for-valid-time [:from #inst "3000"]}]
                         ;; t2 valid
                         [:put :xt_docs {:xt/id :doc3}
                          {:for-valid-time [:in #inst "2021" #inst "3000"]}]
-                        ;; t2 invalid
+                        ;; t2 invalid past
                         [:put :xt_docs {:xt/id :doc4}
-                         {:for-valid-time [:in #inst "2021" #inst "2022"]}]])
+                         {:for-valid-time [:in #inst "2021" #inst "2022"]}]
+                        ;; t2 invalid future
+                        [:put :xt_docs {:xt/id :doc5}
+                         {:for-valid-time [:in #inst "3000" #inst "4000"]}]])
 
-    (let [res (first (tu/query-ra '[:scan {:table xt_docs}
-                                    [xt/id
-                                     xt/valid-from xt/valid-to
-                                     xt/system-from xt/system-to]]
-                                  {:node node}))]
+    (let [res (tu/query-ra '[:scan {:table xt_docs}
+                             [xt/id
+                              xt/valid-from xt/valid-to
+                              xt/system-from xt/system-to]]
+                           {:node node})]
       (t/is (= #{:xt/id :xt/valid-from :xt/valid-to :xt/system-to :xt/system-from}
-               (-> res keys set)))
+               (-> res first keys set)))
 
-      (t/is (= {:xt/id :doc, :xt/valid-from (util/->zdt #inst "2021"), :xt/valid-to (util/->zdt #inst "3000")}
-               (dissoc res :xt/system-from :xt/system-to))))
+      #_(t/is (= {:xt/id :doc, :xt/valid-from (util/->zdt #inst "2021"), :xt/valid-to (util/->zdt #inst "3000")}
+                 (dissoc res :xt/system-from :xt/system-to))))
 
-    (t/is (= {:xt/id :doc, :app-time-start (util/->zdt #inst "2021"), :app-time-end (util/->zdt #inst "3000")}
-             (-> (tu/query-ra '[:project [xt/id
-                                          {app-time-start xt/valid-from}
-                                          {app-time-end xt/valid-to}]
-                                [:scan {:table xt_docs}
-                                 [xt/id xt/valid-from xt/valid-to]]]
-                              {:node node})
-                 #_(dissoc :xt/system-from :xt/system-to))))))
+    (t/is (= #{{:xt/id :doc1,
+                :app-time-start (util/->zdt #inst "2021"),
+                :app-time-end nil}
+               {:xt/id :doc3,
+                :app-time-start (util/->zdt #inst "2021"),
+                :app-time-end (util/->zdt #inst "3000")}}
+             (->> (tu/query-ra '[:project [xt/id
+                                           {app-time-start xt/valid-from}
+                                           {app-time-end xt/valid-to}]
+                                 [:scan {:table xt_docs}
+                                  [xt/id xt/valid-from xt/valid-to]]]
+                               {:node node})
+                  (map #(dissoc % :xt/system-from :xt/system-to))
+                  set)))))
 
 (t/deftest test-only-scanning-temporal-cols-45
   (with-open [node (node/start-node {})]
