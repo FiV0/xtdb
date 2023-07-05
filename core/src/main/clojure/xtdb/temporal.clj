@@ -139,6 +139,8 @@
    "xt$system_from" types/temporal-col-type, "xt$system_to" types/temporal-col-type
    "xt$valid_from" types/temporal-col-type, "xt$valid_to" types/temporal-col-type})
 
+(def temporal-col-names #{"xt$valid_to" "xt$valid_from" "xt$system_to" "xt$system_from"})
+
 (defn temporal-column? [col-name]
   (contains? temporal-col-types (str col-name)))
 

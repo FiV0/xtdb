@@ -16,8 +16,8 @@
                         [:put :xt_docs {:xt/id :bar, :col1 "bar1", :col2 "bar2"}]
                         [:put :xt_docs {:xt/id :foo, :col2 "baz2"}]])
 
-    (t/is (= [{:xt/id :bar, :col1 "bar1", :col2 "bar2"}
-              {:xt/id :foo, :col2 "baz2"}]
+    (t/is (= [{:xt/id :foo, :col2 "baz2"}
+              {:xt/id :bar, :col1 "bar1", :col2 "bar2"}]
              (tu/query-ra '[:scan {:table xt_docs} [xt/id col1 col2]]
                           {:node node})))))
 

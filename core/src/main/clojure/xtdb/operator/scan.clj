@@ -17,7 +17,7 @@
             [xtdb.vector :as vec]
             [xtdb.vector.indirect :as iv]
             xtdb.watermark)
-  (:import (clojure.lang IPersistentSet MapEntry)
+  (:import (clojure.lang IPersistentSet MapEntry PersistentHashSet)
            (java.util HashMap Iterator LinkedList List Map Queue Set)
            (java.util.function BiFunction Consumer)
            [java.util.stream IntStream Stream]
@@ -457,7 +457,7 @@
 (defn temporal-content-leaf-filter ^IIndirectRelation [^IIndirectRelation irel, trie-name, ^longs temporal-min-range, ^longs temporal-max-range]
   (case trie-name
     "t1-diff" (let [max-valid-to (aget temporal-min-range temporal/app-time-end-idx)
-                    valid-from-vec (.vectorForName irel "xt/valid-from")
+                    valid-from-vec (.vectorForName irel "xt$valid_from")
                     sel (IntStream/builder)]
                 (dotimes [i (.getValueCount valid-from-vec)]
                   (when (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
@@ -466,8 +466,8 @@
 
     "t2-diff" (let [min-valid-from (aget temporal-max-range temporal/app-time-start-idx)
                     max-valid-to (aget temporal-min-range temporal/app-time-end-idx)
-                    valid-from-vec (.vectorForName irel "xt/valid-from")
-                    valid-to-vec (.vectorForName irel "xt/valid-to")
+                    valid-from-vec (.vectorForName irel "xt$valid_from")
+                    valid-to-vec (.vectorForName irel "xt$valid_to")
                     sel (IntStream/builder)]
                 (dotimes [i (.getValueCount valid-from-vec)]
                   (when (and (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
@@ -480,13 +480,19 @@
 (deftype TrieCursor [^IIndirectRelation content-leaf,
                      ^Iterator leaves,
                      ^longs temporal-min-range,
-                     ^longs temporal-max-range]
+                     ^longs temporal-max-range
+                     ^PersistentHashSet col-names]
   ICursor
   (tryAdvance [_ c]
     (if (.hasNext leaves)
-      (let [[trie-name ^MemoryHashTrie$Leaf trie-leaf] (.next leaves)]
-        (.accept c (-> (iv/select content-leaf (.data trie-leaf))
-                       (temporal-content-leaf-filter trie-name temporal-min-range temporal-max-range)))
+      (let [[trie-name ^MemoryHashTrie$Leaf trie-leaf] (.next leaves)
+            with-temporal-filters (-> (iv/select content-leaf (.data trie-leaf))
+                                      (temporal-content-leaf-filter trie-name temporal-min-range temporal-max-range))]
+        ;; filtering out unnessary temporal columns again
+        (.accept c (iv/->indirect-rel (for [col-name col-names
+                                            :let [normalized-col-name (util/str->normal-form-str col-name)]]
+                                        (-> (.vectorForName with-temporal-filters normalized-col-name)
+                                            (.withName col-name)))))
         true)
       false))
 
@@ -496,12 +502,10 @@
   (let [!leaves (Stream/builder)
         content-leaf (.leaf wm)
         doc-col (.structReader (.vectorForName content-leaf "xt$doc"))
-        rel (iv/->indirect-rel (for [col-name col-names
-                                     :let [normalized-col-name (util/str->normal-form-str col-name)]]
-                                 (-> (if (and (temporal/temporal-column? normalized-col-name) (not= normalized-col-name "xt$id"))
-                                       (.vectorForName content-leaf normalized-col-name)
-                                       (.readerForKey doc-col normalized-col-name))
-                                     (.withName col-name)))
+        rel (iv/->indirect-rel (for [col-name (set/union (set (map util/str->normal-form-str col-names)) temporal/temporal-col-names)]
+                                 (if (and (temporal/temporal-column? col-name) (not= col-name "xt$id"))
+                                   (.vectorForName content-leaf col-name)
+                                   (.readerForKey doc-col col-name)))
                                (.rowCount content-leaf))]
 
     (doseq [{:keys [^WalTrie trie trie-keys]} (vals (.tries wm))]
@@ -513,7 +517,7 @@
                      (visitLeaf [_ trie-leaf]
                        (.add !leaves [trie-name trie-leaf]))))))
 
-    (TrieCursor. rel (.iterator (.build !leaves)) temporal-min-range temporal-max-range)))
+    (TrieCursor. rel (.iterator (.build !leaves)) temporal-min-range temporal-max-range col-names)))
 
 (defn tables-with-cols [basis ^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
   (let [{:keys [tx, after-tx]} basis
