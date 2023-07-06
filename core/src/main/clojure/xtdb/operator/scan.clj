@@ -6,6 +6,7 @@
             [xtdb.buffer-pool :as bp]
             [xtdb.coalesce :as coalesce]
             [xtdb.expression :as expr]
+            [xtdb.expression.comparator :as cmp]
             [xtdb.expression.metadata :as expr.meta]
             [xtdb.expression.walk :as expr.walk]
             xtdb.indexer.live-index
@@ -21,19 +22,20 @@
            (java.util HashMap Iterator LinkedList List Map Queue Set)
            (java.util.function BiFunction Consumer)
            [java.util.stream IntStream Stream]
-           org.apache.arrow.memory.BufferAllocator
+           (org.apache.arrow.memory BufferAllocator RootAllocator)
            (org.apache.arrow.vector BigIntVector VarBinaryVector)
-           (org.apache.arrow.vector.complex ListVector StructVector)
+           (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
            (org.roaringbitmap IntConsumer RoaringBitmap)
            org.roaringbitmap.buffer.MutableRoaringBitmap
            (org.roaringbitmap.longlong Roaring64Bitmap)
            xtdb.api.protocols.TransactionInstant
            xtdb.buffer_pool.IBufferPool
            xtdb.ICursor
+           (xtdb.vector IStructReader)
            (xtdb.indexer.live_index ILiveTableWatermark)
            (xtdb.metadata IMetadataManager ITableMetadata)
            xtdb.operator.IRelationSelector
-           #_[xtdb.trie WalTrie WalTrie$Leaf WalTrie$NodeVisitor] ; FIXME
+           [xtdb.trie WalTrie WalTrie$Leaf WalTrie$Node WalTrie$NodeVisitor]
            (xtdb.vector IIndirectRelation IIndirectVector)
            (xtdb.watermark IWatermark IWatermarkSource Watermark)))
 
@@ -123,9 +125,9 @@
                       (->> (for [col-name (set/intersection col-names content-col-names)]
                              (-> (.getBuffer buffer-pool (meta/->chunk-obj-key chunk-idx table-name col-name))
                                  (util/then-apply
-                                   (fn [buf]
-                                     (MapEntry/create col-name
-                                                      (util/->chunks buf {:block-idxs block-idxs, :close-buffer? true}))))))
+                                  (fn [buf]
+                                    (MapEntry/create col-name
+                                                     (util/->chunks buf {:block-idxs block-idxs, :close-buffer? true}))))))
                            (remove nil?)
                            vec
                            (into {} (map deref))
@@ -454,81 +456,139 @@
 
   )
 
-(defn temporal-content-leaf-filter ^IIndirectRelation [^IIndirectRelation irel, trie-name, ^longs temporal-min-range, ^longs temporal-max-range]
-  (case trie-name
-    "t1-diff" (let [max-valid-to (aget temporal-min-range temporal/app-time-end-idx)
-                    valid-from-vec (.vectorForName irel "xt$valid_from")
-                    sel (IntStream/builder)]
-                (dotimes [i (.getValueCount valid-from-vec)]
-                  (when (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
-                    (.add sel i)))
-                (iv/select irel (.toArray (.build sel))))
+(defn ->temporal-range [^longs temporal-min-range, ^longs temporal-max-range]
+  (let [res (long-array 4)]
+    (aset res 0 (aget temporal-max-range temporal/app-time-start-idx))
+    (aset res 1 (aget temporal-min-range temporal/app-time-end-idx))
+    (aset res 2 (aget temporal-max-range temporal/system-time-start-idx))
+    (aset res 1 (aget temporal-min-range temporal/system-time-end-idx))
+    res))
 
-    "t2-diff" (let [min-valid-from (aget temporal-max-range temporal/app-time-start-idx)
-                    max-valid-to (aget temporal-min-range temporal/app-time-end-idx)
-                    valid-from-vec (.vectorForName irel "xt$valid_from")
-                    valid-to-vec (.vectorForName irel "xt$valid_to")
-                    sel (IntStream/builder)]
-                (dotimes [i (.getValueCount valid-from-vec)]
-                  (when (and (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
-                             (<= min-valid-from (.getObject (.getVector valid-to-vec) (.getIndex valid-to-vec i))))
-                    (.add sel i)))
-                (iv/select irel (.toArray (.build sel))))
-    "t3-diff" (throw (UnsupportedOperationException.))
-    (throw (UnsupportedOperationException.))))
+(defn temporal-valid-time-filter ^IIndirectRelation [^IIndirectRelation irel, ^longs temporal-range]
+  (let [min-valid-from (aget temporal-range 0)
+        max-valid-to (aget temporal-range 1)
+        valid-from-vec (.vectorForName irel "xt$valid_from")
+        valid-to-vec (.vectorForName irel "xt$valid_to")
+        sel (IntStream/builder)]
+    (dotimes [i (.getValueCount valid-from-vec)]
+      (when (and (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
+                 (<= min-valid-from (.getObject (.getVector valid-to-vec) (.getIndex valid-to-vec i))))
+        (.add sel i)))
+    (iv/select irel (.toArray (.build sel)))))
 
-(deftype TrieCursor [^BufferAllocator allocator,
-                     ^IIndirectRelation content-leaf,
-                     ^Iterator leaves,
-                     ^longs temporal-min-range,
-                     ^longs temporal-max-range
-                     ^PersistentHashSet col-names
-                     ^Map col-preds
-                     params]
-  ICursor
-  (tryAdvance [_ c]
-    (if (.hasNext leaves)
-      (let [[trie-name ^MemoryHashTrie$Leaf trie-leaf] (.next leaves)
+(sc.api/letsc [4 -17]
+              #_doc-vec
+              ;; (.getVector doc-vec)
+              (->> (-> (.getStruct op-vec (byte 0))
+                       iv/->StructReader
+                       (.readerForKey "xt$doc")
+                       (.getVector )
+                       ;; (.getChild "col1" ValueVector)
 
-            ^IIndirectRelation with-temporal-columns
-            (-> (iv/select content-leaf (.data trie-leaf))
-                (temporal-content-leaf-filter trie-name temporal-min-range temporal-max-range))]
-        (.accept c (as-> ;; filtering out unnecessary temporal columns again
-                       (iv/->indirect-rel (for [col-name col-names
-                                                :let [normalized-col-name (util/str->normal-form-str col-name)]]
-                                            (-> (.vectorForName with-temporal-columns normalized-col-name)
-                                                (.withName col-name)))) rel
-                       (reduce (fn [^IIndirectRelation rel, ^IRelationSelector col-pred]
-                                 (iv/select rel (.select col-pred allocator rel params)))
-                               rel
-                               (vals col-preds))))
-        true)
-      false))
+                       iv/->StructReader
+                       (.readerForKey "col1")
+                       #_type)
+                   #_(map #(.getName %)))
+              )
 
-  (close [_]))
+(import '(org.apache.arrow.vector TimeStampMilliTZVector))
 
-(defn- ->4r-cursor [^BufferAllocator allocator,^ILiveTableWatermark wm, col-names,
-                    ^longs temporal-min-range, ^longs temporal-max-range, ^Map col-preds, params]
-  (prn col-preds)
-  (let [!leaves (Stream/builder)
-        content-leaf (.leaf wm)
-        doc-col (.structReader (.vectorForName content-leaf "xt$doc"))
-        rel (iv/->indirect-rel (for [col-name (set/union (set (map util/str->normal-form-str col-names)) temporal/temporal-col-names)]
-                                 (if (and (temporal/temporal-column? col-name) (not= col-name "xt$id"))
-                                   (.vectorForName content-leaf col-name)
-                                   (.readerForKey doc-col col-name)))
-                               (.rowCount content-leaf))]
+(with-open [all (RootAllocator.)]
+  (TimeStampMilliTZVector. (types/col-type->field "foo" types/temporal-col-type) all))
 
-    (doseq [{:keys [^WalTrie trie trie-keys]} (vals (.tries wm))]
-      (-> (.compactLogs trie trie-keys)
-          (.accept (reify MemoryHashTrie$NodeVisitor
-                     (visitBranch [this branch]
-                       (run! #(.accept ^WalTrie$Node % this) (.children branch)))
 
-                     (visitLeaf [_ trie-leaf]
-                       (.add !leaves [trie-name trie-leaf]))))))
 
-    (TrieCursor. allocator rel (.iterator (.build !leaves)) temporal-min-range temporal-max-range col-names col-preds params)))
+
+(defn ->constant-time-stamp-vec [^BufferAllocator allocator name length]
+  (let [res (doto (TimeStampMilliTZVector. (types/col-type->field name types/temporal-col-type) allocator)
+              (.setInitialCapacity length)
+              (.setValueCount length))]
+    (dotimes [i length]
+      (.set res i 1 util/end-of-time-μs))
+    res))
+
+(do
+  ;; this cursor currently deals with point queries
+  ;; as-of point in valid-time and system-time
+  (deftype TrieCursor [^BufferAllocator allocator,
+                       ^IIndirectRelation log-relation,
+                       ^Iterator leaves,
+                       ^longs temporal-range,
+                       ^PersistentHashSet col-names
+                       ^Map col-preds
+                       params]
+    ICursor
+    (tryAdvance [_ c]
+      (if (.hasNext leaves)
+        (let [^WalTrie$Leaf trie-leaf (.next leaves)
+              !selection-vec (IntStream/builder)
+              data (.data trie-leaf)
+              iid-col (.vectorForName log-relation "xt$iid")
+              op-col (.vectorForName log-relation "op")
+              ^DenseUnionVector op-vec (.getVector op-col)
+              ^IStructReader put-vec (iv/->StructReader (.getStruct op-vec (byte 0)))
+              ;; valid-time-vec (.getVector (.readerForKey put-vec col-name))
+              ^IStructReader doc-vec (iv/->StructReader (.getVector (.readerForKey put-vec "xt$doc")))
+              cmp (cmp/->comparator iid-col iid-col :nulls-last)]
+          (dotimes [idx (alength data)]
+            (let [data-idx (aget data idx)]
+              (when (and (or (zero? idx) (not (zero? (.applyAsInt cmp (aget data (dec idx)) data-idx))))
+                         (zero? (.getTypeId op-vec (.getIndex op-col data-idx))))
+                (.add !selection-vec data-idx))))
+          (let [idxs (.toArray (.build !selection-vec))
+                ^IIndirectRelation rel
+                (-> (iv/->indirect-rel
+                     (->> (for [col-name (set/union (set (map util/str->normal-form-str col-names)) temporal/temporal-col-names)]
+                            (cond
+                              (= col-name "xt$system_from")
+                              (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
+
+                              ;; FIXME - hack for now
+                              (= col-name "xt$system_to")
+                              (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
+                                                 (int-array (range (alength idxs))))
+
+                              (temporal/temporal-column? col-name)
+                              (iv/->indirect-vec (.getVector (.readerForKey put-vec col-name)) idxs)
+
+                              :else
+                              (iv/->indirect-vec (.getVector (.readerForKey doc-vec col-name))
+                                                 (->> (map #(.getOffset op-vec %) idxs)
+                                                      (int-array)))))
+                          (filter some?))
+                     (alength idxs))
+                    (temporal-valid-time-filter temporal-range))]
+            (.accept c  (as-> (iv/->indirect-rel
+                               (for [col-name col-names
+                                     :let [normalized-name (util/str->normal-form-str col-name)]]
+                                 (->  (.vectorForName rel normalized-name)
+                                      (.withName col-name)))) rel
+                              (reduce (fn [^IIndirectRelation rel, ^IRelationSelector col-pred]
+                                        (iv/select rel (.select col-pred allocator rel params)))
+                                      rel
+                                      (vals col-preds)))))
+          true)
+        false))
+
+    (close [_]))
+
+  (defn- ->4r-cursor [^BufferAllocator allocator,^ILiveTableWatermark wm, col-names,
+                      ^longs temporal-range ^Map col-preds, params]
+    (prn col-preds)
+    (let [!leaves (Stream/builder)
+          log-relation (.logRelation wm)
+          log-trie (.logTrie wm)]
+
+      (let [^WalTrie trie (.logTrie wm)]
+        (-> (.compactLogs trie)
+            (.accept (reify WalTrie$NodeVisitor
+                       (visitBranch [this branch]
+                         (run! #(.accept ^WalTrie$Node % this) (.children branch)))
+
+                       (visitLeaf [_ trie-leaf]
+                         (.add !leaves trie-leaf))))))
+
+      (TrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params))))
 
 (defn tables-with-cols [basis ^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
   (let [{:keys [tx, after-tx]} basis
@@ -637,14 +697,12 @@
                                              (get-current-row-ids watermark basis))]
                        (->
                         (if (use-4r? watermark scan-opts basis)
-
                           (->4r-cursor allocator
                                        (some-> (.liveIndex watermark)
                                                (.liveTable normalized-table-name))
                                        (-> (set/union content-col-names temporal-col-names)
                                            (disj "_row_id"))
-                                       temporal-min-range
-                                       temporal-max-range
+                                       (->temporal-range temporal-min-range temporal-max-range)
                                        col-preds
                                        params)
 

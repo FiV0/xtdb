@@ -14,6 +14,7 @@
   (with-open [node (node/start-node {})]
     (xt/submit-tx node [[:put :xt_docs {:xt/id :foo, :col1 "foo1"}]
                         [:put :xt_docs {:xt/id :bar, :col1 "bar1", :col2 "bar2"}]
+                        ;; [:delete :xt_docs :bar]
                         [:put :xt_docs {:xt/id :foo, :col2 "baz2"}]])
 
     (t/is (= [{:xt/id :foo, :col2 "baz2"}
@@ -66,14 +67,15 @@
                          {:for-valid-time [:in #inst "2021" #inst "2022"]}]
                         ;; t2 invalid future
                         [:put :xt_docs {:xt/id :doc5}
-                         {:for-valid-time [:in #inst "3000" #inst "4000"]}]])
+                         {:for-valid-time [:in #inst "3000" #inst "4000"]}]]
+                  )
 
     (let [res (tu/query-ra '[:scan {:table xt_docs}
                              [xt/id
                               xt/valid-from xt/valid-to
                               xt/system-from xt/system-to]]
                            {:node node})]
-      (t/is (= #{:xt/id :xt/valid-from :xt/valid-to :xt/system-to :xt/system-from}
+      (t/is (= #{:xt/id :xt/valid-from :xt/valid-to :xt/system-from :xt/system-to}
                (-> res first keys set)))
 
       #_(t/is (= {:xt/id :doc, :xt/valid-from (util/->zdt #inst "2021"), :xt/valid-to (util/->zdt #inst "3000")}
@@ -81,7 +83,7 @@
 
     (t/is (= #{{:xt/id :doc1,
                 :app-time-start (util/->zdt #inst "2021"),
-                :app-time-end nil}
+                :app-time-end  (util/->zdt util/end-of-time) }
                {:xt/id :doc3,
                 :app-time-start (util/->zdt #inst "2021"),
                 :app-time-end (util/->zdt #inst "3000")}}
