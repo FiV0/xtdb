@@ -53,10 +53,13 @@
 
 (t/deftest test-past-valid-time-point
   (with-open [node (node/start-node {})]
-    (xt/submit-tx node [[:put :xt_docs {:xt/id :doc1 :v 1} {:for-valid-time [:in #inst "2015"]}]
-                        [:put :xt_docs {:xt/id :doc2 :v 1} {:for-valid-time [:in #inst "2015"]}]])
-    (xt/submit-tx node [[:put :xt_docs {:xt/id :doc1 :v 2} {:for-valid-time [:in #inst "2020"]}]])
-    (t/is (= #{{:v 1, :xt/id :doc2} {:v 1, :xt/id :doc1}}
+    (xt/submit-tx node [[:put :xt_docs {:xt/id :doc1 :v 1} {:for-valid-time [:from #inst "2015"]}]
+                        [:put :xt_docs {:xt/id :doc2 :v 1} {:for-valid-time [:from #inst "2015"]}]
+                        [:put :xt_docs {:xt/id :doc3 :v 1} {:for-valid-time [:from #inst "2015"]}]])
+    (xt/submit-tx node [[:put :xt_docs {:xt/id :doc1 :v 2} {:for-valid-time [:from #inst "2020"]}]
+                        [:put :xt_docs {:xt/id :doc2 :v 2} {:for-valid-time [:from #inst "2100"]}]
+                        [:delete :xt_docs :doc3]])
+    (t/is (= #{{:v 1, :xt/id :doc1} {:v 1, :xt/id :doc2} {:v 1, :xt/id :doc3}}
              (set (tu/query-ra '[:scan
                                  {:table xt_docs, :for-valid-time [:at #inst "2017"], :for-system-time nil}
                                  [xt/id v]]
@@ -67,7 +70,6 @@
                                  [xt/id v]]
                                {:node node}))))))
 
-
 (t/deftest test-scanning-temporal-cols
   (with-open [node (node/start-node {})]
     (xt/submit-tx node [ ;; t1 valid
@@ -76,7 +78,7 @@
                         ;; t1 invalid
                         [:put :xt_docs {:xt/id :doc2}
                          {:for-valid-time [:from #inst "3000"]}]
-                        ;; to test that the put-delete indices align correctly in
+                        ;; to test that the put-delete sub indices align correctly in
                         ;; the different scan cursors
                         [:put :xt_docs {:xt/id :foo}]
                         [:delete :xt_docs :foo]

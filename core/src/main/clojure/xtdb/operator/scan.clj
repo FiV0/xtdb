@@ -536,47 +536,62 @@
               op-col (.vectorForName log-relation "op")
               ^DenseUnionVector op-vec (.getVector op-col)
               ^IStructReader put-vec (iv/->StructReader (.getStruct op-vec (byte 0)))
+              ^IStructReader delete-vec (iv/->StructReader (.getStruct op-vec (byte 1)))
               ^IStructReader doc-vec (iv/->StructReader (.getVector (.readerForKey put-vec "xt$doc")))
               valid-time (aget temporal-range 0)
-              ^TimeStampMicroTZVector valid-from-vec (.getVector (.readerForKey put-vec "xt$valid_from"))
-              ^TimeStampMicroTZVector valid-to-vec (.getVector (.readerForKey put-vec "xt$valid_to"))
+              ^TimeStampMicroTZVector put-valid-from-vec (.getVector (.readerForKey put-vec "xt$valid_from"))
+              ^TimeStampMicroTZVector put-valid-to-vec (.getVector (.readerForKey put-vec "xt$valid_to"))
+              ^TimeStampMicroTZVector delete-valid-from-vec (.getVector (.readerForKey delete-vec "xt$valid_from"))
+              ^TimeStampMicroTZVector delete-valid-to-vec (.getVector (.readerForKey delete-vec "xt$valid_to"))
               cmp (cmp/->comparator iid-col iid-col :nulls-last)
               !new (volatile! true)]
           (dotimes [idx (alength data)]
             (let [data-idx (aget data idx)]
+              ;; new iid
               (when (and (pos? idx) (not (zero? (.applyAsInt cmp (aget data (dec idx)) data-idx))))
                 (vreset! !new true))
-              (when (and @!new (zero? (.getTypeId op-vec (.getIndex op-col data-idx)))
-                         ;; TODO one check might be enough here ?
-                         (<= (.getObject valid-from-vec (.getOffset op-vec data-idx)) valid-time)
-                         (<= valid-time (.getObject valid-to-vec (.getOffset op-vec data-idx))))
-                (vreset! !new false)
-                (.add !selection-vec data-idx))))
+              (when @!new
+                (case (.getTypeId op-vec (.getIndex op-col data-idx))
+                  ;; a put won
+                  0 (when (and ;; TODO one check might be enough here ?
+                           (<= (.getObject put-valid-from-vec (.getOffset op-vec data-idx)) valid-time)
+                           (<= valid-time (.getObject put-valid-to-vec (.getOffset op-vec data-idx))))
+                      (vreset! !new false)
+                      (.add !selection-vec data-idx))
+                  ;; a delete won
+                  1 (when (and ;; TODO one check might be enough here ?
+                           (<= (.getObject delete-valid-from-vec (.getOffset op-vec data-idx)) valid-time)
+                           (<= valid-time (.getObject delete-valid-to-vec (.getOffset op-vec data-idx))))
+                      (vreset! !new false))))))
           (let [idxs (.toArray (.build !selection-vec))
                 ^IIndirectRelation rel
-                (iv/->indirect-rel
-                 (for [col-name col-names
-                       :let [normalized-name (util/str->normal-form-str col-name)]]
-                   (-> (cond
-                         (= normalized-name "xt$system_from")
-                         (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
+                (-> (iv/->indirect-rel
+                     (->> (for [col-name col-names
+                                :let [normalized-name (util/str->normal-form-str col-name)]]
+                            (some-> (cond
+                                      (= normalized-name "xt$system_from")
+                                      (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
 
-                         ;; FIXME - hack for now
-                         (= normalized-name "xt$system_to")
-                         (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
-                                            (int-array (range (alength idxs))))
+                                      ;; FIXME - hack for now
+                                      (= normalized-name "xt$system_to")
+                                      (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
+                                                         (int-array (range (alength idxs))))
 
-                         (temporal/temporal-column? normalized-name)
-                         (iv/->indirect-vec (.getVector (.readerForKey put-vec normalized-name))
-                                            (->> (map #(.getOffset op-vec %) idxs)
-                                                 (int-array)))
+                                      (temporal/temporal-column? normalized-name)
+                                      (iv/->indirect-vec (.getVector (.readerForKey put-vec normalized-name))
+                                                         (->> (map #(.getOffset op-vec %) idxs)
+                                                              (int-array)))
 
-                         :else
-                         (iv/->indirect-vec (.getVector (.readerForKey doc-vec normalized-name))
-                                            (->> (map #(.getOffset op-vec %) idxs)
-                                                 (int-array))))
-                       (.withName col-name)))
-                 (alength idxs))]
+                                      :else
+                                      (let [col-vec (.readerForKey doc-vec normalized-name)]
+                                        (when-not (instance? NullIndirectVector col-vec)
+                                          (iv/->indirect-vec (.getVector (.readerForKey doc-vec normalized-name))
+                                                             (->> (map #(.getOffset op-vec %) idxs)
+                                                                  (int-array))))))
+                                    (.withName col-name)))
+                          (filter some?))
+                     (alength idxs))
+                    (iv/with-absent-cols allocator col-names))]
             (.accept c (reduce (fn [^IIndirectRelation rel, ^IRelationSelector col-pred]
                                  (iv/select rel (.select col-pred allocator rel params)))
                                rel
@@ -604,7 +619,9 @@
 
       (cond
         (at-now? scan-opts)
-        (NowTrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params)
+        ;; needed because of future updates
+        #_(NowTrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params)
+        (ValidPointTrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params)
 
         (at-valid-time-point? scan-opts)
         (ValidPointTrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params)
