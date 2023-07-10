@@ -22,8 +22,8 @@
            (java.util HashMap Iterator LinkedList List Map Queue Set)
            (java.util.function BiFunction Consumer)
            [java.util.stream IntStream Stream]
-           (org.apache.arrow.memory BufferAllocator RootAllocator)
-           (org.apache.arrow.vector BigIntVector VarBinaryVector)
+           (org.apache.arrow.memory BufferAllocator)
+           (org.apache.arrow.vector BigIntVector VarBinaryVector TimeStampMicroTZVector)
            (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
            (org.roaringbitmap IntConsumer RoaringBitmap)
            org.roaringbitmap.buffer.MutableRoaringBitmap
@@ -431,31 +431,6 @@
    (at-now? scan-opts) (>= (util/instant->micros (:current-time basis))
                            (util/instant->micros (:system-time (:tx basis))))))
 
-(comment
-  (require 'sc.api)
-  (sc.api/letsc [134 -18]
-                [trie-name (seq content-leaf)]
-                (first (seq content-leaf))
-                #_(.getObject (.getVector (first (seq content-leaf))) 0)
-
-                )
-
-  (sc.api/letsc [1 -1]
-                [(aget temporal-max-range temporal/app-time-start-idx)
-                 (aget temporal-min-range temporal/app-time-end-idx)]
-                #_(seq irel)
-                #_(.getVector valid-from-vec)
-
-
-                )
-
-  (prn (map util/micros->instant [min-valid-from (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i))
-                                  (.getObject (.getVector valid-to-vec) (.getIndex valid-to-vec i)) max-valid-to]))
-
-  (util/micros->instant 32503680000000000)
-
-  )
-
 (defn ->temporal-range [^longs temporal-min-range, ^longs temporal-max-range]
   (let [res (long-array 4)]
     (aset res 0 (aget temporal-max-range temporal/app-time-start-idx))
@@ -476,36 +451,14 @@
         (.add sel i)))
     (iv/select irel (.toArray (.build sel)))))
 
-(sc.api/letsc [4 -17]
-              #_doc-vec
-              ;; (.getVector doc-vec)
-              (->> (-> (.getStruct op-vec (byte 0))
-                       iv/->StructReader
-                       (.readerForKey "xt$doc")
-                       (.getVector )
-                       ;; (.getChild "col1" ValueVector)
-
-                       iv/->StructReader
-                       (.readerForKey "col1")
-                       #_type)
-                   #_(map #(.getName %)))
-              )
-
-(import '(org.apache.arrow.vector TimeStampMilliTZVector))
-
-(with-open [all (RootAllocator.)]
-  (TimeStampMilliTZVector. (types/col-type->field "foo" types/temporal-col-type) all))
-
-
-
-
 (defn ->constant-time-stamp-vec [^BufferAllocator allocator name length]
-  (let [res (doto (TimeStampMilliTZVector. (types/col-type->field name types/temporal-col-type) allocator)
+  (let [res (doto (TimeStampMicroTZVector. (types/col-type->field name types/temporal-col-type) allocator)
               (.setInitialCapacity length)
               (.setValueCount length))]
     (dotimes [i length]
       (.set res i 1 util/end-of-time-μs))
     res))
+
 
 (do
   ;; this cursor currently deals with point queries
@@ -527,37 +480,42 @@
               op-col (.vectorForName log-relation "op")
               ^DenseUnionVector op-vec (.getVector op-col)
               ^IStructReader put-vec (iv/->StructReader (.getStruct op-vec (byte 0)))
-              ;; valid-time-vec (.getVector (.readerForKey put-vec col-name))
               ^IStructReader doc-vec (iv/->StructReader (.getVector (.readerForKey put-vec "xt$doc")))
+              valid-time (aget temporal-range 0)
+              ^TimeStampMicroTZVector valid-from-vec (.getVector (.readerForKey put-vec "xt$valid_from"))
+              ^TimeStampMicroTZVector valid-to-vec (.getVector (.readerForKey put-vec "xt$valid_to"))
               cmp (cmp/->comparator iid-col iid-col :nulls-last)]
           (dotimes [idx (alength data)]
             (let [data-idx (aget data idx)]
               (when (and (or (zero? idx) (not (zero? (.applyAsInt cmp (aget data (dec idx)) data-idx))))
-                         (zero? (.getTypeId op-vec (.getIndex op-col data-idx))))
+                         (zero? (.getTypeId op-vec (.getIndex op-col data-idx)))
+                         ;; DEBUG one check might be enough here
+                         (and (<= (.getObject valid-from-vec (.getOffset op-vec data-idx)) valid-time)
+                              (<= valid-time (.getObject valid-to-vec (.getOffset op-vec data-idx)))))
                 (.add !selection-vec data-idx))))
           (let [idxs (.toArray (.build !selection-vec))
                 ^IIndirectRelation rel
-                (-> (iv/->indirect-rel
-                     (->> (for [col-name (set/union (set (map util/str->normal-form-str col-names)) temporal/temporal-col-names)]
-                            (cond
-                              (= col-name "xt$system_from")
-                              (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
+                (iv/->indirect-rel
+                 (for [col-name (set/union (set (map util/str->normal-form-str col-names)) temporal/temporal-col-names)]
+                   (cond
+                     (= col-name "xt$system_from")
+                     (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
 
-                              ;; FIXME - hack for now
-                              (= col-name "xt$system_to")
-                              (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
-                                                 (int-array (range (alength idxs))))
+                     ;; FIXME - hack for now
+                     (= col-name "xt$system_to")
+                     (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
+                                        (int-array (range (alength idxs))))
 
-                              (temporal/temporal-column? col-name)
-                              (iv/->indirect-vec (.getVector (.readerForKey put-vec col-name)) idxs)
+                     (temporal/temporal-column? col-name)
+                     (iv/->indirect-vec (.getVector (.readerForKey put-vec col-name))
+                                        (->> (map #(.getOffset op-vec %) idxs)
+                                             (int-array)))
 
-                              :else
-                              (iv/->indirect-vec (.getVector (.readerForKey doc-vec col-name))
-                                                 (->> (map #(.getOffset op-vec %) idxs)
-                                                      (int-array)))))
-                          (filter some?))
-                     (alength idxs))
-                    (temporal-valid-time-filter temporal-range))]
+                     :else
+                     (iv/->indirect-vec (.getVector (.readerForKey doc-vec col-name))
+                                        (->> (map #(.getOffset op-vec %) idxs)
+                                             (int-array)))))
+                 (alength idxs))]
             (.accept c  (as-> (iv/->indirect-rel
                                (for [col-name col-names
                                      :let [normalized-name (util/str->normal-form-str col-name)]]

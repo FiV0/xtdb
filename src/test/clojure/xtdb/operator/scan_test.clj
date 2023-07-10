@@ -59,6 +59,10 @@
                         ;; t1 invalid
                         [:put :xt_docs {:xt/id :doc2}
                          {:for-valid-time [:from #inst "3000"]}]
+                        ;; to test that the put-delete indices align correctly in
+                        ;; the different scan cursors
+                        [:put :xt_docs {:xt/id :foo}]
+                        [:delete :xt_docs :foo]
                         ;; t2 valid
                         [:put :xt_docs {:xt/id :doc3}
                          {:for-valid-time [:in #inst "2021" #inst "3000"]}]
@@ -67,8 +71,7 @@
                          {:for-valid-time [:in #inst "2021" #inst "2022"]}]
                         ;; t2 invalid future
                         [:put :xt_docs {:xt/id :doc5}
-                         {:for-valid-time [:in #inst "3000" #inst "4000"]}]]
-                  )
+                         {:for-valid-time [:in #inst "3000" #inst "4000"]}]])
 
     (let [res (tu/query-ra '[:scan {:table xt_docs}
                              [xt/id
