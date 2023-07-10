@@ -47,9 +47,26 @@
                         [:put :xt_docs {:xt/id :petr, :first-name "Petr", :last-name "Petrov"}]])
     (t/is (= [{:first-name "Ivan", :xt/id :ivan}]
              (tu/query-ra '[:scan
-                            {:table xt_docs, :for-valid-time nil, :for-system-time nil}
+                            {:table xt_docs,  :for-valid-time nil, :for-system-time nil}
                             [{first-name (= first-name "Ivan")} xt/id]]
                           {:node node})))))
+
+(t/deftest test-past-valid-time-point
+  (with-open [node (node/start-node {})]
+    (xt/submit-tx node [[:put :xt_docs {:xt/id :doc1 :v 1} {:for-valid-time [:in #inst "2015"]}]
+                        [:put :xt_docs {:xt/id :doc2 :v 1} {:for-valid-time [:in #inst "2015"]}]])
+    (xt/submit-tx node [[:put :xt_docs {:xt/id :doc1 :v 2} {:for-valid-time [:in #inst "2020"]}]])
+    (t/is (= #{{:v 1, :xt/id :doc2} {:v 1, :xt/id :doc1}}
+             (set (tu/query-ra '[:scan
+                                 {:table xt_docs, :for-valid-time [:at #inst "2017"], :for-system-time nil}
+                                 [xt/id v]]
+                               {:node node}))))
+    (t/is (= #{{:v 1, :xt/id :doc2} {:v 2, :xt/id :doc1}}
+             (set (tu/query-ra '[:scan
+                                 {:table xt_docs, :for-valid-time [:at :now], :for-system-time nil}
+                                 [xt/id v]]
+                               {:node node}))))))
+
 
 (t/deftest test-scanning-temporal-cols
   (with-open [node (node/start-node {})]

@@ -420,16 +420,25 @@
 
 (defn get-current-row-ids [^IWatermark watermark basis]
   (.getCurrentRowIds
-    ^xtdb.temporal.ITemporalRelationSource
-    (.temporalRootsSource watermark)
-    (util/instant->micros (:current-time basis))))
+   ^xtdb.temporal.ITemporalRelationSource
+   (.temporalRootsSource watermark)
+   (util/instant->micros (:current-time basis))))
+
+(defn- scan-op-point? [scan-op]
+  (= :at (first scan-op)))
+
+(defn- at-valid-time-point? [{:keys [for-valid-time for-system-time]}]
+  (and (or (nil? for-valid-time)
+           (scan-op-point? for-valid-time))
+       (or (nil? for-system-time)
+           (scan-op-at-now for-system-time))))
 
 (defn use-4r? [^IWatermark watermark scan-opts basis]
   (and
    (.txBasis watermark) (= (:tx basis)
                            (.txBasis watermark))
-   (at-now? scan-opts) (>= (util/instant->micros (:current-time basis))
-                           (util/instant->micros (:system-time (:tx basis))))))
+   (at-valid-time-point? scan-opts) (>= (util/instant->micros (:current-time basis))
+                                        (util/instant->micros (:system-time (:tx basis))))))
 
 (defn ->temporal-range [^longs temporal-min-range, ^longs temporal-max-range]
   (let [res (long-array 4)]
@@ -438,18 +447,6 @@
     (aset res 2 (aget temporal-max-range temporal/system-time-start-idx))
     (aset res 1 (aget temporal-min-range temporal/system-time-end-idx))
     res))
-
-(defn temporal-valid-time-filter ^IIndirectRelation [^IIndirectRelation irel, ^longs temporal-range]
-  (let [min-valid-from (aget temporal-range 0)
-        max-valid-to (aget temporal-range 1)
-        valid-from-vec (.vectorForName irel "xt$valid_from")
-        valid-to-vec (.vectorForName irel "xt$valid_to")
-        sel (IntStream/builder)]
-    (dotimes [i (.getValueCount valid-from-vec)]
-      (when (and (<= (.getObject (.getVector valid-from-vec) (.getIndex valid-from-vec i)) max-valid-to)
-                 (<= min-valid-from (.getObject (.getVector valid-to-vec) (.getIndex valid-to-vec i))))
-        (.add sel i)))
-    (iv/select irel (.toArray (.build sel)))))
 
 (defn ->constant-time-stamp-vec [^BufferAllocator allocator name length]
   (let [res (doto (TimeStampMicroTZVector. (types/col-type->field name types/temporal-col-type) allocator)
@@ -463,13 +460,13 @@
 (do
   ;; this cursor currently deals with point queries
   ;; as-of point in valid-time and system-time
-  (deftype TrieCursor [^BufferAllocator allocator,
-                       ^IIndirectRelation log-relation,
-                       ^Iterator leaves,
-                       ^longs temporal-range,
-                       ^PersistentHashSet col-names
-                       ^Map col-preds
-                       params]
+  (deftype NowTrieCursor [^BufferAllocator allocator,
+                          ^IIndirectRelation log-relation,
+                          ^Iterator leaves,
+                          ^longs temporal-range,
+                          ^PersistentHashSet col-names
+                          ^Map col-preds
+                          params]
     ICursor
     (tryAdvance [_ c]
       (if (.hasNext leaves)
@@ -481,17 +478,11 @@
               ^DenseUnionVector op-vec (.getVector op-col)
               ^IStructReader put-vec (iv/->StructReader (.getStruct op-vec (byte 0)))
               ^IStructReader doc-vec (iv/->StructReader (.getVector (.readerForKey put-vec "xt$doc")))
-              valid-time (aget temporal-range 0)
-              ^TimeStampMicroTZVector valid-from-vec (.getVector (.readerForKey put-vec "xt$valid_from"))
-              ^TimeStampMicroTZVector valid-to-vec (.getVector (.readerForKey put-vec "xt$valid_to"))
               cmp (cmp/->comparator iid-col iid-col :nulls-last)]
           (dotimes [idx (alength data)]
             (let [data-idx (aget data idx)]
               (when (and (or (zero? idx) (not (zero? (.applyAsInt cmp (aget data (dec idx)) data-idx))))
-                         (zero? (.getTypeId op-vec (.getIndex op-col data-idx)))
-                         ;; TODO one check might be enough here ?
-                         (and (<= (.getObject valid-from-vec (.getOffset op-vec data-idx)) valid-time)
-                              (<= valid-time (.getObject valid-to-vec (.getOffset op-vec data-idx)))))
+                         (zero? (.getTypeId op-vec (.getIndex op-col data-idx))))
                 (.add !selection-vec data-idx))))
           (let [idxs (.toArray (.build !selection-vec))
                 ^IIndirectRelation rel
@@ -527,9 +518,77 @@
 
     (close [_]))
 
+
+  (deftype ValidPointTrieCursor [^BufferAllocator allocator,
+                                 ^IIndirectRelation log-relation,
+                                 ^Iterator leaves,
+                                 ^longs temporal-range,
+                                 ^PersistentHashSet col-names
+                                 ^Map col-preds
+                                 params]
+    ICursor
+    (tryAdvance [_ c]
+      (if (.hasNext leaves)
+        (let [^WalTrie$Leaf trie-leaf (.next leaves)
+              !selection-vec (IntStream/builder)
+              data (.data trie-leaf)
+              iid-col (.vectorForName log-relation "xt$iid")
+              op-col (.vectorForName log-relation "op")
+              ^DenseUnionVector op-vec (.getVector op-col)
+              ^IStructReader put-vec (iv/->StructReader (.getStruct op-vec (byte 0)))
+              ^IStructReader doc-vec (iv/->StructReader (.getVector (.readerForKey put-vec "xt$doc")))
+              valid-time (aget temporal-range 0)
+              ^TimeStampMicroTZVector valid-from-vec (.getVector (.readerForKey put-vec "xt$valid_from"))
+              ^TimeStampMicroTZVector valid-to-vec (.getVector (.readerForKey put-vec "xt$valid_to"))
+              cmp (cmp/->comparator iid-col iid-col :nulls-last)
+              !new (volatile! true)]
+          (dotimes [idx (alength data)]
+            (let [data-idx (aget data idx)]
+              (when (and (pos? idx) (not (zero? (.applyAsInt cmp (aget data (dec idx)) data-idx))))
+                (vreset! !new true))
+              (when (and @!new (zero? (.getTypeId op-vec (.getIndex op-col data-idx)))
+                         ;; TODO one check might be enough here ?
+                         (<= (.getObject valid-from-vec (.getOffset op-vec data-idx)) valid-time)
+                         (<= valid-time (.getObject valid-to-vec (.getOffset op-vec data-idx))))
+                (vreset! !new false)
+                (.add !selection-vec data-idx))))
+          (let [idxs (.toArray (.build !selection-vec))
+                ^IIndirectRelation rel
+                (iv/->indirect-rel
+                 (for [col-name col-names
+                       :let [normalized-name (util/str->normal-form-str col-name)]]
+                   (-> (cond
+                         (= normalized-name "xt$system_from")
+                         (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
+
+                         ;; FIXME - hack for now
+                         (= normalized-name "xt$system_to")
+                         (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
+                                            (int-array (range (alength idxs))))
+
+                         (temporal/temporal-column? normalized-name)
+                         (iv/->indirect-vec (.getVector (.readerForKey put-vec normalized-name))
+                                            (->> (map #(.getOffset op-vec %) idxs)
+                                                 (int-array)))
+
+                         :else
+                         (iv/->indirect-vec (.getVector (.readerForKey doc-vec normalized-name))
+                                            (->> (map #(.getOffset op-vec %) idxs)
+                                                 (int-array))))
+                       (.withName col-name)))
+                 (alength idxs))]
+            (.accept c (reduce (fn [^IIndirectRelation rel, ^IRelationSelector col-pred]
+                                 (iv/select rel (.select col-pred allocator rel params)))
+                               rel
+                               (vals col-preds))))
+          true)
+        false))
+
+    (close [_]))
+
+
   (defn- ->4r-cursor [^BufferAllocator allocator,^ILiveTableWatermark wm, col-names,
-                      ^longs temporal-range ^Map col-preds, params]
-    (prn col-preds)
+                      ^longs temporal-range ^Map col-preds, params, scan-opts, basis]
     (let [!leaves (Stream/builder)
           log-relation (.logRelation wm)
           log-trie (.logTrie wm)]
@@ -543,7 +602,14 @@
                        (visitLeaf [_ trie-leaf]
                          (.add !leaves trie-leaf))))))
 
-      (TrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params))))
+      (cond
+        (at-now? scan-opts)
+        (NowTrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params)
+
+        (at-valid-time-point? scan-opts)
+        (ValidPointTrieCursor. allocator log-relation (.iterator (.build !leaves)) temporal-range col-names col-preds params)
+
+        :else (throw (ex-info "TODO - invalid 4r option" {}))))))
 
 (defn tables-with-cols [basis ^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
   (let [{:keys [tx, after-tx]} basis
@@ -659,7 +725,9 @@
                                            (disj "_row_id"))
                                        (->temporal-range temporal-min-range temporal-max-range)
                                        col-preds
-                                       params)
+                                       params
+                                       scan-opts
+                                       basis)
 
                           (ScanCursor. allocator metadata-mgr watermark
                                        content-col-names temporal-col-names col-preds
