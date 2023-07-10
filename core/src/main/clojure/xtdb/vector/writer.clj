@@ -17,6 +17,7 @@
            (org.apache.arrow.memory BufferAllocator)
            (org.apache.arrow.vector BigIntVector BitVector DecimalVector DateDayVector DateMilliVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot)
            (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
+           (org.apache.arrow.vector.types Types$MinorType)
            (org.apache.arrow.vector.types.pojo ArrowType$List ArrowType$Struct ArrowType$Union Field FieldType)
            xtdb.api.protocols.ClojureForm
            (xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth)
@@ -609,8 +610,10 @@
         (aset copier-mapping src-type-id
               ;; HACK to make things work for named duv legs
               (if-not (= child-field-name (types/col-type->field-name col-type))
-                (.rowCopier (.writerForField dest-col child-field)
-                            (.getVectorByType src-vec src-type-id))
+                (do #_(prn "child-field-name "child-field-name)
+                    #_(prn "col-type-name" (types/col-type->field-name col-type))
+                    (.rowCopier (.writerForField dest-col child-field)
+                                (.getVectorByType src-vec src-type-id)))
                 (.rowCopier (.writerForType dest-col col-type)
                             (.getVectorByType src-vec src-type-id))))))
 
@@ -806,7 +809,6 @@
                                  (apply types/merge-col-types))])
        (into {})))
 
-
 (defn ->vec-writer
   (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name]
    (->writer (-> (types/->field col-name types/dense-union-type false)
@@ -814,6 +816,20 @@
 
   (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name, col-type]
    (->writer (-> (types/col-type->field col-name col-type)
+                 (.createVector allocator)))))
+
+;; HACK to not squash union types
+(defn ->strict-vec-writer
+  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name]
+   (->writer (-> (types/->field col-name types/dense-union-type false)
+                 (.createVector allocator))))
+
+  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name, col-type]
+   (->writer (-> (if (types/union? col-type)
+                   ;; FIXME names are not preserved in the transformation, so this creates unnessary legs
+                   ;; (types/col-type->union-type col-name col-type)
+                   (types/->field col-name types/dense-union-type false)
+                   (types/col-type->field col-name col-type))
                  (.createVector allocator)))))
 
 (defn ->rel-copier ^xtdb.vector.IRowCopier [^IRelationWriter rel-wtr, ^IIndirectRelation in-rel]
@@ -863,6 +879,19 @@
                                     (populate-with-absents pos))
                                   (->vec-writer allocator col-name col-type)))))))
 
+      (writerForName [this col-name col-type strict]
+        (if-not strict
+          (.writerForName this col-name col-type)
+          (.computeIfAbsent writers col-name
+                            (reify Function
+                              (apply [_ col-name]
+                                (let [pos (.getPosition wp)]
+                                  (if (pos? pos)
+                                    (doto (->strict-vec-writer allocator col-name (types/merge-col-types col-type :absent))
+                                      (populate-with-absents pos))
+                                    (->strict-vec-writer allocator col-name col-type))))))))
+
+
       (rowCopier [this in-rel] (->rel-copier this in-rel))
 
       (iterator [_] (.iterator (.entrySet writers)))
@@ -870,6 +899,70 @@
       AutoCloseable
       (close [this]
         (run! util/try-close (vals this))))))
+
+(defn strict-field->col-type [^org.apache.arrow.vector.types.pojo.Field field]
+  (if (= (.getType field) (.getType Types$MinorType/DENSEUNION))
+    (types/union-type->col-type field)
+    (types/field->col-type field)))
+
+(defn ->strict-rel-copier ^xtdb.vector.IRowCopier [^IRelationWriter rel-wtr, ^IIndirectRelation in-rel]
+  (let [wp (.writerPosition rel-wtr)
+        copiers (vec (concat (for [^IIndirectVector in-vec in-rel]
+                               (.rowCopier in-vec (.writerForName rel-wtr (.getName in-vec)
+                                                                  ;; HACK to not squash union types
+                                                                  (let [field (.getField (.getVector in-vec))]
+                                                                    (strict-field->col-type field)))))
+
+                             (for [absent-col-name (set/difference (set (keys rel-wtr))
+                                                                   (into #{} (map #(.getName ^IIndirectVector %)) in-rel))
+                                   :let [!writer (delay
+                                                   (-> (.writerForName rel-wtr absent-col-name)
+                                                       (.writerForType :absent)))]]
+                               (reify IRowCopier
+                                 (copyRow [_ _src-idx]
+                                   (let [pos (.getPosition wp)]
+                                     (.writeNull ^IVectorWriter @!writer nil)
+                                     pos))))))]
+    (reify IRowCopier
+      (copyRow [_ src-idx]
+        (let [pos (.getPositionAndIncrement wp)]
+          (doseq [^IRowCopier copier copiers]
+            (.copyRow copier src-idx))
+          pos)))))
+
+(defn ->strict-rel-writer ^xtdb.vector.IRelationWriter [^BufferAllocator allocator]
+  (let [writers (LinkedHashMap.)
+        wp (IWriterPosition/build)]
+    (reify IRelationWriter
+      (writerPosition [_] wp)
+
+      (endRow [_] (.getPositionAndIncrement wp))
+
+      (writerForName [_ col-name]
+        (.computeIfAbsent writers col-name
+                          (reify Function
+                            (apply [_ col-name]
+                              (doto (->strict-vec-writer allocator col-name)
+                                (populate-with-absents (.getPosition wp)))))))
+
+      (writerForName [_ col-name col-type]
+        (.computeIfAbsent writers col-name
+                          (reify Function
+                            (apply [_ col-name]
+                              (let [pos (.getPosition wp)]
+                                (if (pos? pos)
+                                  (doto (->vec-writer allocator col-name (types/merge-col-types col-type :absent))
+                                    (populate-with-absents pos))
+                                  (->strict-vec-writer allocator col-name col-type)))))))
+
+      (rowCopier [this in-rel] (->strict-rel-copier this in-rel))
+
+      (iterator [_] (.iterator (.entrySet writers)))
+
+      AutoCloseable
+      (close [this]
+        (run! util/try-close (vals this))))))
+
 
 (defn root->writer ^xtdb.vector.IRelationWriter [^VectorSchemaRoot root]
   (let [writers (LinkedHashMap.)
@@ -958,6 +1051,15 @@
   (doseq [^IIndirectVector src-col src-rel
           :let [col-type (types/field->col-type (.getField (.getVector src-col)))
                 ^IVectorWriter vec-writer (.writerForName dest-rel (.getName src-col) col-type)]]
+    (append-vec vec-writer src-col))
+
+  (let [wp (.writerPosition dest-rel)]
+    (.setPosition wp (+ (.getPosition wp) (.rowCount src-rel)))))
+
+(defn strict-append-rel [^IRelationWriter dest-rel, ^IIndirectRelation src-rel]
+  (doseq [^IIndirectVector src-col src-rel
+          :let [col-type (strict-field->col-type (.getField (.getVector src-col)))
+                ^IVectorWriter vec-writer (.writerForName dest-rel (.getName src-col) col-type true)]]
     (append-vec vec-writer src-col))
 
   (let [wp (.writerPosition dest-rel)]

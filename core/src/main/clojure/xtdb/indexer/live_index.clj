@@ -74,6 +74,12 @@
                            ;; TODO metadata
                            (types/col-type->field "leaf" '[:struct {page-idx :i32}]))]))
 
+(defn ->leaf-obj-key [table-name chunk-idx]
+  (format "tables/%s/chunks/leaf-c%s.arrow" table-name chunk-idx))
+
+(defn ->trie-obj-key [table-name chunk-idx]
+  (format "tables/%s/chunks/trie-c%s.arrow" table-name chunk-idx))
+
 (defn- write-trie!
   ^java.util.concurrent.CompletableFuture [^BufferAllocator allocator, ^ObjectStore obj-store,
                                            ^String table-name, ^String chunk-idx,
@@ -99,7 +105,7 @@
             copier (vw/->rel-copier leaf-rel-wtr leaf-rel)]
 
         (-> (.putObject obj-store
-                        (format "tables/%s/chunks/leaf-c%s.arrow" table-name chunk-idx)
+                        (->leaf-obj-key table-name chunk-idx)
                         (util/build-arrow-ipc-byte-buffer leaf-vsr :file
                           (fn [write-batch!]
                             (.accept trie
@@ -141,7 +147,7 @@
               (fn [_]
                 (.syncRowCount trie-rel-wtr)
                 (.putObject obj-store
-                            (format "tables/%s/chunks/trie-c%s.arrow" table-name chunk-idx)
+                            (->trie-obj-key table-name chunk-idx)
                             (util/root->arrow-ipc-byte-buffer trie-vsr :file))))
 
             (.whenComplete (reify BiConsumer
@@ -287,7 +293,10 @@
           put-wtr (.writerForField op-wtr put-field)
           delete-wtr (.writerForField op-wtr delete-field)]
       (LiveTable. allocator object-store table-name rel
-                  (LiveTrie/emptyTrie (TrieKeys. (.getVector iid-wtr)))
+                  #_(LiveTrie/emptyTrie (TrieKeys. (.getVector iid-wtr)))
+                  (.build (doto (LiveTrie/builder (TrieKeys. (.getVector iid-wtr)))
+                            (.setPageLimit 4)
+                            (.setLogLimit 4)))
                   iid-wtr (.writerForName rel "xt$system_from")
                   put-wtr (.structKeyWriter put-wtr "xt$valid_from") (.structKeyWriter put-wtr "xt$valid_to") (.structKeyWriter put-wtr "xt$doc")
                   delete-wtr (.structKeyWriter delete-wtr "xt$valid_from") (.structKeyWriter delete-wtr "xt$valid_to")
