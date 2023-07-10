@@ -489,42 +489,39 @@
             (let [data-idx (aget data idx)]
               (when (and (or (zero? idx) (not (zero? (.applyAsInt cmp (aget data (dec idx)) data-idx))))
                          (zero? (.getTypeId op-vec (.getIndex op-col data-idx)))
-                         ;; DEBUG one check might be enough here
+                         ;; TODO one check might be enough here ?
                          (and (<= (.getObject valid-from-vec (.getOffset op-vec data-idx)) valid-time)
                               (<= valid-time (.getObject valid-to-vec (.getOffset op-vec data-idx)))))
                 (.add !selection-vec data-idx))))
           (let [idxs (.toArray (.build !selection-vec))
                 ^IIndirectRelation rel
                 (iv/->indirect-rel
-                 (for [col-name (set/union (set (map util/str->normal-form-str col-names)) temporal/temporal-col-names)]
-                   (cond
-                     (= col-name "xt$system_from")
-                     (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
+                 (for [col-name col-names
+                       :let [normalized-name (util/str->normal-form-str col-name)]]
+                   (-> (cond
+                         (= normalized-name "xt$system_from")
+                         (iv/->indirect-vec (.getVector (.vectorForName log-relation "xt$system_from")) idxs)
 
-                     ;; FIXME - hack for now
-                     (= col-name "xt$system_to")
-                     (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
-                                        (int-array (range (alength idxs))))
+                         ;; FIXME - hack for now
+                         (= normalized-name "xt$system_to")
+                         (iv/->indirect-vec (->constant-time-stamp-vec allocator "xt$system_to" (alength idxs))
+                                            (int-array (range (alength idxs))))
 
-                     (temporal/temporal-column? col-name)
-                     (iv/->indirect-vec (.getVector (.readerForKey put-vec col-name))
-                                        (->> (map #(.getOffset op-vec %) idxs)
-                                             (int-array)))
+                         (temporal/temporal-column? normalized-name)
+                         (iv/->indirect-vec (.getVector (.readerForKey put-vec normalized-name))
+                                            (->> (map #(.getOffset op-vec %) idxs)
+                                                 (int-array)))
 
-                     :else
-                     (iv/->indirect-vec (.getVector (.readerForKey doc-vec col-name))
-                                        (->> (map #(.getOffset op-vec %) idxs)
-                                             (int-array)))))
+                         :else
+                         (iv/->indirect-vec (.getVector (.readerForKey doc-vec normalized-name))
+                                            (->> (map #(.getOffset op-vec %) idxs)
+                                                 (int-array))))
+                       (.withName col-name)))
                  (alength idxs))]
-            (.accept c  (as-> (iv/->indirect-rel
-                               (for [col-name col-names
-                                     :let [normalized-name (util/str->normal-form-str col-name)]]
-                                 (->  (.vectorForName rel normalized-name)
-                                      (.withName col-name)))) rel
-                              (reduce (fn [^IIndirectRelation rel, ^IRelationSelector col-pred]
-                                        (iv/select rel (.select col-pred allocator rel params)))
-                                      rel
-                                      (vals col-preds)))))
+            (.accept c (reduce (fn [^IIndirectRelation rel, ^IRelationSelector col-pred]
+                                 (iv/select rel (.select col-pred allocator rel params)))
+                               rel
+                               (vals col-preds))))
           true)
         false))
 
