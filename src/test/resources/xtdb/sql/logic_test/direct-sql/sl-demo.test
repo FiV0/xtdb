@@ -576,7 +576,7 @@ SELECT *
 ----
 827
 2020-01-06T00:00Z[UTC]
-9999-12-31T23:59:59.999999Z[UTC]
+NULL
 
 statement ok
 INSERT INTO Prop_Owner (xt$id, customer_number, property_number, xt$valid_from)
