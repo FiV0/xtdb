@@ -224,18 +224,30 @@
 
     #_(tu/finish-chunk! node)
 
-    (t/is (= #{{:xt/system-from (util/->zdt #inst "3000")
-                :xt/system-to (util/->zdt #inst "3001")
-                :last_updated "tx1"}
-               {:xt/system-from (util/->zdt #inst "3001")
-                :xt/system-to (util/->zdt util/end-of-time)
-                :last_updated "tx1"}
-               {:xt/system-from (util/->zdt #inst "3001")
-                :xt/system-to (util/->zdt util/end-of-time)
-                :last_updated "tx2"}}
+    (t/is (= #{{:last_updated "tx2",
+                :xt/valid-from #time/zoned-date-time "3001-01-01T00:00Z[UTC]",
+                :xt/valid-to
+                #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]",
+                :xt/system-from #time/zoned-date-time "3001-01-01T00:00Z[UTC]",
+                :xt/system-to
+                #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}
+               {:last_updated "tx1",
+                :xt/valid-from #time/zoned-date-time "3000-01-01T00:00Z[UTC]",
+                :xt/valid-to #time/zoned-date-time "3001-01-01T00:00Z[UTC]",
+                :xt/system-from #time/zoned-date-time "3000-01-01T00:00Z[UTC]",
+                :xt/system-to
+                #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}
+               {:last_updated "tx1",
+                :xt/valid-from #time/zoned-date-time "3001-01-01T00:00Z[UTC]",
+                :xt/valid-to
+                #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]",
+                :xt/system-from #time/zoned-date-time "3000-01-01T00:00Z[UTC]",
+                :xt/system-to #time/zoned-date-time "3001-01-01T00:00Z[UTC]"}}
              (set (tu/query-ra '[:scan {:table foo, :for-system-time :all-time}
                                  [{xt/system-from (< xt/system-from #time/zoned-date-time "3002-01-01T00:00Z")}
                                   {xt/system-to (> xt/system-to #time/zoned-date-time "2999-01-01T00:00Z")}
+                                  xt/valid-from
+                                  xt/valid-to
                                   last_updated]]
                                {:node node :default-all-valid-time? true}))))))
 
