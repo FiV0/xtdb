@@ -16,7 +16,7 @@
             [xtdb.vector.writer :as vw]
             xtdb.watermark)
   (:import (clojure.lang IPersistentMap MapEntry )
-           (java.util ArrayList Arrays Iterator LinkedList List Map TreeSet NavigableSet)
+           (java.util ArrayList Arrays Iterator LinkedList List Map TreeSet NavigableSet ListIterator)
            (java.util.function IntConsumer)
            org.apache.arrow.memory.ArrowBuf
            org.apache.arrow.memory.BufferAllocator
@@ -190,11 +190,40 @@
 (deftype Rectangle [^long valid-from, ^long valid-to,
                     ^long sys-from, ^long sys-to])
 
+(comment
+
+  (do
+    (def ll (LinkedList.))
+    (.add ll 1)
+    (.add ll 2)
+    (def itr (.iterator ll))
+    (.next itr)
+    (.remove itr)
+    (.add itr 3)
+    ll
+
+    ;; (.remove itr)
+    ;; (.add itr 3)
+    ;; (.next itr)
+
+    ;; ll
+    ;; (.next itr)
+    )
+
+
+  )
+
+(defn- ranges-invariant [^LinkedList !ranges]
+  (every? true? (map (fn [^Rectangle r1 ^Rectangle r2] (<= (.valid-to r1) (.valid-from r2)))
+                     !ranges (rest !ranges))))
+
 (defn range-range-row-picker
   ^java.util.function.IntConsumer [^IRelationWriter out-rel, ^RelationReader leaf-rel
                                    col-names, ^longs temporal-ranges,
-                                   {:keys [^TreeSet !ranges skip-iid-ptr prev-iid-ptr current-iid-ptr
+                                   {:keys [^LinkedList !ranges skip-iid-ptr prev-iid-ptr current-iid-ptr
                                            point-point? range-point? range-range?]}]
+  (prn point-point?)
+  (prn range-range?)
   (let [iid-rdr (.readerForName leaf-rel "xt$iid")
         sys-from-rdr (.readerForName leaf-rel "xt$system_from")
         op-rdr (.readerForName leaf-rel "op")
@@ -255,53 +284,35 @@
     (letfn [(duplicate-ptr [^ArrowBufPointer dst, ^ArrowBufPointer src]
               (.set dst (.getBuf src) (.getOffset src) (.getLength src)))
 
-            (calc-new-ranges [^Rectangle new-r ^NavigableSet sub-range ^LinkedList !new-ranges
-                              valid-from valid-to system-from]
-              (if-not (.isEmpty sub-range)
-                (let [itr (.iterator sub-range)]
-                  (loop [^Rectangle prev nil ^Rectangle next (.next itr)]
-                    (let [new-valid-from (or (when prev (.valid-to prev)) valid-from)
-                          new-valid-to (or (when next (.valid-from next)) valid-to)]
-                      (when (< new-valid-from new-valid-to)
-                        (.add !new-ranges (Rectangle. new-valid-from new-valid-to
-                                                      system-from util/end-of-time-μs)))
-                      (when next
-                        (when range-range?
-                          (.add !new-ranges (Rectangle. (max valid-from (.valid-from next)) (min valid-to (.valid-to next))
-                                                        system-from (.sys-from next))))
-                        (recur next (and (.hasNext itr) (.next itr)))))))
-
-                (when (< valid-from valid-to)
-                  (.add !new-ranges new-r))))
-
-            (update-ranges [^Rectangle new-r ^NavigableSet sub-range ^LinkedList !new-ranges
-                            valid-from valid-to]
-              (cond
-                point-point?
-                (doseq [^Rectangle r !new-ranges]
-                  (.add !ranges r)
-                  (when (and (<= (.valid-from r) valid-from-upper) (< valid-from-upper (.valid-to r)))
-                    (duplicate-ptr skip-iid-ptr current-iid-ptr)))
-
-                range-point?
-                (doseq [r !new-ranges]
-                  (.add !ranges r))
-
-                range-range?
-                (let [^Rectangle lower (when (not (.isEmpty sub-range)) (.first sub-range))
-                      ^Rectangle upper (when (not (.isEmpty sub-range)) (.last sub-range))
-                      itr (.iterator sub-range)]
-                  (while (.hasNext itr)
-                    (.next itr)
-                    (.remove itr))
-                  (when (and lower (< (.valid-from lower) valid-from))
-                    (.add !ranges (Rectangle. (.valid-from lower) valid-from (.sys-from lower) (.sys-to lower))))
-                  (when (and upper (< valid-to (.valid-to upper)))
-                    (.add !ranges (Rectangle. valid-to (.valid-to upper) (.sys-from upper) (.sys-to upper))))
-                  (.add !ranges new-r))))]
+            (write-r [idx valid-from valid-to sys-from sys-to]
+              (when (and (<= valid-from-lower valid-from)
+                         (<= valid-from valid-from-upper)
+                         (<= valid-to-lower valid-to)
+                         (<= valid-to valid-to-upper)
+                         (<= sys-from-lower sys-from)
+                         (<= sys-from sys-from-upper)
+                         (<= sys-to-lower sys-to)
+                         (<= sys-to sys-to-upper)
+                         (not= valid-from valid-to)
+                         (not= sys-from sys-to))
+                (when point-point? (duplicate-ptr skip-iid-ptr current-iid-ptr))
+                (prn [idx valid-from valid-to sys-from sys-to])
+                (.startRow out-rel)
+                (doseq [^IRowCopier copier row-copiers]
+                  (.copyRow copier idx))
+                (doseq [^IVectorWriter valid-from-wtr valid-from-wtrs]
+                  (.writeLong valid-from-wtr valid-from))
+                (doseq [^IVectorWriter valid-to-wtr valid-to-wtrs]
+                  (.writeLong valid-to-wtr valid-to))
+                (doseq [^IVectorWriter sys-from-wtr sys-from-wtrs]
+                  (.writeLong sys-from-wtr sys-from))
+                (doseq [^IVectorWriter sys-to-wtr sys-to-wtrs]
+                  (.writeLong sys-to-wtr sys-to))
+                (.endRow out-rel)))]
 
       (reify IntConsumer
         (accept [_ idx]
+          (assert (ranges-invariant !ranges))
           (when-not (= skip-iid-ptr (.getPointer iid-rdr idx current-iid-ptr))
             (when-not (= prev-iid-ptr current-iid-ptr)
               (.clear !ranges)
@@ -309,67 +320,105 @@
 
             (if (= :evict (.getLeg op-rdr idx))
               (duplicate-ptr skip-iid-ptr current-iid-ptr)
-              (let [!new-ranges (LinkedList.)
-                    system-from (.getLong sys-from-rdr idx)]
+              (let [system-from (.getLong sys-from-rdr idx)]
                 (when (and (<= sys-from-lower system-from) (<= system-from sys-from-upper))
                   (case (.getLeg op-rdr idx)
                     :put
                     (let [valid-from (.getLong put-valid-from-rdr idx)
                           valid-to (.getLong put-valid-to-rdr idx)
-                          r1 (Rectangle. valid-from valid-to system-from util/end-of-time-μs)
-                          ^Rectangle lower-bound (.lower !ranges r1)
-                          sub-range (.subSet !ranges
-                                             (if (and lower-bound (< valid-from (.valid-to lower-bound))) lower-bound r1)
-                                             true
-                                             (Rectangle. valid-to -1 -1 -1)
-                                             false)]
-                      (calc-new-ranges r1 sub-range !new-ranges valid-from valid-to system-from)
+                          ^ListIterator itr (.iterator !ranges)]
+                      ;; skip ahead
+                      (while (and (.hasNext itr) (<= (.valid-to ^Rectangle (.next itr)) valid-from)))
 
-                      (doseq [^Rectangle r !new-ranges]
-                        (let [valid-from (.valid-from r)
-                              valid-to (.valid-to r)
-                              sys-from (.sys-from r)
-                              sys-to (.sys-to r)]
-                          (when (and (<= valid-from-lower valid-from)
-                                     (<= valid-from valid-from-upper)
-                                     (<= valid-to-lower valid-to)
-                                     (<= valid-to valid-to-upper)
-                                     (<= sys-from-lower sys-from)
-                                     (<= sys-from sys-from-upper)
-                                     (<= sys-to-lower sys-to)
-                                     (<= sys-to sys-to-upper)
-                                     (not= valid-from valid-to)
-                                     (not= sys-from sys-to))
-                            (.startRow out-rel)
-                            (doseq [^IRowCopier copier row-copiers]
-                              (.copyRow copier idx))
-                            (doseq [^IVectorWriter valid-from-wtr valid-from-wtrs]
-                              (.writeLong valid-from-wtr valid-from))
-                            (doseq [^IVectorWriter valid-to-wtr valid-to-wtrs]
-                              (.writeLong valid-to-wtr valid-to))
-                            (doseq [^IVectorWriter sys-from-wtr sys-from-wtrs]
-                              (.writeLong sys-from-wtr sys-from))
-                            (doseq [^IVectorWriter sys-to-wtr sys-to-wtrs]
-                              (.writeLong sys-to-wtr sys-to))
-                            (.endRow out-rel))))
+                      ;; potentially making earlier coming interval smaller
+                      (when (.hasPrevious itr)
+                        (let [^Rectangle prev (.previous itr)]
+                          (when (< (.valid-from prev) valid-from)
+                            (.add itr (Rectangle. (.valid-from prev) valid-from (.sys-from prev) (.sys-to prev))))))
 
-                      (update-ranges r1 sub-range !new-ranges valid-from valid-to))
+                      (let [^Rectangle last
+                            (loop [^Rectangle prev nil ^Rectangle next (when (.hasNext itr) (.next itr))]
+                              (prn [prev next])
+                              (if (or (nil? next) (< (.valid-from next) valid-to))
+                                (do
+                                  (when next (.remove itr))
+                                  (let [new-valid-from (or (when prev (.valid-to prev)) valid-from)
+                                        new-valid-to (or (when next (.valid-from next)) valid-to)]
+                                    (when (< new-valid-from new-valid-to)
+                                      (write-r idx new-valid-from new-valid-to system-from util/end-of-time-μs))
+                                    (when (and range-range? next)
+                                      (let [new-valid-from (max valid-from (.valid-from next))
+                                            new-valid-to (min valid-to (.valid-to next))]
+                                        (when (< new-valid-from new-valid-to)
+                                          (write-r idx
+                                                   new-valid-from new-valid-to
+                                                   system-from (.sys-from next)))))
+                                    (when (or prev next)
+                                      (recur next (when (.hasNext itr) (.next itr))))))
+                                prev))]
+
+                        ;; nothing intersected we write out the interval
+                        ;; (when-not last (write-r idx valid-from valid-to system-from util/end-of-time-μs))
+
+                        ;; in all cases we add the interval
+                        (.add itr (Rectangle. valid-from valid-to system-from util/end-of-time-μs))
+                        (when (and last (< valid-to (.valid-to last)))
+                          (.add itr (Rectangle. valid-to (.valid-to last) (.sys-from last) (.sys-to last))))))
 
                     :delete
                     (let [valid-from (.getLong delete-valid-from-rdr idx)
                           valid-to (.getLong delete-valid-to-rdr idx)
-                          r1 (Rectangle. valid-from valid-to system-from util/end-of-time-μs)
-                          ^Rectangle lower-bound (.lower !ranges r1)
-                          sub-range (.subSet !ranges
-                                             (if (and lower-bound (< valid-from (.valid-to lower-bound)))
-                                               lower-bound
-                                               r1)
-                                             true
-                                             (Rectangle. valid-to -1 -1 -1)
-                                             false)]
-                      (calc-new-ranges r1 sub-range !new-ranges valid-from valid-to system-from)
+                          ^ListIterator itr (.iterator !ranges)]
+                      ;; skip ahead
+                      (while (and (.hasNext itr) (<= (.valid-to ^Rectangle (.next itr)) valid-from)))
 
-                      (update-ranges r1 sub-range !new-ranges valid-from valid-to))))))))))))
+                      ;; potentially making earlier coming interval smaller
+                      (when (.hasPrevious itr)
+                        (let [^Rectangle prev (.previous itr)]
+                          (when (< (.valid-from prev) valid-from)
+                            (.add itr (Rectangle. (.valid-from prev) valid-from (.sys-from prev) (.sys-to prev))))))
+                      ;;
+                      (let [^Rectangle last
+                            (loop [^Rectangle prev nil ^Rectangle next (when (.hasNext itr) (.next itr))]
+                              (prn [prev next])
+                              (if (or (nil? next) (< (.valid-from next) valid-to))
+                                (do
+                                  (when next (.remove itr))
+                                  (when (or prev next)
+                                    (recur next (when (.hasNext itr) (.next itr)))))
+                                prev))]
+
+                        ;; nothing intersected we write out the interval
+                        ;; (when-not last (write-r idx valid-from valid-to system-from util/end-of-time-μs))
+
+                        ;; in all cases we add the interval
+                        (.add itr (Rectangle. valid-from valid-to system-from util/end-of-time-μs))
+                        (when (and last (< valid-to (.valid-to last)))
+                          (.add itr (Rectangle. valid-to (.valid-to last) (.sys-from last) (.sys-to last)))))
+                      #_(let [^Rectangle last
+                              (loop [^Rectangle prev nil ^Rectangle next (when (.hasNext itr) (.next itr))]
+                                (prn [prev next])
+                                (if (or (nil? next) (< (.valid-from next) valid-to))
+                                  (do
+                                    (when next (.remove itr))
+                                    (let [new-valid-from (or (when prev (.valid-to prev)) valid-from)
+                                          new-valid-to (or (when next (.valid-from next)) valid-to)]
+                                      (when (< new-valid-from new-valid-to)
+                                        (write-r idx new-valid-from new-valid-to system-from util/end-of-time-μs))
+                                      #_(when range-range?
+                                          (write-r idx
+                                                   (max valid-from (.valid-from next)) (min valid-to (.valid-to next))
+                                                   system-from (.sys-from next)))
+                                      (when (or prev next)
+                                        (recur next (when (.hasNext itr) (.next itr))))))
+                                  prev))]
+                          ;; nothing intersected we write out the interval
+                          ;; (when-not last (write-r idx valid-from valid-to system-from util/end-of-time-μs))
+
+                          ;; in all cases we add the interval
+                          (.add itr (Rectangle. valid-from valid-to system-from util/end-of-time-μs))
+                          (when (and last (< valid-to (.valid-to last)))
+                            (.add itr (Rectangle. valid-to (.valid-to last) (.sys-from last) (.sys-to last))))))))))))))))
 
 (deftype TrieCursor [^BufferAllocator allocator, arrow-leaves
                      ^Iterator merge-tasks, ^ints leaf-idxs, ^ints current-arrow-page-idxs
@@ -496,8 +545,7 @@
                     col-names col-preds
                     temporal-range
                     params
-                    (merge {:!ranges (TreeSet. (fn [^Rectangle r1 ^Rectangle r2]
-                                                 (< (.valid-from r1) (.valid-from r2))))
+                    (merge {:!ranges (LinkedList.)
                             :skip-iid-ptr (ArrowBufPointer.)
                             :prev-iid-ptr (ArrowBufPointer.)
                             :current-iid-ptr (ArrowBufPointer.)}

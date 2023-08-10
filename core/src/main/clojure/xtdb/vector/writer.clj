@@ -618,6 +618,7 @@
       (copyRow [_ src-idx]
         (try
           (let [type-id (.getTypeId src-vec src-idx)]
+            (prn type-id)
             (assert (not (neg? type-id)))
             (-> ^IRowCopier (aget copier-mapping type-id)
                 (.copyRow (.getOffset src-vec src-idx))))
