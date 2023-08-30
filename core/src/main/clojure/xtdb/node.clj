@@ -33,8 +33,9 @@
 
 (defn- validate-tx-ops [tx-ops]
   (try
-    (doseq [{:keys [op] :as tx-op} (txp/conform-tx-ops tx-ops)
-            :when (= :sql op)
+    (doseq [tx-op (->> tx-ops
+                       (filter (comp #{:sql} first))
+                       txp/conform-tx-ops)
             :let [{{:keys [sql]} :sql+params} tx-op]]
       (sql/parse-query sql))
     (catch Throwable e
