@@ -6,7 +6,8 @@
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw]
-            xtdb.watermark)
+            xtdb.watermark
+            [xtdb.trie.arrow-hash-trie :as aht])
   (:import (java.lang AutoCloseable)
            (java.nio ByteBuffer)
            java.nio.channels.WritableByteChannel
@@ -27,7 +28,8 @@
            (xtdb.trie ArrowHashTrie ArrowHashTrie$Leaf HashTrie HashTrie$Node LeafMergeQueue LeafMergeQueue$LeafPointer LiveHashTrie LiveHashTrie$Leaf)
            (xtdb.util WritableByteBufferChannel)
            (xtdb.vector IVectorReader RelationReader)
-           xtdb.watermark.ILiveTableWatermark))
+           xtdb.watermark.ILiveTableWatermark
+           (xtdb.trie.arrow_hash_trie IArrowHashTrieWrapper)))
 
 (def ^:private ^java.lang.ThreadLocal !msg-digest
   (ThreadLocal/withInitial
@@ -303,32 +305,34 @@
 
     (->merge-plan* (map #(some-> ^HashTrie % (.rootNode)) tries) [] 0)))
 
-(defn table-merge-plan [^IBufferPool buffer-pool, ^IMetadataManager metadata-mgr, table-tries,
+(defn open-arrow-trie-files [^IBufferPool buffer-pool table-tries]
+  (util/with-close-on-catch [trie-wrappers (ArrayList. (count table-tries))]
+    (doseq [{:keys [trie-file]} table-tries]
+      (with-open [^ArrowBuf buf @(.getBuffer buffer-pool trie-file)]
+        (let [{:keys [^VectorLoader loader root arrow-blocks]} (util/read-arrow-buf buf)]
+          (with-open [record-batch (util/->arrow-record-batch-view (first arrow-blocks) buf)]
+            (.load loader record-batch)
+            (.add trie-wrappers (aht/->ArrowHashTrieWrapper root (ArrowHashTrie/from root) trie-file))))))
+    trie-wrappers))
+
+(defn table-merge-plan [^IMetadataManager metadata-mgr, trie-wrappers,
                         trie-file->page-idxs-fn, ^ILiveTableWatermark live-table-wm]
 
-  (util/with-open [trie-roots (ArrayList. (count table-tries))]
-    ;; TODO these could be kicked off asynchronously
-    (let [tries (cond-> (vec (for [{:keys [trie-file]} table-tries]
-                               (with-open [^ArrowBuf buf @(.getBuffer buffer-pool trie-file)]
-                                 (let [{:keys [^VectorLoader loader root arrow-blocks]} (util/read-arrow-buf buf)]
-                                   (with-open [record-batch (util/->arrow-record-batch-view (first arrow-blocks) buf)]
-                                     (.load loader record-batch)
-                                     (.add trie-roots root)
-                                     {:trie (ArrowHashTrie/from root)
-                                      :trie-file trie-file
-                                      :page-idxs (trie-file->page-idxs-fn trie-file)})))))
-                  live-table-wm (conj {:trie (.compactLogs (.liveTrie live-table-wm))}))
-          trie-files (mapv :trie-file tries)
-          page-idxs (mapv :page-idxs tries)]
-      (letfn [(page-idx-pred [ordinal ^long page-idx]
-                (when-let [^RoaringBitmap page-idxs (nth page-idxs ordinal)]
-                  (.contains page-idxs page-idx)))
-              (iid-bloom-bitmap ^ImmutableRoaringBitmap [ordinal page-idx]
-                @(meta/with-metadata metadata-mgr (nth trie-files ordinal)
+  (let [tries (cond-> (vec (for [^IArrowHashTrieWrapper trie-wrapper trie-wrappers]
+                             {:trie (.arrowHashTrie trie-wrapper)
+                              :page-idxs (trie-file->page-idxs-fn (.trieFile trie-wrapper))}))
+                live-table-wm (conj {:trie (.compactLogs (.liveTrie live-table-wm))}))
+        page-idxs (mapv :page-idxs tries)]
+    (letfn [(page-idx-pred [ordinal ^long page-idx]
+              (when-let [^RoaringBitmap page-idxs (nth page-idxs ordinal)]
+                (.contains page-idxs page-idx)))
+            (iid-bloom-bitmap ^ImmutableRoaringBitmap [ordinal page-idx]
+              (let [^IArrowHashTrieWrapper trie-wrapper (nth trie-wrappers ordinal)]
+                @(meta/with-metadata metadata-mgr (.trieReader trie-wrapper) (.trieFile trie-wrapper)
                    (util/->jfn
                      (fn [^ITableMetadata table-meta]
-                       (.iidBloomBitmap table-meta page-idx)))))]
-        (->merge-plan (mapv :trie tries) page-idx-pred iid-bloom-bitmap)))))
+                       (.iidBloomBitmap table-meta page-idx))))))]
+      (->merge-plan (mapv :trie tries) page-idx-pred iid-bloom-bitmap))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILeafLoader

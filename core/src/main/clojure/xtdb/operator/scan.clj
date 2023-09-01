@@ -62,10 +62,11 @@
 
 (def ^:dynamic *column->pushdown-bloom* {})
 
-(defn- filter-pushdown-bloom-page-idxs [^IMetadataManager metadata-manager buf-key ^String col-name ^RoaringBitmap page-idxs]
+(defn- filter-pushdown-bloom-page-idxs [^IMetadataManager metadata-manager ^String col-name
+                                        {:keys [buf-key trie-rdr] :as _trie-match} ^RoaringBitmap page-idxs]
   (if-let [^MutableRoaringBitmap pushdown-bloom (get *column->pushdown-bloom* (symbol col-name))]
     ;; would prefer this `^long` to be on the param but can only have 4 params in a primitive hinted function in Clojure
-    @(meta/with-metadata metadata-manager buf-key
+    @(meta/with-metadata metadata-manager trie-rdr buf-key
        (util/->jfn
          (fn [^ITableMetadata table-metadata]
            (let [metadata-rdr (.metadataReader table-metadata)
@@ -482,9 +483,9 @@
   (close [_]
     (util/close leaves)))
 
-(defn filter-trie-match [^IMetadataManager metadata-mgr col-names {:keys [buf-key page-idxs] :as trie-match}]
+(defn filter-trie-match [^IMetadataManager metadata-mgr col-names {:keys [page-idxs] :as trie-match}]
   (when-let [page-idxs (reduce (fn [page-idxs col-name]
-                                 (if-let [page-idxs (filter-pushdown-bloom-page-idxs metadata-mgr buf-key col-name page-idxs)]
+                                 (if-let [page-idxs (filter-pushdown-bloom-page-idxs metadata-mgr col-name trie-match page-idxs)]
                                    page-idxs
                                    (reduced nil)))
                                page-idxs col-names)]
@@ -593,29 +594,31 @@
                                                    (or fvt (if default-all-valid-time? [:all-time] [:at [:now :now]])))))
                            ^ILiveTableWatermark live-table-wm (some-> (.liveIndex watermark) (.liveTable normalized-table-name))
                            table-tries (->> (trie/list-table-trie-files object-store normalized-table-name)
-                                            (trie/current-table-tries))
-                           trie-file->page-idxs (->> (meta/matching-tries metadata-mgr (map :trie-file table-tries) metadata-pred)
-                                                     (filter #(not-empty (set/intersection normalized-col-names (:col-names %))))
-                                                     (map (partial filter-trie-match metadata-mgr col-names))
-                                                     (remove nil?)
-                                                     (into {} (map (juxt :buf-key :page-idxs))))
-                           trie-file->page-idxs-fn (fn [trie-file] (get trie-file->page-idxs trie-file))
-                           merge-plan (trie/table-merge-plan buffer-pool metadata-mgr table-tries trie-file->page-idxs-fn live-table-wm)]
+                                            (trie/current-table-tries))]
 
-                       ;; The consumers for different leafs need to share some state so the logic of how to advance
-                       ;; is correct. For example if the `skip-iid-ptr` gets set in one leaf consumer it should also affect
-                       ;; the skipping in another leaf consumer.
+                       (util/with-open [trie-wrappers (trie/open-arrow-trie-files buffer-pool table-tries)]
+                         (let [trie-file->page-idxs (->> (meta/matching-tries metadata-mgr trie-wrappers metadata-pred)
+                                                         (map (partial filter-trie-match metadata-mgr col-names))
+                                                         (filter #(not-empty (set/intersection normalized-col-names (:col-names %))))
+                                                         (remove nil?)
+                                                         (into {} (map (juxt :buf-key :page-idxs))))
+                               trie-file->page-idxs-fn (fn [trie-file] (get trie-file->page-idxs trie-file))
+                               merge-plan (trie/table-merge-plan metadata-mgr trie-wrappers trie-file->page-idxs-fn live-table-wm)]
 
-                       (util/with-close-on-catch [leaves (trie/open-leaves buffer-pool normalized-table-name table-tries live-table-wm)]
-                         (->TrieCursor allocator leaves (.iterator (let [^Iterable c (or (merge-plan->tasks merge-plan) [])] c))
-                                       col-names col-preds
-                                       (->temporal-range params basis scan-opts)
-                                       params
-                                       (cond-> {:ev-resolver (event-resolver)
-                                                :skip-iid-ptr (ArrowBufPointer.)
-                                                :prev-iid-ptr (ArrowBufPointer.)
-                                                :current-iid-ptr (ArrowBufPointer.)}
-                                         (at-point-point? scan-opts) (assoc :point-point? true))))))}))))
+                           ;; The consumers for different leafs need to share some state so the logic of how to advance
+                           ;; is correct. For example if the `skip-iid-ptr` gets set in one leaf consumer it should also affect
+                           ;; the skipping in another leaf consumer.
+
+                           (util/with-close-on-catch [leaves (trie/open-leaves buffer-pool normalized-table-name table-tries live-table-wm)]
+                             (->TrieCursor allocator leaves (.iterator (let [^Iterable c (or (merge-plan->tasks merge-plan) [])] c))
+                                           col-names col-preds
+                                           (->temporal-range params basis scan-opts)
+                                           params
+                                           (cond-> {:ev-resolver (event-resolver)
+                                                    :skip-iid-ptr (ArrowBufPointer.)
+                                                    :prev-iid-ptr (ArrowBufPointer.)
+                                                    :current-iid-ptr (ArrowBufPointer.)}
+                                             (at-point-point? scan-opts) (assoc :point-point? true))))))))}))))
 
 (defmethod lp/emit-expr :scan [scan-expr {:keys [^IScanEmitter scan-emitter scan-col-types, param-types]}]
   (.emitScan scan-emitter scan-expr scan-col-types param-types))
