@@ -33,7 +33,8 @@
            xtdb.operator.IRelationSelector
            (xtdb.trie LeafMergeQueue$LeafPointer)
            (xtdb.vector IRelationWriter IRowCopier IVectorReader IVectorWriter RelationReader)
-           (xtdb.watermark ILiveTableWatermark IWatermark IWatermarkSource Watermark)))
+           (xtdb.watermark ILiveTableWatermark IWatermark IWatermarkSource Watermark)
+           (xtdb.trie.arrow_hash_trie IArrowHashTrieWrapper)))
 
 (s/def ::table symbol?)
 
@@ -597,7 +598,12 @@
                                             (trie/current-table-tries))]
 
                        (util/with-open [trie-wrappers (trie/open-arrow-trie-files buffer-pool table-tries)]
-                         (let [trie-file->page-idxs (->> (meta/matching-tries metadata-mgr trie-wrappers metadata-pred)
+                         (let [page-idx-restrictions (if iid-bb
+                                                       (->> (mapv #(.arrowHashTrie ^IArrowHashTrieWrapper %) trie-wrappers)
+                                                            (trie/get-iid-page-idxs iid-bb)
+                                                            (mapv (comp hash-set :page-idx)))
+                                                       (repeat (count trie-wrappers) nil))
+                               trie-file->page-idxs (->> (meta/matching-tries metadata-mgr trie-wrappers page-idx-restrictions metadata-pred)
                                                          (map (partial filter-trie-match metadata-mgr col-names))
                                                          (filter #(not-empty (set/intersection normalized-col-names (:col-names %))))
                                                          (remove nil?)

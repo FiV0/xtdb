@@ -376,8 +376,8 @@
 (defn with-metadata [^IMetadataManager metadata-mgr, ^RelationReader trie-rdr, ^String buf-key, ^Function f]
   (.withMetadata metadata-mgr trie-rdr buf-key f))
 
-(defn matching-tries [^IMetadataManager metadata-mgr, trie-wrappers, ^IMetadataPredicate metadata-pred]
-  (->> (for [^IArrowHashTrieWrapper trie-wrapper trie-wrappers
+(defn matching-tries [^IMetadataManager metadata-mgr, trie-wrappers, page-idx-restrictions, ^IMetadataPredicate metadata-pred]
+  (->> (for [[^IArrowHashTrieWrapper trie-wrapper page-idx-restriction] (map vector trie-wrappers page-idx-restrictions)
              :let [trie-reader (.trieReader trie-wrapper)
                    buf-key (.trieFile trie-wrapper)]]
          (with-metadata metadata-mgr (.trieReader trie-wrapper) buf-key
@@ -386,7 +386,8 @@
                (let [pred (.build metadata-pred table-metadata)
                      page-idxs (RoaringBitmap.)]
                  (dotimes [page-idx (.pageCount table-metadata)]
-                   (when (.test pred page-idx)
+                   (when (and (or (nil? page-idx-restriction) (contains? page-idx-restriction page-idx))
+                              (.test pred page-idx))
                      (.add page-idxs page-idx)))
                  (when-not (.isEmpty page-idxs)
                    (->TrieMatch buf-key trie-reader page-idxs (.columnNames table-metadata))))))))

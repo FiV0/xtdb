@@ -2,7 +2,8 @@
   (:require [clojure.test :as t :refer [deftest]]
             [clojure.walk :as walk]
             [xtdb.test-util :as tu]
-            [xtdb.trie :as trie])
+            [xtdb.trie :as trie]
+            [xtdb.util :as util])
   (:import (clojure.lang MapEntry)
            (org.apache.arrow.memory RootAllocator)
            (org.roaringbitmap RoaringBitmap)
@@ -42,6 +43,17 @@
                                        (if (and (map-entry? x) (= :path (key x)))
                                          (MapEntry/create :path (into [] (val x)))
                                          x))))))))))
+
+(deftest test-get-iid-page-idxs
+  (with-open [al (RootAllocator.)
+              log-root1 (tu/open-arrow-hash-trie-root al [[nil 0 nil [nil 1 nil 2]] 3 nil 4])
+              log-root2 (tu/open-arrow-hash-trie-root al [0 nil nil 1])
+              log-root3 (tu/open-arrow-hash-trie-root al [[nil nil nil 0] nil 2 3])
+              log-root4 (tu/open-arrow-hash-trie-root al [nil nil 0 nil])]
+    (let [search-uuid-bb (util/uuid->byte-buffer #uuid "03100000-0000-0000-0000-000000000000")]
+      (t/is (= [{:page-idx 1} {:page-idx 0} {:page-idx 0} nil]
+               (trie/get-iid-page-idxs search-uuid-bb
+                                       (mapv #(ArrowHashTrie/from %) [log-root1 log-root2 log-root3 log-root4])))))))
 
 (t/deftest test-selects-current-tries
   (letfn [(f [table-tries]
