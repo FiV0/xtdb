@@ -8,6 +8,7 @@
             [xtdb.util :as util]
             [xtdb.vector.writer :as vw])
   (:import (java.util LinkedList)
+           (java.util.function IntPredicate)
            xtdb.operator.IRaQuerySource
            xtdb.operator.IRelationSelector
            (xtdb.operator.scan RowConsumer)
@@ -655,11 +656,14 @@
   (tu/finish-chunk! tu/*node*)
 
   (let [!page-idxs-cnt (atom 0)
-        old-filter-trie-match scan/filter-trie-match]
-    (with-redefs [scan/filter-trie-match (fn [& args]
-                                           (let [res (apply old-filter-trie-match args)]
-                                             (when res (swap! !page-idxs-cnt inc))
-                                             res))]
+        old-filter-trie-match scan/filter-pushdown-bloom-page-idxs]
+    (with-redefs [scan/filter-pushdown-bloom-page-idxs (fn [& args]
+                                                         (let [^IntPredicate pred (apply old-filter-trie-match args)]
+                                                           (reify IntPredicate
+                                                             (test [_ page-idx]
+                                                               (let [res (.test pred page-idx)]
+                                                                 (when res (swap! !page-idxs-cnt inc))
+                                                                 res)))))]
       (t/is (= [{:col "toto"}]
                (tu/query-ra
                 '[:join [{col col}]

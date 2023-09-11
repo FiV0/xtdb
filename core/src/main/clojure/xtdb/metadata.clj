@@ -7,16 +7,17 @@
             xtdb.expression.temporal
             xtdb.object-store
             [xtdb.transit :as xt.transit]
+            [xtdb.trie.arrow-hash-trie]
             [xtdb.types :as types]
             [xtdb.util :as util]
-            [xtdb.vector.writer :as vw]
-            [xtdb.trie.arrow-hash-trie])
-  (:import (java.io ByteArrayInputStream ByteArrayOutputStream)
+            [xtdb.vector.writer :as vw])
+  (:import (clojure.lang IFn)
+           (java.io ByteArrayInputStream ByteArrayOutputStream)
            java.lang.AutoCloseable
            java.nio.ByteBuffer
            (java.util HashMap HashSet Map NavigableMap Set TreeMap)
            (java.util.concurrent ConcurrentHashMap)
-           (java.util.function Function)
+           (java.util.function Function IntPredicate)
            (java.util.stream IntStream)
            (org.apache.arrow.memory ArrowBuf)
            (org.apache.arrow.vector FieldVector)
@@ -53,8 +54,6 @@
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
 (definterface IMetadataPredicate
   (^java.util.function.IntPredicate build [^xtdb.metadata.ITableMetadata tableMetadata]))
-
-(defrecord TrieMatch [^String buf-key, ^RelationReader trie-rdr, ^RoaringBitmap page-idxs, ^Set col-names])
 
 (defn- obj-key->chunk-idx [obj-key]
   (some-> (second (re-matches #"chunk-metadata/(\p{XDigit}+).transit.json" obj-key))
@@ -365,17 +364,12 @@
 (defmethod ig/halt-key! ::metadata-manager [_ mgr]
   (util/try-close mgr))
 
-(defn matching-tries [^IMetadataManager metadata-mgr, trie-wrappers, page-idx-restrictions, ^IMetadataPredicate metadata-pred]
-  (->> (for [[^IArrowHashTrieWrapper trie-wrapper page-idx-restriction] (map vector trie-wrappers page-idx-restrictions)
-             :let [trie-reader (.trieReader trie-wrapper)
-                   buf-key (.trieFile trie-wrapper)]]
+(defrecord TrieMatch [^String buf-key, ^IntPredicate page-idx-pred, ^IFn iid-bloom-bitmap-fn, ^Set col-names])
+
+(defn matching-tries [^IMetadataManager metadata-mgr, trie-wrappers, ^IMetadataPredicate metadata-pred]
+  (->> (for [^IArrowHashTrieWrapper trie-wrapper trie-wrappers
+             :let [buf-key (.trieFile trie-wrapper)]]
          (let [^ITableMetadata table-metadata (.tableMetadata metadata-mgr (.trieReader trie-wrapper) buf-key)
-               pred (.build metadata-pred table-metadata)
-               page-idxs (RoaringBitmap.)]
-           (dotimes [page-idx (.pageCount table-metadata)]
-             (when (and (or (nil? page-idx-restriction) (contains? page-idx-restriction page-idx))
-                        (.test pred page-idx))
-               (.add page-idxs page-idx)))
-           (when-not (.isEmpty page-idxs)
-             (->TrieMatch buf-key trie-reader page-idxs (.columnNames table-metadata)))))
+               page-idx-pred (.build metadata-pred table-metadata)]
+           (->TrieMatch buf-key page-idx-pred #(.iidBloomBitmap table-metadata %) (.columnNames table-metadata))))
        vec))
