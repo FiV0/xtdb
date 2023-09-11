@@ -15,9 +15,8 @@
            java.lang.AutoCloseable
            java.nio.ByteBuffer
            (java.util HashMap HashSet Map NavigableMap Set TreeMap)
-           (java.util.concurrent CompletableFuture ConcurrentHashMap)
+           (java.util.concurrent ConcurrentHashMap)
            (java.util.function Function)
-           java.util.function.Supplier
            (java.util.stream IntStream)
            (org.apache.arrow.memory ArrowBuf)
            (org.apache.arrow.vector FieldVector)
@@ -46,8 +45,7 @@
 (definterface IMetadataManager
   (^void finishChunk [^long chunkIdx, newChunkMetadata])
   (^java.util.NavigableMap chunksMetadata [])
-  (^java.util.concurrent.CompletableFuture  withMetadata [^xtdb.vector.RelationReader trie-rdr ^String bufKey, ^java.util.function.Function #_<ITableMetadata> f])
-  (invalidateMetadata [^String bufKey])
+  (^xtdb.metadata.ITableMetadata tableMetadata [^xtdb.vector.RelationReader trie-rdr ^String bufKey])
   (columnTypes [^String tableName])
   (columnType [^String tableName, ^String colName])
   (allColumnTypes []))
@@ -306,20 +304,14 @@
     (set! (.col-types this) (merge-col-types col-types new-chunk-metadata))
     (.put chunks-metadata chunk-idx new-chunk-metadata))
 
-  (withMetadata [_ trie-rdr buf-key f]
-    (CompletableFuture/supplyAsync
-     (reify Supplier
-       (get [_]
-         (let [^IVectorReader metadata-reader (.metadataReader (.typeIdReader (.readerForName trie-rdr "nodes") (byte 2)))]
-           (.apply f (->table-metadata metadata-reader
-                                       (.computeIfAbsent table-metadata-idxs
-                                                         buf-key
-                                                         (reify Function
-                                                           (apply [_ _]
-                                                             (->table-metadata-idxs metadata-reader)))))))))))
-
-  (invalidateMetadata [_ buf-key]
-    (.remove table-metadata-idxs buf-key))
+  (tableMetadata [_ trie-rdr buf-key]
+    (let [^IVectorReader metadata-reader (.metadataReader (.typeIdReader (.readerForName trie-rdr "nodes") (byte 2)))]
+      (->table-metadata metadata-reader
+                        (.computeIfAbsent table-metadata-idxs
+                                          buf-key
+                                          (reify Function
+                                            (apply [_ _]
+                                              (->table-metadata-idxs metadata-reader)))))))
 
   (chunksMetadata [_] chunks-metadata)
 
@@ -373,24 +365,17 @@
 (defmethod ig/halt-key! ::metadata-manager [_ mgr]
   (util/try-close mgr))
 
-(defn with-metadata [^IMetadataManager metadata-mgr, ^RelationReader trie-rdr, ^String buf-key, ^Function f]
-  (.withMetadata metadata-mgr trie-rdr buf-key f))
-
 (defn matching-tries [^IMetadataManager metadata-mgr, trie-wrappers, page-idx-restrictions, ^IMetadataPredicate metadata-pred]
   (->> (for [[^IArrowHashTrieWrapper trie-wrapper page-idx-restriction] (map vector trie-wrappers page-idx-restrictions)
              :let [trie-reader (.trieReader trie-wrapper)
                    buf-key (.trieFile trie-wrapper)]]
-         (with-metadata metadata-mgr (.trieReader trie-wrapper) buf-key
-           (util/->jfn
-             (fn [^ITableMetadata table-metadata]
-               (let [pred (.build metadata-pred table-metadata)
-                     page-idxs (RoaringBitmap.)]
-                 (dotimes [page-idx (.pageCount table-metadata)]
-                   (when (and (or (nil? page-idx-restriction) (contains? page-idx-restriction page-idx))
-                              (.test pred page-idx))
-                     (.add page-idxs page-idx)))
-                 (when-not (.isEmpty page-idxs)
-                   (->TrieMatch buf-key trie-reader page-idxs (.columnNames table-metadata))))))))
-       vec
-       (into [] (keep deref))
-       (util/rethrowing-cause)))
+         (let [^ITableMetadata table-metadata (.tableMetadata metadata-mgr (.trieReader trie-wrapper) buf-key)
+               pred (.build metadata-pred table-metadata)
+               page-idxs (RoaringBitmap.)]
+           (dotimes [page-idx (.pageCount table-metadata)]
+             (when (and (or (nil? page-idx-restriction) (contains? page-idx-restriction page-idx))
+                        (.test pred page-idx))
+               (.add page-idxs page-idx)))
+           (when-not (.isEmpty page-idxs)
+             (->TrieMatch buf-key trie-reader page-idxs (.columnNames table-metadata)))))
+       vec))

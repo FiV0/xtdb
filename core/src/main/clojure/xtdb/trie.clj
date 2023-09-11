@@ -369,11 +369,9 @@
               (when-let [^RoaringBitmap page-idxs (nth page-idxs ordinal)]
                 (.contains page-idxs page-idx)))
             (iid-bloom-bitmap ^ImmutableRoaringBitmap [ordinal page-idx]
-              (let [^IArrowHashTrieWrapper trie-wrapper (nth trie-wrappers ordinal)]
-                @(meta/with-metadata metadata-mgr (.trieReader trie-wrapper) (.trieFile trie-wrapper)
-                   (util/->jfn
-                     (fn [^ITableMetadata table-meta]
-                       (.iidBloomBitmap table-meta page-idx))))))]
+              (let [^IArrowHashTrieWrapper trie-wrapper (nth trie-wrappers ordinal)
+                    ^ITableMetadata table-meta (.tableMetadata metadata-mgr (.trieReader trie-wrapper) (.trieFile trie-wrapper))]
+                (.iidBloomBitmap table-meta page-idx)))]
       (->merge-plan (mapv :trie tries) page-idx-pred iid-bloom-bitmap))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}

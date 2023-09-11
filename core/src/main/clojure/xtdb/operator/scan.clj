@@ -67,25 +67,23 @@
                                         {:keys [buf-key trie-rdr] :as _trie-match} ^RoaringBitmap page-idxs]
   (if-let [^MutableRoaringBitmap pushdown-bloom (get *column->pushdown-bloom* (symbol col-name))]
     ;; would prefer this `^long` to be on the param but can only have 4 params in a primitive hinted function in Clojure
-    @(meta/with-metadata metadata-manager trie-rdr buf-key
-       (util/->jfn
-         (fn [^ITableMetadata table-metadata]
-           (let [metadata-rdr (.metadataReader table-metadata)
-                 bloom-rdr (-> (.structKeyReader metadata-rdr "columns")
-                               (.listElementReader)
-                               (.structKeyReader "bloom"))
-                 filtered-page-idxs (RoaringBitmap.)]
-             (.forEach page-idxs
-                       (reify org.roaringbitmap.IntConsumer
-                         (accept [_ page-idx]
-                           (when-let [bloom-vec-idx (.rowIndex table-metadata col-name page-idx)]
-                             (when (and (not (nil? (.getObject bloom-rdr bloom-vec-idx)))
-                                        (MutableRoaringBitmap/intersects pushdown-bloom
-                                                                         (bloom/bloom->bitmap bloom-rdr bloom-vec-idx)))
-                               (.add filtered-page-idxs page-idx))))))
+    (let [^ITableMetadata table-metadata (.tableMetadata metadata-manager trie-rdr buf-key)
+          metadata-rdr (.metadataReader table-metadata)
+          bloom-rdr (-> (.structKeyReader metadata-rdr "columns")
+                        (.listElementReader)
+                        (.structKeyReader "bloom"))
+          filtered-page-idxs (RoaringBitmap.)]
+      (.forEach page-idxs
+                (reify org.roaringbitmap.IntConsumer
+                  (accept [_ page-idx]
+                    (when-let [bloom-vec-idx (.rowIndex table-metadata col-name page-idx)]
+                      (when (and (not (nil? (.getObject bloom-rdr bloom-vec-idx)))
+                                 (MutableRoaringBitmap/intersects pushdown-bloom
+                                                                  (bloom/bloom->bitmap bloom-rdr bloom-vec-idx)))
+                        (.add filtered-page-idxs page-idx))))))
 
-             (when-not (.isEmpty filtered-page-idxs)
-               filtered-page-idxs)))))
+      (when-not (.isEmpty filtered-page-idxs)
+        filtered-page-idxs))
     page-idxs))
 
 (defn- ->range ^longs []
