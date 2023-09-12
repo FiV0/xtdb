@@ -10,6 +10,7 @@
             [xtdb.trie.arrow-hash-trie]
             [xtdb.types :as types]
             [xtdb.util :as util]
+            [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw])
   (:import (clojure.lang IFn)
            (java.io ByteArrayInputStream ByteArrayOutputStream)
@@ -20,12 +21,11 @@
            (java.util.function Function IntPredicate)
            (java.util.stream IntStream)
            (org.apache.arrow.memory ArrowBuf)
-           (org.apache.arrow.vector FieldVector)
+           (org.apache.arrow.vector FieldVector VectorSchemaRoot)
            (org.apache.arrow.vector.types.pojo ArrowType$Union)
-           (org.roaringbitmap RoaringBitmap)
            xtdb.buffer_pool.IBufferPool
            xtdb.object_store.ObjectStore
-           (xtdb.trie.arrow_hash_trie IArrowHashTrieWrapper)
+           xtdb.trie.ArrowHashTrie
            (xtdb.vector IVectorReader IVectorWriter RelationReader)))
 
 (set! *unchecked-math* :warn-on-boxed)
@@ -364,12 +364,14 @@
 (defmethod ig/halt-key! ::metadata-manager [_ mgr]
   (util/try-close mgr))
 
-(defrecord TrieMatch [^String buf-key, ^IntPredicate page-idx-pred, ^IFn iid-bloom-bitmap-fn, ^Set col-names])
+(defrecord TrieMatch [^String trie-file, ^ArrowHashTrie trie, ^RelationReader trie-rdr, ^IntPredicate page-idx-pred, ^IFn iid-bloom-bitmap-fn, ^Set col-names])
 
-(defn matching-tries [^IMetadataManager metadata-mgr, trie-wrappers, ^IMetadataPredicate metadata-pred]
-  (->> (for [^IArrowHashTrieWrapper trie-wrapper trie-wrappers
-             :let [buf-key (.trieFile trie-wrapper)]]
-         (let [^ITableMetadata table-metadata (.tableMetadata metadata-mgr (.trieReader trie-wrapper) buf-key)
+(defn matching-tries [^IMetadataManager metadata-mgr, trie-files, roots, ^IMetadataPredicate metadata-pred]
+  (->> (for [[trie-file ^VectorSchemaRoot root] (mapv vector trie-files roots)
+             :let [trie-rdr (vr/<-root root)]]
+         (let [^ITableMetadata table-metadata (.tableMetadata metadata-mgr trie-rdr trie-file)
                page-idx-pred (.build metadata-pred table-metadata)]
-           (->TrieMatch buf-key page-idx-pred #(.iidBloomBitmap table-metadata %) (.columnNames table-metadata))))
+           (->TrieMatch trie-file (ArrowHashTrie/from root) trie-rdr
+                        page-idx-pred #(.iidBloomBitmap table-metadata %)
+                        (.columnNames table-metadata))))
        vec))

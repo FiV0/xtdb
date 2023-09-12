@@ -352,26 +352,22 @@
     (->merge-plan* (mapv #(some-> ^HashTrie % (.rootNode)) tries) [] 0)))
 
 (defn open-arrow-trie-files [^IBufferPool buffer-pool table-tries]
-  (util/with-close-on-catch [trie-wrappers (ArrayList. (count table-tries))]
+  (util/with-close-on-catch [roots (ArrayList. (count table-tries))]
     (doseq [{:keys [trie-file]} table-tries]
       (with-open [^ArrowBuf buf @(.getBuffer buffer-pool trie-file)]
         (let [{:keys [^VectorLoader loader root arrow-blocks]} (util/read-arrow-buf buf)]
           (with-open [record-batch (util/->arrow-record-batch-view (first arrow-blocks) buf)]
             (.load loader record-batch)
-            (.add trie-wrappers (aht/->ArrowHashTrieWrapper root (ArrowHashTrie/from root) trie-file))))))
-    trie-wrappers))
+            (.add roots root)))))
+    roots))
 
-(defn table-merge-plan [trie-wrappers, path-pred
-                        buf-key->trie-match-fn, ^ILiveTableWatermark live-table-wm]
-
-  (let [tries (cond-> (vec (for [^IArrowHashTrieWrapper trie-wrapper trie-wrappers]
-                             {:trie (.arrowHashTrie trie-wrapper)
-                              :trie-match (buf-key->trie-match-fn (.trieFile trie-wrapper))}))
+(defn table-merge-plan [path-pred, trie-matches, ^ILiveTableWatermark live-table-wm]
+  (let [tries (cond-> trie-matches
                 live-table-wm (conj {:trie (.compactLogs (.liveTrie live-table-wm))}))]
     (->merge-plan (mapv :trie tries)
                   path-pred
-                  (mapv (comp :page-idx-pred :trie-match) tries)
-                  (mapv (comp :iid-bloom-bitmap-fn :trie-match) tries))))
+                  (mapv :page-idx-pred tries)
+                  (mapv :iid-bloom-bitmap-fn tries))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILeafLoader

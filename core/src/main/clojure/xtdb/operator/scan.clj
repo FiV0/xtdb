@@ -63,11 +63,11 @@
 
 (def ^:dynamic *column->pushdown-bloom* {})
 
-(defn filter-pushdown-bloom-page-idxs ^IntPredicate [^IMetadataManager metadata-manager ^String col-name ^RelationReader trie-rdr
-                                                     {:keys [buf-key] :as _trie-match} ^IntPredicate page-idx-pred]
+(defn filter-pushdown-bloom-page-idx-pred ^IntPredicate [^IMetadataManager metadata-manager ^String col-name
+                                                         {:keys [trie-file ^RelationReader trie-rdr] :as _trie-match} ^IntPredicate page-idx-pred]
   (if-let [^MutableRoaringBitmap pushdown-bloom (get *column->pushdown-bloom* (symbol col-name))]
     ;; would prefer this `^long` to be on the param but can only have 4 params in a primitive hinted function in Clojure
-    (let [^ITableMetadata table-metadata (.tableMetadata metadata-manager trie-rdr buf-key)
+    (let [^ITableMetadata table-metadata (.tableMetadata metadata-manager trie-rdr trie-file)
           metadata-rdr (.metadataReader table-metadata)
           bloom-rdr (-> (.structKeyReader metadata-rdr "columns")
                         (.listElementReader)
@@ -477,9 +477,9 @@
   (close [_]
     (util/close leaves)))
 
-(defn- filter-trie-match [^IMetadataManager metadata-mgr col-names ^IArrowHashTrieWrapper trie-wrapper {:keys [^IntPredicate page-idx-pred] :as trie-match}]
+(defn- filter-trie-match [^IMetadataManager metadata-mgr col-names {:keys [page-idx-pred] :as trie-match}]
   (->> (reduce (fn [page-idx-pred col-name]
-                 (filter-pushdown-bloom-page-idxs metadata-mgr col-name (.trieReader trie-wrapper) trie-match page-idx-pred))
+                 (filter-pushdown-bloom-page-idx-pred metadata-mgr col-name trie-match page-idx-pred))
                page-idx-pred col-names)
        (assoc trie-match :page-idx-pred)))
 
@@ -589,19 +589,16 @@
                                             (trie/current-table-tries))]
 
                        (util/with-open [iid-arrow-buf (when iid-bb (util/->arrow-buf-view allocator iid-bb))
-                                        trie-wrappers (trie/open-arrow-trie-files buffer-pool table-tries)]
+                                        roots (trie/open-arrow-trie-files buffer-pool table-tries)]
                          (let [path-pred (if iid-bb
                                            (let [iid-ptr (ArrowBufPointer. iid-arrow-buf 0 (.capacity iid-bb))]
                                              #(zero? (HashTrie/compareToPath iid-ptr %)))
                                            (constantly true))
-                               buf-key->trie-match (->> (meta/matching-tries metadata-mgr trie-wrappers metadata-pred)
-                                                        (map-indexed (fn [idx trie-match]
-                                                                       (filter-trie-match metadata-mgr col-names (nth trie-wrappers idx) trie-match)))
-                                                        (filter #(not-empty (set/intersection normalized-col-names (:col-names %))))
-                                                        (remove nil?)
-                                                        (into {} (map (juxt :buf-key identity))))
-                               buf-key->trie-match-fn (fn [buf-key] (get buf-key->trie-match buf-key))
-                               merge-plan (trie/table-merge-plan trie-wrappers path-pred buf-key->trie-match-fn live-table-wm)]
+                               trie-matches (->> (meta/matching-tries metadata-mgr (mapv :trie-file table-tries) roots metadata-pred)
+                                                 (map (partial filter-trie-match metadata-mgr col-names))
+                                                 (filter #(not-empty (set/intersection normalized-col-names (:col-names %))))
+                                                 vec)
+                               merge-plan (trie/table-merge-plan path-pred trie-matches live-table-wm)]
 
                            ;; The consumers for different leafs need to share some state so the logic of how to advance
                            ;; is correct. For example if the `skip-iid-ptr` gets set in one leaf consumer it should also affect
