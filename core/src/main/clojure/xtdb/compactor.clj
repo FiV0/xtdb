@@ -77,20 +77,20 @@
                             {:keys [table-name table-tries out-trie-key]}]
   (try
     (log/infof "compacting '%s' '%s' -> '%s'..." table-name (mapv :trie-key table-tries) out-trie-key)
-    (util/with-open [trie-wrappers (trie/open-arrow-trie-files buffer-pool table-tries)
+    (util/with-open [roots (trie/open-arrow-trie-files buffer-pool table-tries)
                      leaves (trie/open-leaves buffer-pool table-name table-tries nil)
                      leaf-out-bb (WritableByteBufferChannel/open)
                      trie-out-bb (WritableByteBufferChannel/open)]
 
       (merge-tries! allocator leaves
                     (.getChannel leaf-out-bb) (.getChannel trie-out-bb)
-                    (trie/table-merge-plan trie-wrappers
-                                           (constantly true)
-                                           (meta/matching-tries metadata-mgr trie-wrappers (reify IMetadataPredicate
-                                                                                             (build [_ _table-metadata]
-                                                                                               (reify IntPredicate
-                                                                                                 (test [_ _page-idx]
-                                                                                                   true)))))
+                    (trie/table-merge-plan (constantly true)
+                                           (meta/matching-tries metadata-mgr (mapv :trie-file table-tries) roots
+                                                                (reify IMetadataPredicate
+                                                                  (build [_ _table-metadata]
+                                                                    (reify IntPredicate
+                                                                      (test [_ _page-idx]
+                                                                        true)))))
                                            nil))
 
       (log/debugf "uploading '%s' '%s'..." table-name out-trie-key)
