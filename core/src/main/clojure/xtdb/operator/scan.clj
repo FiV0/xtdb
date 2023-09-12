@@ -596,7 +596,7 @@
                                            (constantly true))
                                trie-matches (->> (meta/matching-tries metadata-mgr (mapv :trie-file table-tries) roots metadata-pred)
                                                  (map (partial filter-trie-match metadata-mgr col-names))
-                                                 (filter #(not-empty (set/intersection normalized-col-names (:col-names %))))
+                                                 (drop-while #(empty? (set/intersection normalized-col-names (:col-names %))))
                                                  vec)
                                merge-plan (trie/table-merge-plan path-pred trie-matches live-table-wm)]
 
