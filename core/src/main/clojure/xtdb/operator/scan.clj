@@ -23,7 +23,6 @@
            (java.util.stream IntStream)
            (org.apache.arrow.memory BufferAllocator)
            [org.apache.arrow.memory.util ArrowBufPointer]
-           [org.roaringbitmap RoaringBitmap]
            [org.roaringbitmap.buffer MutableRoaringBitmap]
            xtdb.api.protocols.TransactionInstant
            xtdb.buffer_pool.IBufferPool
@@ -33,8 +32,7 @@
            xtdb.operator.IRelationSelector
            (xtdb.trie HashTrie LeafMergeQueue$LeafPointer)
            (xtdb.vector IRelationWriter IRowCopier IVectorReader IVectorWriter RelationReader)
-           (xtdb.watermark ILiveTableWatermark IWatermark IWatermarkSource Watermark)
-           (xtdb.trie.arrow_hash_trie IArrowHashTrieWrapper)))
+           (xtdb.watermark ILiveTableWatermark IWatermark IWatermarkSource Watermark)))
 
 (s/def ::table symbol?)
 

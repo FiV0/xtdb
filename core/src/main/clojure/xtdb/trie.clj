@@ -6,8 +6,7 @@
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw]
-            xtdb.watermark
-            [xtdb.trie.arrow-hash-trie :as aht])
+            xtdb.watermark)
   (:import (java.lang AutoCloseable)
            (java.nio ByteBuffer)
            java.nio.channels.WritableByteChannel
@@ -20,16 +19,13 @@
            [org.apache.arrow.vector.ipc ArrowFileWriter]
            (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            org.apache.arrow.vector.types.UnionMode
-           (org.roaringbitmap RoaringBitmap)
-           (org.roaringbitmap.buffer ImmutableRoaringBitmap MutableRoaringBitmap)
+           (org.roaringbitmap.buffer MutableRoaringBitmap)
            xtdb.buffer_pool.IBufferPool
-           (xtdb.metadata IMetadataManager ITableMetadata)
            (xtdb.object_store ObjectStore)
-           (xtdb.trie ArrowHashTrie ArrowHashTrie$Leaf HashTrie HashTrie$Node LeafMergeQueue LeafMergeQueue$LeafPointer LiveHashTrie LiveHashTrie$Leaf)
+           (xtdb.trie ArrowHashTrie$Leaf HashTrie HashTrie$Node LeafMergeQueue LeafMergeQueue$LeafPointer LiveHashTrie LiveHashTrie$Leaf)
            (xtdb.util WritableByteBufferChannel)
            (xtdb.vector IVectorReader RelationReader)
-           xtdb.watermark.ILiveTableWatermark
-           (xtdb.trie.arrow_hash_trie IArrowHashTrieWrapper)))
+           xtdb.watermark.ILiveTableWatermark))
 
 (def ^:private ^java.lang.ThreadLocal !msg-digest
   (ThreadLocal/withInitial
@@ -252,48 +248,6 @@
 (defn list-table-trie-files [^ObjectStore obj-store, table-name]
   (->> (sort (.listObjects obj-store (format "tables/%s/log-tries" table-name)))
        (into [] (keep parse-trie-filename))))
-
-(defn- bucket-for [^ByteBuffer iid level]
-  (let [level-offset-bits (* HashTrie/LEVEL_BITS (inc level))
-        level-offset-bytes (/ (- level-offset-bits HashTrie/LEVEL_BITS) Byte/SIZE)]
-    (bit-and (bit-shift-right (.get iid ^int level-offset-bytes) (mod level-offset-bits Byte/SIZE)) HashTrie/LEVEL_MASK)))
-
-(defn- iid-leaf-fn [node _level]
-  (when  node
-    (condp = (class node)
-      ArrowHashTrie$Leaf
-      {:page-idx (.getPageIndex ^ArrowHashTrie$Leaf node)}
-
-      LiveHashTrie$Leaf
-      (throw (RuntimeException. "Should not happen!!!")))))
-
-(defn- ->iid-branch-fn [^ByteBuffer iid]
-  (let [bucket-for* (memoize (partial bucket-for iid))]
-    (fn [^objects children level]
-      (when-let [child (aget children (bucket-for* level))]
-        [child]))))
-
-(defn- iid-combine-fn [child-res]
-  (first child-res))
-
-(defn walk-trie
-  "trie
-   branch-fn :: [children level] -> children
-   leaf-fn :: [node level] -> data
-   combine-fn :: [child-results] -> results"
-
-  [^HashTrie trie branch-fn leaf-fn combine-fn]
-  (letfn [(walk-trie* [node ^long level]
-            (if-let [node-children (some-> ^HashTrie$Node node (.children))]
-              (->> (branch-fn node-children level)
-                   (mapv #(walk-trie* % (inc level)))
-                   combine-fn)
-              (leaf-fn node level)))]
-    (walk-trie* (some-> trie (.rootNode)) 0)))
-
-(defn get-iid-page-idxs [^ByteBuffer iid tries]
-  (let [branch-fn (->iid-branch-fn iid)]
-    (mapv #(walk-trie % branch-fn iid-leaf-fn iid-combine-fn) tries)))
 
 (defn ->merge-plan
   "Returns a tree of the tasks required to merge the given tries

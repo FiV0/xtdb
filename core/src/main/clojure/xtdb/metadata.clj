@@ -7,7 +7,6 @@
             xtdb.expression.temporal
             xtdb.object-store
             [xtdb.transit :as xt.transit]
-            [xtdb.trie.arrow-hash-trie]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
