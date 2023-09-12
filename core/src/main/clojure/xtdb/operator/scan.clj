@@ -72,11 +72,12 @@
                         (.structKeyReader "bloom"))]
       (reify IntPredicate
         (test [_ page-idx]
-          (when (.test page-idx-pred page-idx)
-            (when-let [bloom-vec-idx (.rowIndex table-metadata col-name page-idx)]
-              (and (not (nil? (.getObject bloom-rdr bloom-vec-idx)))
-                   (MutableRoaringBitmap/intersects pushdown-bloom
-                                                    (bloom/bloom->bitmap bloom-rdr bloom-vec-idx))))))))
+          (boolean
+           (when (.test page-idx-pred page-idx)
+             (when-let [bloom-vec-idx (.rowIndex table-metadata col-name page-idx)]
+               (and (not (nil? (.getObject bloom-rdr bloom-vec-idx)))
+                    (MutableRoaringBitmap/intersects pushdown-bloom
+                                                     (bloom/bloom->bitmap bloom-rdr bloom-vec-idx)))))))))
     page-idx-pred))
 
 (defn- ->range ^longs []
