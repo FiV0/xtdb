@@ -182,7 +182,8 @@
 
   AutoCloseable
   (close [_]
-    (util/close live-rel)))
+    (util/close live-rel)
+    (util/close allocator)))
 
 (defn ->live-table
   (^xtdb.indexer.live_index.ILiveTable [allocator object-store table-name] (->live-table allocator object-store table-name {}))
@@ -191,8 +192,8 @@
                                         {:keys [->live-trie]
                                          :or {->live-trie (fn [iid-rdr]
                                                             (LiveHashTrie/emptyTrie iid-rdr))}}]
-
-   (util/with-close-on-catch [rel (trie/open-leaf-root allocator)]
+   (util/with-close-on-catch [allocator (util/->child-allocator allocator (str "live-table-" table-name "-allocator"))
+                              rel (trie/open-leaf-root allocator)]
      (let [iid-wtr (.writerForName rel "xt$iid")
            op-wtr (.writerForName rel "op")
            put-wtr (.writerForTypeId op-wtr (byte 0))
@@ -292,7 +293,8 @@
 
   AutoCloseable
   (close [_]
-    (util/close tables)))
+    (util/close tables)
+    (util/close allocator)))
 
 (defmethod ig/prep-key :xtdb.indexer/live-index [_ opts]
   (merge {:allocator (ig/ref :xtdb/allocator)
@@ -301,7 +303,8 @@
 
 (defmethod ig/init-key :xtdb.indexer/live-index [_ {:keys [allocator object-store log-limit page-limit]
                                                     :or {log-limit 64 page-limit 1024}}]
-  (->LiveIndex allocator object-store (HashMap.) log-limit page-limit))
+  (util/with-close-on-catch [allocator (util/->child-allocator allocator "live-index-allocator")]
+    (->LiveIndex allocator object-store (HashMap.) log-limit page-limit)))
 
 (defmethod ig/halt-key! :xtdb.indexer/live-index [_ live-idx]
   (util/close live-idx))
