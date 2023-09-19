@@ -16,5 +16,5 @@ publishing {
 
 dependencies {
     compileOnlyApi(files("src/main/resources"))
-    implementation("org.clojure", "clojure", "1.11.1")
+    implementation("org.clojure", "clojure", "1.12.0-alpha2")
 }

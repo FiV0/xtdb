@@ -361,19 +361,25 @@
      :waiting-for-purchase (vec waiting-for-purchase)
      :closed (vec closed)}))
 
+(def pre-saved-stuff (atom {}))
+
 ;; do every now and again to provide inputs for item-dependent computations
 (defn index-item-status-groups [worker]
   (let [{:keys [sut, ^ConcurrentHashMap custom-state]} worker
         now (b2/current-timestamp worker)
         node sut
-        res (item-status-groups node now)]
+        res (or (:item-status-groups @pre-saved-stuff) (item-status-groups node now))]
+    (swap! pre-saved-stuff assoc :item-status-groups res)
     (.putAll custom-state {:item-status-groups res #_(item-status-groups node now)})
     #_(with-open [db (xt/open-db sut)]
         (.putAll custom-state {:item-status-groups (item-status-groups db now)}))))
 
 (defn largest-id [node table prefix-length]
-  (let [id (->> (xt/q node `{:find [~'id]
-                             :where [~(list 'match table {:xt/id 'id})]})
+  (let [q `{:find [~'id]
+            :where [~(list 'match table {:xt/id 'id})]
+            #_#_:order-by [[~'id :desc]]
+            #_#_:limit 1}
+        id (->> (xt/q node q)
                 (sort-by :id  #(cond (< (count %1) (count %2)) 1
                                      (< (count %2) (count %1)) -1
                                      :else (compare %2 %1)))
@@ -385,15 +391,25 @@
 (defn load-stats-into-worker [{:keys [sut] :as worker}]
   (index-item-status-groups worker)
   (log/info "query for user")
-  (b2/set-domain worker user-id (or (largest-id sut :user 2) 0))
+  (let [res (or (-> @pre-saved-stuff :domain-state :user) (largest-id sut :user 2) 0)]
+    (b2/set-domain worker user-id res)
+    (swap! pre-saved-stuff assoc-in [:domain-state :user] res))
   (log/info "query for region")
-  (b2/set-domain worker region-id (or (largest-id sut :region 2) 0))
+  (let [res (or (-> @pre-saved-stuff :domain-state :region) (largest-id sut :region 2) 0)]
+    (b2/set-domain worker region-id res)
+    (swap! pre-saved-stuff assoc-in [:domain-state :region] res))
   (log/info "query for item")
-  (b2/set-domain worker item-id (or (largest-id sut :item 2) 0))
+  (let [res (or (-> @pre-saved-stuff :domain-state :item) (largest-id sut :item 2) 0)]
+    (b2/set-domain worker item-id res)
+    (swap! pre-saved-stuff assoc-in [:domain-state :item] res))
   (log/info "query for item-bid")
-  (b2/set-domain worker item-bid-id (or (largest-id sut :item-bid 3) 0))
+  (let [res (or (-> @pre-saved-stuff :domain-state :item-bid) (largest-id sut :item-bid 3) 0)]
+    (b2/set-domain worker item-bid-id res)
+    (swap! pre-saved-stuff assoc-in [:domain-state :item-bid] res))
   (log/info "query for category")
-  (b2/set-domain worker category-id (or (largest-id sut :category 2) 0))
+  (let [res (or (-> @pre-saved-stuff :domain-state :category) (largest-id sut :category 2) 0)]
+    (b2/set-domain worker category-id res)
+    (swap! pre-saved-stuff assoc-in [:domain-state :category] res))
   (log/info "query for gag")
   (b2/set-domain worker gag-id (or (largest-id sut :gag 4) 0))
   (log/info "query for gav")
@@ -583,7 +599,7 @@
     {:title "Auction Mark OLTP"
      :seed seed
      :tasks
-     [{:t :do
+     [#_{:t :do
          :stage :load
          :tasks [{:t :call, :f (fn [_] (log/info "start load stage"))}
                  {:t :call, :f [bxt2/install-tx-fns {:apply-seller-fee tx-fn-apply-seller-fee, :new-bid tx-fn-new-bid}]}
@@ -603,7 +619,7 @@
       {:t :concurrently
        :stage :oltp
        :duration duration
-       :join-wait (Duration/ofSeconds 5)
+       :join-wait (Duration/ofSeconds 30)
        :thread-tasks [{:t :pool
                        :duration duration
                        :join-wait (Duration/ofMinutes 5)

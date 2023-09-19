@@ -148,7 +148,7 @@
     (-> (:xtdb/node system)
         (assoc :system system
                :close-fn #(do (ig/halt! system)
-                              #_(println (.toVerboseString ^RootAllocator (:xtdb/allocator system))))))))
+                              (println (.toVerboseString ^RootAllocator (:xtdb/allocator system))))))))
 
 (defrecord SubmitNode [^ITxProducer tx-producer, !system, close-fn]
   xtp/PSubmitNode

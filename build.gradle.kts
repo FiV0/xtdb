@@ -72,7 +72,7 @@ allprojects {
 
         if (plugins.hasPlugin("dev.clojurephant.clojure")) {
             dependencies {
-                implementation("org.clojure", "clojure", "1.11.1")
+                implementation("org.clojure", "clojure", "1.12.0-alpha2")
 
                 testRuntimeOnly("dev.clojurephant", "jovial", "0.4.1")
                 nrepl("cider", "cider-nrepl", "0.30.0")
@@ -88,6 +88,8 @@ allprojects {
             tasks.clojureRepl {
                 forkOptions.run {
                     jvmArgs = defaultJvmArgs
+
+                    memoryMaximumSize = "8g"
 
                     if (project.hasProperty("yourkit")) {
                         jvmArgs = defaultJvmArgs + "-agentpath:/opt/yourkit/bin/linux-x86-64/libyjpagent.so"
@@ -193,6 +195,7 @@ dependencies {
     testImplementation("org.clojure", "tools.cli", "1.0.206")
 
     devImplementation("integrant", "repl", "0.3.2")
+    devImplementation("tick", "tick", "0.7.5")
     devImplementation("com.azure","azure-identity","1.9.0")
     testImplementation("org.slf4j", "slf4j-api", "2.0.6")
     testImplementation("com.clojure-goes-fast", "clj-async-profiler", "1.0.0")

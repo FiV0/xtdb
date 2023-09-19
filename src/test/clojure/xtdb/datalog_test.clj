@@ -6,11 +6,13 @@
 
 (ns xtdb.datalog-test
   (:require [clojure.test :as t :refer [deftest]]
+            [clojure.tools.logging :as log]
             [xtdb.api :as xt]
             [xtdb.james-bond :as bond]
             [xtdb.node :as node]
             [xtdb.test-util :as tu]
-            [xtdb.util :as util]))
+            [xtdb.util :as util])
+  (:import xtdb.InstantSource))
 
 (t/use-fixtures :each tu/with-mock-clock tu/with-node)
 
@@ -2379,3 +2381,254 @@
                  '{:find [v]
                    :where [(match :xt-docs [{:xt/id 2} v] {:for-valid-time :all-time})]}))
         "no zero width valid-time intervals"))
+
+(deftest order-by-broken?
+  (xt/submit-tx tu/*node* [[:put :xt-docs {:xt/id "i_99" :s "99"}]
+                           [:put :xt-docs {:xt/id "i_999" :s "999"}]])
+  (tu/finish-chunk! tu/*node*)
+  (xt/submit-tx tu/*node* [[:put :xt-docs {:xt/id "i_9" :s "9"}]
+                           [:put :xt-docs {:xt/id "i_9999" :s "9999"}]])
+  (tu/finish-chunk! tu/*node*)
+
+  (t/is (= []
+           (xt/q tu/*node*
+                 '{:find [i]
+                   :where [(match :xt-docs {:xt/id i})]
+                   :order-by [[i :desc]]}))))
+
+(require '[clojure.java.io :as io])
+
+(defn delete-directory-recursive
+  "Recursively delete a directory."
+  [^java.io.File file]
+  (when (.isDirectory file)
+    (run! delete-directory-recursive (.listFiles file)))
+  (io/delete-file file))
+
+(comment
+
+  (delete-directory-recursive (io/file "dev/loading-issue"))
+
+  (require '[clojure.java.io :as io])
+
+  (deftest loading-issue-on-live-trie
+
+    (let [node-dir (io/file "dev/loading-issue")]
+      ;; can be commented out after first run
+      (with-open [node (tu/->local-node {:node-dir (.toPath node-dir)})]
+        ;; you might need to push this number up if the issue does not show up on your machine
+        (doseq [tx (->> (range 10000)
+                        shuffle
+                        (map (comp #(vector :put :xt-docs %) #(hash-map :xt/id % :s (str %))))
+                        (partition-all 1024))]
+          (xt/submit-tx node tx))
+        ;; assure that largest id is in the live trie
+        (xt/submit-tx node [[:put :xt-docs {:xt/id 100000000 :s "100000000"}]])
+
+        ;; this makes things pass
+        #_(tu/finish-chunk! node)
+        )
+
+      (with-open [node (tu/->local-node {:node-dir (.toPath node-dir)})]
+        ;; this makes things pass
+        #_(Thread/sleep 100)
+        (t/is (= [{:i 100000000}]
+                 (xt/q node '{:find [i]
+                              :where [(match :xt-docs {:xt/id i})]
+                              :order-by [[i :desc]]
+                              :limit 1}))))))
+
+
+
+  (deftest IOB-exception-in-live-trie
+    (let [node-dir (io/file "dev/iob-exception-live-trie")
+          node-opts {:node-dir (.toPath node-dir)
+                     :instant-src InstantSource/SYSTEM}]
+
+      #_(with-open [node (tu/->local-node node-opts)]
+          (doseq [tx (->> (range 100000)
+                          shuffle
+                          (map (comp #(vector :put :xt-docs %) #(hash-map :xt/id % :s (str %))))
+                          (partition-all 1024))]
+            (xt/submit-tx node tx)))
+
+      (with-open [node (tu/->local-node node-opts)]
+
+        (Thread/sleep 1000)
+        (tu/finish-chunk! node))))
+
+  (delete-directory-recursive (io/file "dev/break-node"))
+
+  (let [node-dir (io/file "dev/break-node")
+        node-opts {:node-dir (.toPath node-dir)
+                   :instant-src InstantSource/SYSTEM}]
+
+    (time
+     (with-open [node (tu/->local-node node-opts)]
+       ;; (Thread/sleep 100)
+       #_(.listObjects (tu/component node :xtdb.object-store/file-system-object-store) "chunk-metadata/")
+       #_(Thread/sleep 100)
+       #_(xt/status node)
+       #_(Thread/sleep 1000)
+       ;; (tu/finish-chunk! node)
+       #_(xt/q node '{:find [i] :where [(match :xt-docs {:xt/id i})]})
+       #_(Thread/sleep 1000)
+       ;; (xt/status node)
+       #_(tu/finish-chunk! node))))
+
+  (deftest loading-issue-on-live-trie
+
+    (let [node-dir (io/file "dev/loading-issue")]
+      ;; can be commented out after first run
+      #_(with-open [node (tu/->local-node {:node-dir (.toPath node-dir)})]
+          ;; you might need to push this number up if the issue does not show up on your machine
+          (doseq [tx (->> (range 10000)
+                          shuffle
+                          (map (comp #(vector :put :xt-docs %) #(hash-map :xt/id % :s (str %))))
+                          (partition-all 1024))]
+            (xt/submit-tx node tx))
+          ;; assure that largest id is in the live trie
+          (xt/submit-tx node [[:put :xt-docs {:xt/id 100000000 :s "100000000"}]])
+
+          ;; this makes things pass
+          #_(tu/finish-chunk! node)
+          )
+
+      (with-open [node (tu/->local-node {:node-dir (.toPath node-dir)})]
+        ;; this makes things pass
+        ;; (Thread/sleep 200)
+        (t/is (= [{:i 100000000}]
+                 (xt/q node '{:find [i]
+                              :where [(match :xt-docs {:xt/id i})]
+                              :order-by [[i :desc]]
+                              :limit 1}))))))
+
+
+  (deftest break-node
+
+    (let [node-dir (io/file "dev/break-node")
+          node-opts {:node-dir (.toPath node-dir)
+                     :instant-src InstantSource/SYSTEM}]
+
+      (with-open [node (tu/->local-node node-opts)]
+        (doseq [tx (->> (range 100000)
+                        shuffle
+                        (map (comp #(vector :put :xt-docs %) #(hash-map :xt/id % :s (str %))))
+                        (partition-all 1024))]
+          (xt/submit-tx node tx)))
+
+      #_(with-open [node (tu/->local-node node-opts)]
+
+          #_(let [t (Thread. (fn [] (xt/q node '{:find [i] :where [(match :xt-docs {:xt/id i})]})))]
+              (.start t)
+              (Thread/sleep 100)
+              (.interrupt t))
+
+          #_(tu/finish-chunk! node)
+
+          (let [f (future (xt/q node '{:find [i] :where [(match :xt-docs {:xt/id i})]}))]
+            (Thread/sleep 300)
+            (future-cancel f)
+            (Thread/sleep 300)
+            #_(t/is (true? (future-cancelled? f)))
+            @f
+            (t/is (true? true))
+            #_(t/is (true? (future-cancelled? f)))))))
+
+
+  (let [node-dir (io/file "dev/break-node")
+        node-opts {:node-dir (.toPath node-dir)
+                   :instant-src InstantSource/SYSTEM}]
+
+    (let [node (tu/->local-node node-opts)]
+      (let [f (future
+                (try (xt/q node '{:find [i] :where [(match :xt-docs {:xt/id i})]})
+                     (catch Throwable t
+                       t)))]
+        (Thread/sleep 300)
+        (try
+          (.close node)
+          (catch Throwable t
+            #_(throw t)))
+
+        @f
+
+        )))
+
+  (deftest concurrent-submits-while-node-closes
+    (let [node-dir (io/file "dev/concurrent-submits")
+          node-opts {:node-dir (.toPath node-dir)
+                     :instant-src InstantSource/SYSTEM}]
+      (util/delete-dir (.toPath node-dir))
+      (with-open [node (tu/->local-node node-opts)]
+        (let [closed? (atom false)]
+          (dotimes [_ 10]
+            (future (loop [i (long 0)]
+                      (when-not @closed?
+                        (xt/submit-tx node (mapv #(vector :put :foo {:xt/id % :id %}) (range 1000)))
+                        (recur (inc i))))))
+          (Thread/sleep 100)
+          (swap! closed? (constantly true))))))
+
+
+  (let [dir (io/file "data")
+        config {:xtdb.log/local-directory-log {:root-path (io/file dir "log")}
+                :xtdb.buffer-pool/buffer-pool {:cache-path (io/file dir "buffers")}
+                :xtdb.object-store/file-system-object-store {:root-path (io/file dir "objects")}}]
+    (util/delete-dir (.toPath dir))
+    (with-open [node (node/start-node config)]
+      (let [closed? (atom false)]
+        (dotimes [_ 10]
+          (future (loop [i (long 0)]
+                    (when-not @closed?
+                      (xt/submit-tx node (mapv #(vector :put :foo {:xt/id % :id %}) (range 1000)))
+                      (recur (inc i))))))
+        (Thread/sleep 100)
+        (swap! closed? (constantly true)))))
+
+
+  (delete-directory-recursive (io/file "dev/break-tx-fns"))
+
+
+  (deftest break-tx-fns
+
+    (let [node-dir (io/file "dev/break-tx-fns")
+          node-opts {:node-dir (.toPath node-dir)
+                     :instant-src InstantSource/SYSTEM}]
+
+      (with-open [node (tu/->local-node node-opts)]
+        (doseq [tx (->> (range 100000)
+                        shuffle
+                        (map (comp #(vector :put :xt-docs %) #(hash-map :xt/id % :s (str %))))
+                        (partition-all 1024))]
+          (xt/submit-tx node tx))
+
+        (xt/submit-tx node [[:put-fn :my-fn
+                             '(fn [n]
+                                (let [new-n (-> (q '{:find [id]
+                                                     :where [(match :xt-docs {:xt/id id})]})
+                                                shuffle
+                                                first)]
+                                  [[:put :xt-docs {:xt/id (str new-n "-" n) :s (str new-n "-" n)}]]))]]))
+
+      (with-open [node (tu/->local-node node-opts)]
+
+        (let [f (future (xt/q node '{:find [i] :where [(match :xt-docs {:xt/id i})]}))]
+          (Thread/sleep 100)
+          (future-cancel f)
+
+          (t/is (true? (future-cancelled? f))))
+
+        #_#_#_(dotimes [i 2]
+                (when (even? i)
+                  (xt/q node '{:find [i] :where [(match :xt-docs {:xt/id i})]})
+                  (xt/submit-tx node [[:call :my-fn (rand-int 1000000)]])))
+
+        (dotimes [_ 10]
+          (future
+            (dotimes [i 1000]
+              (when (even? i)
+                (xt/q node '{:find [i] :where [(match :xt-docs {:xt/id i})]})
+                (xt/submit-tx node [[:call :my-fn (rand-int 1000000)]])))))
+
+        (Thread/sleep 1000)))))

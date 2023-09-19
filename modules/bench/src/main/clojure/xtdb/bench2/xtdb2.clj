@@ -4,16 +4,17 @@
             [xtdb.api.protocols :as xtp]
             [xtdb.bench2 :as b]
             [xtdb.bench2.measurement :as bm]
+            [xtdb.compactor :as comp]
             [xtdb.node :as node]
             [xtdb.test-util :as tu])
-  (:import (xtdb InstantSource)
-           (io.micrometer.core.instrument MeterRegistry Timer)
+  (:import (io.micrometer.core.instrument MeterRegistry Timer)
            (java.io Closeable File)
            (java.nio.file Path)
            (java.time Clock Duration)
            (java.util Random)
            (java.util.concurrent ConcurrentHashMap)
-           (java.util.concurrent.atomic AtomicLong)))
+           (java.util.concurrent.atomic AtomicLong)
+           (xtdb InstantSource)))
 
 (set! *warn-on-reflection* false)
 
@@ -198,8 +199,8 @@
   ;; Running in process
   ;; ======
 
-  (def run-duration "PT5S")
-  (def run-duration "PT10S")
+  (def run-duration "PT1S")
+  (def run-duration "PT15S")
   (def run-duration "PT30S")
   (def run-duration "PT2M")
   (def run-duration "PT10M")
@@ -218,7 +219,7 @@
                   :instant-src InstantSource/SYSTEM}
       :benchmark-type :auctionmark
       :benchmark-opts {:duration run-duration
-                       :scale-factor 0.1 :threads 8}}))
+                       :scale-factor 0.1 :threads 3}}))
 
   ;;;;;;;;;;;;;
   ;; Viewing Reports
@@ -245,8 +246,16 @@
   ;;;;;;;;;;;;;
   ;; testing single point queries
   ;;;;;;;;;;;;;
+  (require '[xtdb.bench2.auctionmark :as auc])
 
   (def node (node/start-node (node-dir->config node-dir)))
+  (.close node)
+
+  (with-open [node (node/start-node (node-dir->config node-dir))]
+    (let [worker (->worker node)]
+      (auc/load-stats-into-worker worker)))
+
+  (comp/compact-all! node)
 
   (def get-item-query '{:find [i_id i_u_id i_initial_price i_current_price]
                         :in [i_id]
@@ -267,16 +276,75 @@
                                   :where [(match :item {:xt/id i :i_status :open})]})
                      (map :i)))
 
+  (take 5 open-ids)
 
+  (def all-ids (xt/q node '{:find [i]
+                            :where [(match :item {:xt/id i})]}))
+
+  (def all-ids-sorted (sort-by :i  #(cond (< (count %1) (count %2)) 1
+                                          (< (count %2) (count %1)) -1
+                                          :else (compare %2 %1))
+                               all-ids))
+
+  (take 5 all-ids-sorted)
+
+  (take 5 all-ids)
+
+  (def all-ids-ra
+    '[:scan
+      {:table item, :for-valid-time nil, :for-system-time nil}
+      [xt/id]])
+
+  (def all-ids-ra (tu/with-allocator
+                    #(tu/query-ra all-ids-ra {:node node})))
+
+  (->> (sort-by :xt/id all-ids-ra) reverse (take 10))
+
+
+  (take 10 all-ids-ra)
+
+
+
+  (xt/q node '{:find [i]
+               :where [(match :item [{:xt/id i}])
+                       [(= "i_999999" (substring i 1 8))]]})
+
+
+
+
+
+  (def all-ids )
+
+
+  (def item-ids (xt/q node '{:find [i]
+                             :where [(match :item {:xt/id i})]}))
+
+  (def sorted-ids (sort-by :i item-ids))
+
+  (->> sorted-ids reverse (take 10))
+
+  (sort-by identity #(cond (< (count %1) (count %2)) 1
+                           (< (count %2) (count %1)) -1
+                           :else (compare %2 %1))
+           all-ids)
+
+
+  (->> (map (comp #(Long/parseLong %) #(subs % 2)) all-ids)
+       sort
+       last)
+
+  (count open-ids)
 
   (def q  (fn [open-id]
             (tu/query-ra ra-query {:node node
                                    :params {'?i_id open-id}})))
+
   ;; ra query
   (time
    (tu/with-allocator
-     #(doseq [id (take 1000 (shuffle open-ids))]
+     #(doseq [id (take 4000 (shuffle open-ids))]
         (q id))))
+
 
   ;; datalog query
   (time
