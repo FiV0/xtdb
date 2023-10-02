@@ -483,6 +483,20 @@
   (^org.apache.arrow.memory.ArrowBuf [^BufferAllocator allocator ^ByteBuffer nio-buffer]
    (->arrow-buf-view allocator nio-buffer nil))
   (^org.apache.arrow.memory.ArrowBuf [^BufferAllocator allocator ^ByteBuffer nio-buffer on-close-fn]
+   #_(let [nio-buffer #_(if (.isDirect nio-buffer)
+                          nio-buffer
+                          (-> (ByteBuffer/allocateDirect (.capacity nio-buffer))
+                              (.put (.duplicate nio-buffer))
+                              (.clear)))
+           (-> (ByteBuffer/allocateDirect (.capacity nio-buffer))
+               (.put (.duplicate nio-buffer))
+               (.clear))
+           n (.capacity nio-buffer)
+           buf (.buffer allocator n)]
+       (.setBytes buf 0 nio-buffer 0 n)
+       (.capacity buf n)
+       (.clear buf))
+
    (let [nio-buffer (if (.isDirect nio-buffer)
                       nio-buffer
                       (-> (ByteBuffer/allocateDirect (.capacity nio-buffer))
