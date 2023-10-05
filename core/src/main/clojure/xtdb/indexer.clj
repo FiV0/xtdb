@@ -221,16 +221,22 @@
   (first (reset-vals! !last-tx-fn-error nil)))
 
 (defn- ->call-indexer ^xtdb.indexer.OpIndexer [allocator, ra-src, wm-src, scan-emitter
-                                               ^IVectorReader tx-ops-rdr, {:keys [tx-key] :as tx-opts}]
+                                               ^IVectorReader tx-ops-rdr, {:keys [tx-key] :as tx-opts}
+                                               latest-completed-tx]
   (let [call-leg (.legReader tx-ops-rdr :call)
         fn-id-rdr (.structKeyReader call-leg "fn-id")
         args-rdr (.structKeyReader call-leg "args")
 
         ;; TODO confirm/expand API that we expose to tx-fns
-        sci-ctx (sci/init {:bindings {'q (tx-fn-q allocator ra-src wm-src scan-emitter tx-opts)
-                                      'sql-q (partial tx-fn-sql allocator ra-src wm-src tx-opts)
-                                      'sleep (fn [n] (Thread/sleep n))
-                                      '*current-tx* tx-key}})]
+        sci-ctx (sci/init
+                 (let [q (tx-fn-q allocator ra-src wm-src scan-emitter tx-opts)]
+                   {:bindings {'q q
+                               'q-now #(q % {:basis {:after-tx latest-completed-tx}})
+                               'sql-q (partial tx-fn-sql allocator ra-src wm-src tx-opts)
+                               'status (constantly {:latest-completed-tx latest-completed-tx
+                                                    :latest-submitted-tx tx-key})
+                               'sleep (fn [n] (Thread/sleep n))
+                               '*current-tx* tx-key}}))]
 
     (reify OpIndexer
       (indexOp [_ tx-op-idx]
@@ -495,7 +501,7 @@
                             !put-idxer (delay (->put-indexer row-counter live-idx-tx tx-ops-rdr system-time))
                             !delete-idxer (delay (->delete-indexer row-counter live-idx-tx tx-ops-rdr system-time))
                             !evict-idxer (delay (->evict-indexer row-counter live-idx-tx tx-ops-rdr))
-                            !call-idxer (delay (->call-indexer allocator ra-src wm-src scan-emitter tx-ops-rdr tx-opts))
+                            !call-idxer (delay (->call-indexer allocator ra-src wm-src scan-emitter tx-ops-rdr tx-opts latest-completed-tx))
                             !sql-idxer (delay (->sql-indexer allocator row-counter live-idx-tx tx-ops-rdr ra-src wm-src scan-emitter tx-opts))]
                         (dotimes [tx-op-idx (.valueCount tx-ops-rdr)]
                           (when-let [more-tx-ops (case (.getTypeId tx-ops-rdr tx-op-idx)
