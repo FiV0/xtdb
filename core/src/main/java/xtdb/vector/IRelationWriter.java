@@ -2,6 +2,8 @@ package xtdb.vector;
 
 import java.util.Map;
 
+import org.apache.arrow.vector.types.pojo.Field;
+
 @SuppressWarnings("try")
 public interface IRelationWriter extends AutoCloseable, Iterable<Map.Entry<String, IVectorWriter>> {
 
@@ -27,7 +29,7 @@ public interface IRelationWriter extends AutoCloseable, Iterable<Map.Entry<Strin
     }
 
     IVectorWriter writerForName(String name);
-    IVectorWriter writerForName(String name, Object colType);
+    IVectorWriter writerForName(String name, Field field);
 
     IRowCopier rowCopier(RelationReader relation);
 

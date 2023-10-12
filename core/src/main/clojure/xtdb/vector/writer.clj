@@ -16,6 +16,7 @@
            (org.apache.arrow.memory BufferAllocator)
            (org.apache.arrow.vector BigIntVector BitVector DecimalVector DateDayVector DateMilliVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot)
            (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
+           (org.apache.arrow.vector.types Types$MinorType)
            (org.apache.arrow.vector.types.pojo ArrowType$List ArrowType$Struct ArrowType$Union Field FieldType)
            xtdb.types.ClojureForm
            (xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth)
@@ -32,7 +33,7 @@
   (->writer* arrow-vec (fn [_])))
 
 (defprotocol ArrowWriteable
-  (value->col-type [v])
+  (value->field [v])
   (write-value! [v ^xtdb.vector.IVectorWriter writer]))
 
 (defn- null->vec-copier [^IVectorWriter dest-wtr]
@@ -71,7 +72,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :null)
+        (getField [_] (types/col-type->field :null))
 
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
 
@@ -85,30 +86,30 @@
 
         (writerPosition [_] wp)
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
-        (writerForType [this _col-type] this))))
+        (writerForField [this _field] this))))
 
   BitVector
   (->writer* [arrow-vec _notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :bool)
+        (getField [_] (types/col-type->field :bool))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
         (writeBoolean [_ v] (.setSafe arrow-vec (.getPositionAndIncrement wp) (if v 1 0)))
-        (writerForType [this _col-type] this)))))
+        (writerForField [this _field] this)))))
 
 (defmacro def-writer-factory [clazz write-method]
   `(extend-protocol WriterFactory
      ~clazz
      (~'->writer* [arrow-vec# _notify!#]
       (let [wp# (IVectorPosition/build (.getValueCount arrow-vec#))
-            col-type# (types/field->col-type (.getField arrow-vec#))]
+            field# (.getField arrow-vec#)]
         (reify IVectorWriter
           (~'getVector [_] arrow-vec#)
-          (~'getColType [_] col-type#)
+          (~'getField [_] field#)
           (~'clear [_] (.clear arrow-vec#) (.setPosition wp# 0))
           (~'rowCopier [this# src-vec#] (scalar-copier this# src-vec#))
           (~'writerPosition [_#] wp#)
@@ -118,7 +119,7 @@
           (~write-method [_# v#]
            (.setSafe arrow-vec# (.getPositionAndIncrement wp#) v#))
 
-          (~'writerForType [this# _col-type#] this#))))))
+          (~'writerForField [this# _field#] this#))))))
 
 #_{:clj-kondo/ignore [:unresolved-symbol]}
 (do
@@ -142,7 +143,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:date :milli])
+        (getField [_] (types/col-type->field [:date :milli]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -155,7 +156,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :decimal)
+        (getField [_] (types/col-type->field :decimal))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -163,66 +164,66 @@
         (writeObject [_  decimal]
           (let [new-decimal (.setScale ^BigDecimal decimal (.getScale arrow-vec))]
             (.setSafe arrow-vec (.getPositionAndIncrement wp) new-decimal)))
-        (writerForType [this _col-type] this)))))
+        (writerForField [this _field] this)))))
 
 (extend-protocol ArrowWriteable
   nil
-  (value->col-type [_] :null)
+  (value->field [_] (types/col-type->field :null))
   (write-value! [_v ^IVectorWriter w] (.writeNull w nil))
 
   Boolean
-  (value->col-type [_] :bool)
+  (value->field [_] (types/col-type->field :bool))
   (write-value! [v ^IVectorWriter w] (.writeBoolean w v))
 
   Byte
-  (value->col-type [_] :i8)
+  (value->field [_] (types/col-type->field :i8))
   (write-value! [v ^IVectorWriter w] (.writeByte w v))
 
   Short
-  (value->col-type [_] :i16)
+  (value->field [_] (types/col-type->field :i16))
   (write-value! [v ^IVectorWriter w] (.writeShort w v))
 
   Integer
-  (value->col-type [_] :i32)
+  (value->field [_] (types/col-type->field :i32))
   (write-value! [v ^IVectorWriter w] (.writeInt w v))
 
   Long
-  (value->col-type [_] :i64)
+  (value->field [_] (types/col-type->field :i64))
   (write-value! [v ^IVectorWriter w] (.writeLong w v))
 
   Float
-  (value->col-type [_] :f32)
+  (value->field [_] (types/col-type->field :f32))
   (write-value! [v ^IVectorWriter w] (.writeFloat w v))
 
   Double
-  (value->col-type [_] :f64)
+  (value->field [_] (types/col-type->field :f64))
   (write-value! [v ^IVectorWriter w] (.writeDouble w v))
 
   BigDecimal
-  (value->col-type [_] :decimal)
+  (value->field [_] (types/col-type->field :decimal))
   (write-value! [v ^IVectorWriter w] (.writeObject w v)))
 
 (extend-protocol WriterFactory
   DurationVector
   (->writer* [arrow-vec _notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))
-          col-type (types/field->col-type (.getField arrow-vec))]
+          field (.getField arrow-vec)]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] col-type)
+        (getField [_] field)
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
         (writeLong [_ v] (.setSafe arrow-vec (.getPositionAndIncrement wp) v))
-        (writerForType [this _col-type] this))))
+        (writerForField [this _field] this))))
 
   IntervalYearVector
   (->writer* [arrow-vec _notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:interval :year-month])
+        (getField [_] (types/col-type->field [:interval :year-month]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -231,14 +232,14 @@
         (writeObject [this v]
           (let [^PeriodDuration period-duration v]
             (.writeInt this (.toTotalMonths (.getPeriod period-duration)))))
-        (writerForType [this _col-type] this))))
+        (writerForField [this _field] this))))
 
   IntervalDayVector
   (->writer* [arrow-vec _notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:interval :day-time])
+        (getField [_] (types/col-type->field [:interval :day-time]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -254,14 +255,14 @@
             (.setSafe arrow-vec (.getPositionAndIncrement wp)
                       (.getDays (.getPeriod period-duration))
                       (Math/addExact (Math/multiplyExact (long dsecs) (long 1000)) (long dmillis)))))
-        (writerForType [this _col-type] this))))
+        (writerForField [this _field] this))))
 
   IntervalMonthDayNanoVector
   (->writer* [arrow-vec _notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:interval :month-day-nano])
+        (getField [_] (types/col-type->field [:interval :month-day-nano]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -276,56 +277,56 @@
                       (.toTotalMonths period)
                       (.getDays period)
                       (Math/addExact (Math/multiplyExact dsecs (long 1000000000)) (long dnanos)))))
-        (writerForType [this _col-type] this)))))
+        (writerForField [this _field] this)))))
 
 (extend-protocol ArrowWriteable
   Date
-  (value->col-type [_] [:timestamp-tz :micro "UTC"])
+  (value->field [_] (types/col-type->field [:timestamp-tz :micro "UTC"]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (Math/multiplyExact (.getTime v) 1000)))
 
   Instant
-  (value->col-type [_] [:timestamp-tz :micro "UTC"])
+  (value->field [_] (types/col-type->field [:timestamp-tz :micro "UTC"]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (util/instant->micros v)))
 
   ZonedDateTime
-  (value->col-type [v] [:timestamp-tz :micro (.getId (.getZone v))])
+  (value->field [v] (types/col-type->field [:timestamp-tz :micro (.getId (.getZone v))]))
   (write-value! [v ^IVectorWriter w] (write-value! (.toInstant v) w))
 
   OffsetDateTime
-  (value->col-type [v] [:timestamp-tz :micro (.getId (.getOffset v))])
+  (value->field [v] (types/col-type->field [:timestamp-tz :micro (.getId (.getOffset v))]))
   (write-value! [v ^IVectorWriter w] (write-value! (.toInstant v) w))
 
   LocalDateTime
-  (value->col-type [_] [:timestamp-local :micro])
+  (value->field [_] (types/col-type->field [:timestamp-local :micro]))
   (write-value! [v ^IVectorWriter w] (write-value! (.toInstant v ZoneOffset/UTC) w))
 
   Duration
-  (value->col-type [_] [:duration :micro])
+  (value->field [_] (types/col-type->field [:duration :micro]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (quot (.toNanos v) 1000)))
 
   LocalDate
-  (value->col-type [_] [:date :day])
+  (value->field [_] (types/col-type->field [:date :day]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (.toEpochDay v)))
 
   LocalTime
-  (value->col-type [_] [:time-local :nano])
+  (value->field [_] (types/col-type->field [:time-local :nano]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (.toNanoOfDay v)))
 
   IntervalYearMonth
-  (value->col-type [_] [:interval :year-month])
+  (value->field [_] (types/col-type->field [:interval :year-month]))
   (write-value! [v ^IVectorWriter w] (.writeInt w (.toTotalMonths (.period v))))
 
   IntervalDayTime
-  (value->col-type [_] [:interval :day-time])
+  (value->field [_] (types/col-type->field [:interval :day-time]))
   (write-value! [v ^IVectorWriter w] (write-value! (PeriodDuration. (.period v) (.duration v)) w))
 
   IntervalMonthDayNano
-  (value->col-type [_] [:interval :month-day-nano])
+  (value->field [_] (types/col-type->field [:interval :month-day-nano]))
   (write-value! [v ^IVectorWriter w] (write-value! (PeriodDuration. (.period v) (.duration v)) w))
 
   ;; allow the use of PeriodDuration for more precision
   PeriodDuration
-  (value->col-type [_] [:interval :month-day-nano])
+  (value->field [_] (types/col-type->field [:interval :month-day-nano]))
   (write-value! [v ^IVectorWriter w] (.writeObject w v)))
 
 (extend-protocol WriterFactory
@@ -334,7 +335,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :utf8)
+        (getField [_] (types/col-type->field :utf8))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -349,14 +350,14 @@
         (writeObject [this v]
           (.writeBytes this (.encode (.newEncoder StandardCharsets/UTF_8) (CharBuffer/wrap ^CharSequence v))))
 
-        (writerForType [this _] this))))
+        (writerForField [this _] this))))
 
   VarBinaryVector
   (->writer* [arrow-vec _notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :varbinary)
+        (getField [_] (types/col-type->field :varbinary))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -370,7 +371,7 @@
 
         (writeObject [this v] (.writeBytes this (ByteBuffer/wrap ^bytes v)))
 
-        (writerForType [this _] this))))
+        (writerForField [this _] this))))
 
   FixedSizeBinaryVector
   (->writer* [arrow-vec _notify!]
@@ -378,7 +379,7 @@
           wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:fixed-size-binary byte-width])
+        (getField [_] (types/col-type->field [:fixed-size-binary byte-width]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -393,43 +394,56 @@
 
         (writeObject [this bytes] (.writeBytes this (ByteBuffer/wrap bytes)))
 
-        (writerForType [this _] this)))))
+        (writerForField [this _] this)))))
 
 (extend-protocol ArrowWriteable
   (Class/forName "[B")
-  (value->col-type [_] :varbinary)
+  (value->field [_] (types/col-type->field :varbinary))
   (write-value! [v ^IVectorWriter w] (.writeObject w v))
 
   ByteBuffer
-  (value->col-type [_] :varbinary)
+  (value->field [_] (types/col-type->field :varbinary))
   (write-value! [v ^IVectorWriter w] (.writeBytes w v))
 
   CharSequence
-  (value->col-type [_] :utf8)
+  (value->field [_] (types/col-type->field :utf8))
   (write-value! [v ^IVectorWriter w] (.writeObject w v)))
 
 (defn populate-with-absents [^IVectorWriter w, ^long pos]
   (let [absents (- pos (.getPosition (.writerPosition w)))]
     (when (pos? absents)
-      (let [absent-writer (.writerForType w :absent)]
+      (prn w)
+      (let [absent-writer (.writerForField w (types/col-type->field :absent))]
         (dotimes [_ absents]
           (.writeNull absent-writer nil))))))
+
+(comment
+  (require 'sc.api)
+
+  (sc.api/letsc [1 -2]
+                ;; el-field
+                (.getFieldType el-field)))
 
 (extend-protocol WriterFactory
   ListVector
   (->writer* [arrow-vec notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))
           data-vec (.getDataVector arrow-vec)
-          !col-type (atom nil)
-          el-writer (->writer* data-vec (fn notify-list-writer! [el-type]
-                                          (notify! (reset! !col-type [:list el-type]))))
+          !field (atom nil)
+          el-writer (->writer* data-vec (fn notify-list-writer! [el-field]
+                                          ;; (prn [el-field (type el-field)])
+                                          ;; (sc.api/spy)
+                                          (prn [(type el-field)
+                                                (types/field->col-type el-field)])
+
+                                          (notify! (reset! !field (types/col-type->field [:list (types/field->col-type el-field)])))))
           el-wp (.writerPosition el-writer)]
 
-      (reset! !col-type [:list (.getColType el-writer)])
+      (reset! !field (.getField el-writer))
 
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] @!col-type)
+        (getField [_] @!field)
         (clear [_] (.clear arrow-vec) (.setPosition wp 0) (.clear el-writer))
 
         (rowCopier [this-wtr src-vec]
@@ -465,7 +479,7 @@
                 end-pos (.getPosition el-wp)]
             (.endValue arrow-vec pos (- end-pos (.getElementStartIndex arrow-vec pos)))))
 
-        (writerForType [this _col-type] this))))
+        (writerForField [this _field] this))))
 
   StructVector
   (->writer* [arrow-vec notify!]
@@ -473,18 +487,18 @@
           writers (HashMap.)
           !col-types (atom {})]
 
-      (letfn [(notify-struct! [col-name col-type]
-                (notify! [:struct (swap! !col-types assoc (symbol col-name) col-type)]))
+      (letfn [(notify-struct! [col-name field]
+                (notify! (types/col-type->field [:struct (swap! !col-types assoc (symbol col-name) (types/field->col-type field))])))
               (->key-writer [^ValueVector child-vec]
                 (let [col-name (.getName child-vec)
                       w (->writer* child-vec (partial notify-struct! col-name))]
-                  (notify-struct! col-name (.getColType w))
+                  (notify-struct! col-name (.getField w))
                   w))]
 
         (reify IVectorWriter
           (getVector [_] arrow-vec)
 
-          (getColType [_] [:struct @!col-types])
+          (getField [_] (types/col-type->field [:struct @!col-types]))
 
           (clear [_] (.clear arrow-vec) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (.values writers)))
 
@@ -529,14 +543,14 @@
                                                                      DenseUnionVector)))
                                     (populate-with-absents (.getPosition wp)))))))
 
-          (structKeyWriter [_ col-name col-type]
+          (structKeyWriter [_ col-name field]
             (.computeIfAbsent writers col-name
                               (reify Function
                                 (apply [_ col-name]
                                   (doto (or (some-> (.getChild arrow-vec col-name)
                                                     (->key-writer))
 
-                                            (let [field (types/col-type->field col-type)]
+                                            (let [^Field field field]
                                               (->key-writer (doto (.addOrGet arrow-vec col-name (.getFieldType field) ValueVector)
                                                               (.initializeChildrenFromFields (.getChildren field))))))
 
@@ -550,34 +564,39 @@
               (doseq [^IVectorWriter w (.values writers)]
                 (populate-with-absents w (inc pos)))))
 
-          (writerForType [this _col-type] this)
+          (writerForField [this _field] this)
 
           Iterable
           (iterator [_] (.iterator (.entrySet writers))))))))
 
+;; TODO remove calls to field->col-types
 (extend-protocol ArrowWriteable
   List
-  (value->col-type [v] [:list (apply types/merge-col-types (into #{} (map value->col-type) v))])
+  (value->field [v]
+    (types/col-type->field [:list (apply types/merge-col-types (into #{} (map (comp types/field->col-type value->field)) v))]))
   (write-value! [v ^IVectorWriter writer]
     (let [el-writer (.listElementWriter writer)]
       (.startList writer)
       (doseq [el v]
-        (write-value! el (.writerForType el-writer (value->col-type el))))
+        ;; (prn [el (.writerForField el-writer (value->field el))])
+        (write-value! el (.writerForField el-writer (value->field el))))
       (.endList writer)))
 
   Set
-  (value->col-type [v] [:set (apply types/merge-col-types (into #{} (map value->col-type) v))])
+  (value->field [v]
+    (types/col-type->field [:set (apply types/merge-col-types (into #{} (map (comp types/field->col-type value->field)) v))]))
   (write-value! [v ^IVectorWriter writer] (write-value! (vec v) writer))
 
   Map
-  (value->col-type [v]
-    (if (every? keyword? (keys v))
-      [:struct (->> v
-                    (into {} (map (juxt (comp symbol key)
-                                        (comp value->col-type val)))))]
-      [:map
-       (apply types/merge-col-types (into #{} (map (comp value->col-type key)) v))
-       (apply types/merge-col-types (into #{} (map (comp value->col-type val)) v))]))
+  (value->field [v]
+    (types/col-type->field
+     (if (every? keyword? (keys v))
+       [:struct (->> v
+                     (into {} (map (juxt (comp symbol key)
+                                         (comp types/field->col-type value->field val)))))]
+       [:map
+        (apply types/merge-col-types (into #{} (map (comp types/field->col-type value->field key)) v))
+        (apply types/merge-col-types (into #{} (map (comp types/field->col-type value->field val)) v))])))
 
   (write-value! [m ^IVectorWriter writer]
     (if (every? keyword? (keys m))
@@ -586,7 +605,7 @@
 
         (doseq [[k v] m
                 :let [v-writer (-> (.structKeyWriter writer (str (symbol k)))
-                                   (.writerForType (value->col-type v)))]]
+                                   (.writerForField (value->field v)))]]
           (write-value! v v-writer))
 
         (.endStruct writer))
@@ -596,7 +615,7 @@
 (defn- duv-child-writer [^IVectorWriter w, write-value!]
   (reify IVectorWriter
     (getVector [_] (.getVector w))
-    (getColType [_] (.getColType w))
+    (getField [_] (.getField w))
     (clear [_] (.clear w))
 
     (rowCopier [_ src-vec]
@@ -628,7 +647,7 @@
     (endList [_] (write-value!) (.endList w))
 
     (registerNewType [_ field] (.registerNewType w field))
-    (writerForType [_ col-type] (.writerForType w col-type))
+    (writerForField [_ field] (.writerForField w field))
     (writerForTypeId [_ type-id] (.writerForTypeId w type-id))))
 
 (defn- duv->duv-copier ^xtdb.vector.IRowCopier [^IVectorWriter dest-col, ^DenseUnionVector src-vec]
@@ -642,16 +661,10 @@
     (dotimes [n child-count]
       (let [src-type-id (or (when type-ids (aget type-ids n))
                             n)
-            ^Field child-field (.get child-fields n)
-            child-field-name (.getName child-field)
-            col-type (types/field->col-type child-field)]
+            ^Field child-field (.get child-fields n)]
         (aset copier-mapping src-type-id
-              ;; HACK to make things work for named duv legs
-              (if-not (= child-field-name (types/col-type->field-name col-type))
-                (.rowCopier (.writerForField dest-col child-field)
-                            (.getVectorByType src-vec src-type-id))
-                (.rowCopier (.writerForType dest-col col-type)
-                            (.getVectorByType src-vec src-type-id))))))
+              (.rowCopier (.writerForField dest-col child-field)
+                          (.getVectorByType src-vec src-type-id)))))
 
     (reify IRowCopier
       (copyRow [_ src-idx]
@@ -668,11 +681,11 @@
         inner-types (types/flatten-union-types (types/field->col-type field))
         without-null (disj inner-types :null)]
     (assert (<= (count without-null) 1))
-    (let [non-null-copier (when-let [nn-col-type (first without-null)]
-                            (-> (.writerForType dest-col nn-col-type)
+    (let [non-null-copier (when-let [nn-field (types/col-type->field (first without-null))]
+                            (-> (.writerForField dest-col nn-field)
                                 (.rowCopier src-vec)))
           !null-copier (delay
-                         (-> (.writerForType dest-col :null)
+                         (-> (.writerForField dest-col (types/col-type->field :null))
                              (.rowCopier src-vec)))]
       (reify IRowCopier
         (copyRow [_ src-idx]
@@ -684,19 +697,22 @@
   DenseUnionVector
   (->writer* [duv notify!]
     (let [wp (IVectorPosition/build (.getValueCount duv))
-          children (.getChildren (.getField duv))
+          field (.getField duv)
+          children (.getChildren field)
           writers-by-type-id (ArrayList.)
-          writers-by-type (HashMap.)
+          writers-by-field-type (HashMap.)
           writers-by-name (HashMap.)
-          !col-type (atom nil)]
+          !field (atom nil)]
 
-      (letfn [(->col-type []
-                (apply types/merge-col-types (into #{} (map #(.getColType ^IVectorWriter %)) writers-by-type-id)))
+      (letfn [(->field []
+                (apply types/->field (.getName field) (.getType Types$MinorType/DENSEUNION) false
+                       (map #(.getField ^IVectorWriter %) writers-by-type-id))
+                #_(apply types/merge-col-types (into #{} (map #(.getField ^IVectorWriter %)) writers-by-type-id)))
 
               (->child-writer [^long type-id]
                 (let [v (.getVectorByType duv type-id)
                       child-wtr (->writer* v (fn [_]
-                                               (notify! (reset! !col-type (->col-type)))))
+                                               (notify! (reset! !field (->field)))))
                       child-wp (.writerPosition child-wtr)
 
                       child-wtr (-> child-wtr
@@ -708,20 +724,16 @@
                   child-wtr))]
 
         (doseq [[type-id ^Field field] (map-indexed vector children)]
-          (let [child-wtr (->child-writer type-id)
-                col-type (-> (.getVectorByType duv type-id)
-                             (.getField)
-                             (types/field->col-type)
-                             (types/col-type->leg))]
-            (.put writers-by-type col-type child-wtr)
+          (let [child-wtr (->child-writer type-id)]
+            (.put writers-by-field-type (.getFieldType field) child-wtr)
             (.put writers-by-name (.getName field) child-wtr)
             child-wtr))
 
-        (reset! !col-type (->col-type))
+        (reset! !field (->field))
 
         (reify IVectorWriter
           (getVector [_] duv)
-          (getColType [_] @!col-type)
+          (getField [_] @!field)
 
           (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) writers-by-type-id))
           (rowCopier [this-writer src-vec]
@@ -738,23 +750,18 @@
                   new-vec (.createVector field (.getAllocator duv))]
               (.addVector duv type-id new-vec)
               (->child-writer type-id)
-              (notify! (reset! !col-type (->col-type)))
+              (notify! (reset! !field (->field)))
 
               type-id))
 
           (writerForField [this field]
             ;; doesn't add into writers-by-type because we might have more than one field with similar types
             ;; so don't use both writerForField and writerForType on one writer.
-            (.computeIfAbsent writers-by-name (.getName field)
+            (.computeIfAbsent writers-by-field-type (.getFieldType field)
                               (reify Function
                                 (apply [_ _]
-                                  (.writerForTypeId this (.registerNewType this field))))))
-
-          (writerForType [this col-type]
-            (.computeIfAbsent writers-by-type (types/col-type->leg col-type)
-                              (reify Function
-                                (apply [_ _]
-                                  (let [field-name (types/col-type->field-name col-type)
+                                  (let [field-name (.getName field)
+                                        col-type (types/field->col-type field)
 
                                         ^Field field (case (types/col-type-head col-type)
                                                        :list
@@ -766,7 +773,7 @@
                                                        :struct
                                                        (types/->field field-name ArrowType$Struct/INSTANCE false)
 
-                                                       (types/col-type->field field-name col-type))
+                                                       field)
 
                                         type-id (.registerNewType this field)
 
@@ -775,22 +782,47 @@
                                     (.put writers-by-name field-name wtr)
                                     wtr)))))
 
+          #_(writerForType [this col-type]
+              (.computeIfAbsent writers-by-type (types/col-type->leg col-type)
+                                (reify Function
+                                  (apply [_ _]
+                                    (let [field-name (.get)
+
+                                          ^Field field (case (types/col-type-head col-type)
+                                                         :list
+                                                         (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+
+                                                         :set
+                                                         (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+
+                                                         :struct
+                                                         (types/->field field-name ArrowType$Struct/INSTANCE false)
+
+                                                         (types/col-type->field field-name col-type))
+
+                                          type-id (.registerNewType this field)
+
+                                          wtr (.writerForTypeId this type-id)]
+
+                                      (.put writers-by-name field-name wtr)
+                                      wtr)))))
+
           (writerForTypeId [_ type-id]
             (.get writers-by-type-id type-id)))))))
 
 (extend-protocol WriterFactory
   ExtensionTypeVector
-  (->writer* [arrow-vec notify!]
-    (let [!col-type (atom nil)
+  (->writer* [arrow-vec _notify!]
+    (let [!field (atom nil)
           inner (->writer* (.getUnderlyingVector arrow-vec)
                            (fn [_]
-                             (reset! !col-type (types/field->col-type (.getField arrow-vec)))))]
+                             (reset! !field (.getField arrow-vec))))]
 
-      (reset! !col-type (types/field->col-type (.getField arrow-vec)))
+      (reset! !field (.getField arrow-vec))
 
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] @!col-type)
+        (getField [_] @!field)
         (clear [_] (.clear inner))
         (rowCopier [this-wtr src-vec]
           (cond
@@ -823,27 +855,26 @@
         (endList [_] (.endList inner))
 
         (registerNewType [_ field] (.registerNewType inner field))
-        (writerForType [_ col-type] (.writerForType inner col-type))
         (writerForTypeId [_ type-id] (.writerForTypeId inner type-id))))))
 
 (extend-protocol ArrowWriteable
   Keyword
-  (value->col-type [_] :keyword)
+  (value->field [_] (types/col-type->field :keyword))
   (write-value! [kw ^IVectorWriter w]
     (write-value! (str (symbol kw)) w))
 
   UUID
-  (value->col-type [_] :uuid)
+  (value->field [_] (types/col-type->field :uuid))
   (write-value! [^UUID uuid ^IVectorWriter w]
     (write-value! (util/uuid->bytes uuid) w))
 
   URI
-  (value->col-type [_] :uri)
+  (value->field [_] (types/col-type->field :uri))
   (write-value! [^URI uri ^IVectorWriter w]
     (write-value! (str uri) w))
 
   ClojureForm
-  (value->col-type [_] :clj-form)
+  (value->field [_] (types/col-type->field :clj-form))
   (write-value! [clj-form ^IVectorWriter w]
     (write-value! (pr-str (.form clj-form)) w)))
 
@@ -852,7 +883,7 @@
 
   (let [writer (->writer v)]
     (doseq [v vs]
-      (write-value! v (.writerForType writer (value->col-type v))))
+      (write-value! v (.writerForField writer (value->field v))))
 
     (.syncValueCount writer)
 
@@ -862,7 +893,7 @@
   (->> (for [col-name (into #{} (mapcat keys) rows)]
          [(symbol col-name) (->> rows
                                  (into #{} (map (fn [row]
-                                                  (value->col-type (get row col-name)))))
+                                                  (types/field->col-type (value->field (get row col-name))))))
                                  (apply types/merge-col-types))])
        (into {})))
 
@@ -872,9 +903,9 @@
    (->writer (-> (types/->field col-name types/dense-union-type false)
                  (.createVector allocator))))
 
-  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name, col-type]
-   (->writer (-> (types/col-type->field col-name col-type)
-                 (.createVector allocator)))))
+  ;; TODO get rid of col-name
+  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, _col-name,^Field field]
+   (->writer (.createVector field allocator))))
 
 (defn ->rel-copier ^xtdb.vector.IRowCopier [^IRelationWriter rel-wtr, ^RelationReader in-rel]
   (let [wp (.writerPosition rel-wtr)
@@ -914,15 +945,18 @@
                               (doto (->vec-writer allocator col-name)
                                 (populate-with-absents (.getPosition wp)))))))
 
-      (writerForName [_ col-name col-type]
+      (writerForName [_ col-name field]
         (.computeIfAbsent writers col-name
                           (reify Function
                             (apply [_ col-name]
                               (let [pos (.getPosition wp)]
                                 (if (pos? pos)
-                                  (doto (->vec-writer allocator col-name (types/merge-col-types col-type :absent))
+                                  (doto (->vec-writer allocator col-name
+                                                      (-> (types/field->col-type field)
+                                                          (types/merge-col-types :absent)
+                                                          (types/col-type->field )))
                                     (populate-with-absents pos))
-                                  (->vec-writer allocator col-name col-type)))))))
+                                  (->vec-writer allocator col-name field)))))))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
 
@@ -989,7 +1023,7 @@
 (defn open-vec
   (^org.apache.arrow.vector.ValueVector [allocator col-name vs]
    (open-vec allocator col-name
-             (->> (into #{} (map value->col-type) vs)
+             (->> (into #{} (map (comp types/field->col-type value->field)) vs)
                   (apply types/merge-col-types))
              vs))
 
@@ -1021,8 +1055,8 @@
 
 (defn append-rel [^IRelationWriter dest-rel, ^RelationReader src-rel]
   (doseq [^IVectorReader src-col src-rel
-          :let [col-type (types/field->col-type (.getField src-col))
-                ^IVectorWriter vec-writer (.writerForName dest-rel (.getName src-col) col-type)]]
+          :let [field (.getField src-col)
+                ^IVectorWriter vec-writer (.writerForName dest-rel (.getName src-col) field)]]
     (append-vec vec-writer src-col))
 
   (let [wp (.writerPosition dest-rel)]
