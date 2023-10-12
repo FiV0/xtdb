@@ -62,7 +62,7 @@
 
 (defn- live-rel->col-types [^IRelationWriter live-rel]
   (let [col-type (-> (.writerForName live-rel "op")
-                     (.writerForTypeId (byte 0))
+                     (.writerForLeg :put)
                      (.structKeyWriter "xt$doc")
                      (.getColType)
                      types/without-null)]
@@ -198,15 +198,15 @@
    (util/with-close-on-catch [rel (trie/open-log-data-root allocator)]
      (let [iid-wtr (.writerForName rel "xt$iid")
            op-wtr (.writerForName rel "op")
-           put-wtr (.writerForTypeId op-wtr (byte 0))
-           delete-wtr (.writerForTypeId op-wtr (byte 1))]
+           put-wtr (.writerForLeg op-wtr :put)
+           delete-wtr (.writerForLeg op-wtr :delete)]
        (->LiveTable allocator buffer-pool table-name rel
                     (->live-trie (vw/vec-wtr->rdr iid-wtr))
                     iid-wtr (.writerForName rel "xt$system_from")
                     put-wtr (.structKeyWriter put-wtr "xt$valid_from") (.structKeyWriter put-wtr "xt$valid_to")
                     (.structKeyWriter put-wtr "xt$doc") delete-wtr (.structKeyWriter delete-wtr "xt$valid_from")
                     (.structKeyWriter delete-wtr "xt$valid_to")
-                    (.writerForTypeId op-wtr (byte 2)))))))
+                    (.writerForLeg op-wtr :evict))))))
 
 (defn ->live-trie [log-limit page-limit iid-rdr]
   (-> (doto (LiveHashTrie/builder iid-rdr)
