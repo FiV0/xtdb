@@ -17,7 +17,7 @@
            org.apache.arrow.vector.types.UnionMode
            (xtdb.log Log LogRecord)
            (xtdb.tx Ops Ops$Abort Ops$Call Ops$Delete Ops$Evict Ops$Put Ops$Sql)
-           xtdb.vector.IValueWriter))
+           xtdb.vector.IVectorWriter))
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
 (definterface ITxProducer
@@ -250,8 +250,8 @@
       (finally
         (run! util/try-close vecs)))))
 
-(defn- ->sql-writer [^IValueWriter op-writer, ^BufferAllocator allocator]
-  (let [sql-writer (.writerForTypeId op-writer 0)
+(defn- ->sql-writer [^IVectorWriter op-writer, ^BufferAllocator allocator]
+  (let [sql-writer (.writerForLeg op-writer :sql)
         query-writer (.structKeyWriter sql-writer "query")
         params-writer (.structKeyWriter sql-writer "params")]
     (fn write-sql! [^Ops$Sql op]
@@ -267,8 +267,8 @@
 
       (.endStruct sql-writer))))
 
-(defn- ->put-writer [^IValueWriter op-writer]
-  (let [put-writer (.writerForTypeId op-writer 1)
+(defn- ->put-writer [^IVectorWriter op-writer]
+  (let [put-writer (.writerForLeg op-writer :put)
         doc-writer (.structKeyWriter put-writer "document")
         valid-from-writer (.structKeyWriter put-writer "xt$valid_from")
         valid-to-writer (.structKeyWriter put-writer "xt$valid_to")
@@ -278,8 +278,8 @@
       (let [table-doc-writer (.computeIfAbsent table-doc-writers (util/kw->normal-form-kw (.tableName op))
                                                (util/->jfn
                                                  (fn [table]
-                                                   (let [type-id (.registerNewType doc-writer (types/col-type->field (name table) [:struct {}]))]
-                                                     (.writerForTypeId doc-writer type-id)))))]
+                                                   (.registerNewType doc-writer (types/col-type->field (name table) [:struct {}]))
+                                                   (.writerForLeg doc-writer table))))]
         (vw/write-value! (->> (.doc op)
                               (into {} (map (juxt (comp util/kw->normal-form-kw key)
                                                   val))))
@@ -290,8 +290,8 @@
 
       (.endStruct put-writer))))
 
-(defn- ->delete-writer [^IValueWriter op-writer]
-  (let [delete-writer (.writerForTypeId op-writer 2)
+(defn- ->delete-writer [^IVectorWriter op-writer]
+  (let [delete-writer (.writerForLeg op-writer :delete)
         table-writer (.structKeyWriter delete-writer "table")
         id-writer (.structKeyWriter delete-writer "xt$id")
         valid-from-writer (.structKeyWriter delete-writer "xt$valid_from")
@@ -309,8 +309,8 @@
 
       (.endStruct delete-writer))))
 
-(defn- ->evict-writer [^IValueWriter op-writer]
-  (let [evict-writer (.writerForTypeId op-writer 3)
+(defn- ->evict-writer [^IVectorWriter op-writer]
+  (let [evict-writer (.writerForLeg op-writer :evict)
         table-writer (.structKeyWriter evict-writer "_table")
         id-writer (.structKeyWriter evict-writer "xt$id")]
     (fn [^Ops$Evict op]
@@ -322,8 +322,8 @@
 
       (.endStruct evict-writer))))
 
-(defn- ->call-writer [^IValueWriter op-writer]
-  (let [call-writer (.writerForTypeId op-writer 4)
+(defn- ->call-writer [^IVectorWriter op-writer]
+  (let [call-writer (.writerForLeg op-writer :call)
         fn-id-writer (.structKeyWriter call-writer "fn-id")
         args-list-writer (.structKeyWriter call-writer "args")]
     (fn write-call! [^Ops$Call op]
@@ -336,15 +336,15 @@
 
       (.endStruct call-writer))))
 
-(defn- ->abort-writer [^IValueWriter op-writer]
-  (let [abort-writer (.writerForTypeId op-writer 5)]
+(defn- ->abort-writer [^IVectorWriter op-writer]
+  (let [abort-writer (.writerForLeg op-writer :abort)]
     (fn [^Ops$Abort _op]
       (.writeNull abort-writer nil))))
 
 (defn open-tx-ops-vec ^org.apache.arrow.vector.ValueVector [^BufferAllocator allocator]
   (.createVector tx-ops-field allocator))
 
-(defn write-tx-ops! [^BufferAllocator allocator, ^IValueWriter op-writer, tx-ops]
+(defn write-tx-ops! [^BufferAllocator allocator, ^IVectorWriter op-writer, tx-ops]
   (let [write-sql! (->sql-writer op-writer allocator)
         write-put! (->put-writer op-writer)
         write-delete! (->delete-writer op-writer)

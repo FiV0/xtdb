@@ -517,7 +517,7 @@
             (doseq [^IVectorWriter w (.values writers)]
               (.writeNull w nil)))
 
-          (structKeyWriter [_ col-name]
+          (^IVectorWriter structKeyWriter [_ ^String col-name]
             (.computeIfAbsent writers col-name
                               (reify Function
                                 (apply [_ col-name]
@@ -619,7 +619,7 @@
     (writeBytes [_ v] (write-value!) (.writeBytes w v))
     (writeObject [_ v] (write-value!) (.writeObject w v))
 
-    (structKeyWriter [_ k] (.structKeyWriter w k))
+    (^IVectorWriter structKeyWriter [_ ^String k] (.structKeyWriter w k))
     (startStruct [_] (.startStruct w))
     (endStruct [_] (write-value!) (.endStruct w))
 
@@ -685,8 +685,9 @@
   (->writer* [duv notify!]
     (let [wp (IVectorPosition/build (.getValueCount duv))
           children (.getChildren (.getField duv))
-          writers-by-type-id (ArrayList.)
-          writers-by-type (HashMap.)
+          ^:deprecated writers-by-type-id (ArrayList.)
+          ^:deprecated writers-by-type (HashMap.)
+          ;; TODO writers-by-name -> leg-writers, keyed by keyword
           writers-by-name (HashMap.)
           !col-type (atom nil)]
 
@@ -737,7 +738,8 @@
             (let [type-id (.registerNewTypeId duv field)
                   new-vec (.createVector field (.getAllocator duv))]
               (.addVector duv type-id new-vec)
-              (->child-writer type-id)
+              (let [child-wtr (->child-writer type-id)]
+                (.put writers-by-name (.getName field) child-wtr))
               (notify! (reset! !col-type (->col-type)))
 
               type-id))
@@ -774,6 +776,11 @@
 
                                     (.put writers-by-name field-name wtr)
                                     wtr)))))
+
+          (writerForLeg [_this leg]
+            (or (.get writers-by-name (name leg))
+                (throw (NullPointerException. (pr-str {:legs (set (keys writers-by-name))
+                                                       :leg leg})))))
 
           (writerForTypeId [_ type-id]
             (.get writers-by-type-id type-id)))))))
@@ -814,7 +821,7 @@
         (writeBytes [_ v] (.writeBytes inner v))
         (writeObject [_ v] (.writeObject inner v))
 
-        (structKeyWriter [_ k] (.structKeyWriter inner k))
+        (^IVectorWriter structKeyWriter [_ ^String k] (.structKeyWriter inner k))
         (startStruct [_] (.startStruct inner))
         (endStruct [_] (.endStruct inner))
 

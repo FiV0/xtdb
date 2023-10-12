@@ -259,7 +259,7 @@
 (defn ->local-submit-node ^java.lang.AutoCloseable [{:keys [^Path node-dir]}]
   (node/start-submit-node {:xtdb.tx-producer/tx-producer {:clock (->mock-clock)}
                            :xtdb.log/local-directory-log {:root-path (.resolve node-dir "log")
-                                                           :clock (->mock-clock)}}))
+                                                          :clock (->mock-clock)}}))
 
 (defn with-tmp-dir* [prefix f]
   (let [dir (Files/createTempDirectory prefix (make-array FileAttribute 0))]
@@ -313,10 +313,10 @@
     (let [meta-wtr (vw/root->writer meta-root)
           meta-wp (.writerPosition meta-wtr)
           nodes-wtr (.writerForName meta-wtr "nodes")
-          nil-wtr (.writerForTypeId nodes-wtr (byte 0))
-          branch-wtr (.writerForTypeId nodes-wtr (byte 1))
+          nil-wtr (.writerForLeg nodes-wtr :nil)
+          branch-wtr (.writerForLeg nodes-wtr :branch)
           branch-el-wtr (.listElementWriter branch-wtr)
-          data-wtr (.writerForTypeId nodes-wtr (byte 2))
+          data-wtr (.writerForLeg nodes-wtr :leaf)
           data-page-idx-wtr (.structKeyWriter data-wtr "data-page-idx")]
       (letfn [(write-paths [paths]
                 (cond
