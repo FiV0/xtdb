@@ -33,7 +33,7 @@
   (->writer* arrow-vec (fn [_])))
 
 (defprotocol ArrowWriteable
-  (value->field [v])
+  (^org.apache.arrow.vector.types.pojo.Field value->field [v])
   (write-value! [v ^xtdb.vector.IVectorWriter writer]))
 
 (defn- null->vec-copier [^IVectorWriter dest-wtr]
@@ -412,7 +412,6 @@
 (defn populate-with-absents [^IVectorWriter w, ^long pos]
   (let [absents (- pos (.getPosition (.writerPosition w)))]
     (when (pos? absents)
-      (prn w)
       (let [absent-writer (.writerForField w (types/col-type->field :absent))]
         (dotimes [_ absents]
           (.writeNull absent-writer nil))))))
@@ -431,11 +430,6 @@
           data-vec (.getDataVector arrow-vec)
           !field (atom nil)
           el-writer (->writer* data-vec (fn notify-list-writer! [el-field]
-                                          ;; (prn [el-field (type el-field)])
-                                          ;; (sc.api/spy)
-                                          (prn [(type el-field)
-                                                (types/field->col-type el-field)])
-
                                           (notify! (reset! !field (types/col-type->field [:list (types/field->col-type el-field)])))))
           el-wp (.writerPosition el-writer)]
 
@@ -578,7 +572,6 @@
     (let [el-writer (.listElementWriter writer)]
       (.startList writer)
       (doseq [el v]
-        ;; (prn [el (.writerForField el-writer (value->field el))])
         (write-value! el (.writerForField el-writer (value->field el))))
       (.endList writer)))
 
@@ -855,6 +848,7 @@
         (endList [_] (.endList inner))
 
         (registerNewType [_ field] (.registerNewType inner field))
+        (writerForField [this _field] this)
         (writerForTypeId [_ type-id] (.writerForTypeId inner type-id))))))
 
 (extend-protocol ArrowWriteable

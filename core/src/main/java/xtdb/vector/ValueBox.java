@@ -157,7 +157,7 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
     }
 
     @Override
-    public IValueWriter writerForType(Object colType) {
+    public IValueWriter writerForField(Field field) {
         throw new UnsupportedOperationException();
     }
 

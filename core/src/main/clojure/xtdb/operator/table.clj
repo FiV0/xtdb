@@ -57,7 +57,7 @@
           (dotimes [idx row-count]
             (let [row (nth rows idx)
                   v (-> (get row col-kw) (->v opts))]
-              (vw/write-value! v (.writerForType out-writer (vw/value->col-type v)))))
+              (vw/write-value! v (.writerForField out-writer (vw/value->field v)))))
 
           (.setValueCount out-vec row-count))
 
@@ -76,7 +76,7 @@
                 ^Set col-type-set (.computeIfAbsent col-type-sets k-sym (reify Function (apply [_ _] (HashSet.))))]
             (case (:op expr)
               :literal (do
-                         (.add col-type-set (vw/value->col-type v))
+                         (.add col-type-set (types/field->col-type (vw/value->field v)))
                          (.put out-row k-kw v))
 
               :param (let [{:keys [param]} expr]

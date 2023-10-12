@@ -35,7 +35,7 @@ public interface IValueWriter {
     void startList();
     void endList();
 
-    IValueWriter writerForType(Object colType);
+    IValueWriter writerForField(Field field);
     byte registerNewType(Field field);
     IValueWriter writerForTypeId(byte typeId);
 }

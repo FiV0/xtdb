@@ -192,7 +192,7 @@
          :sql+params (s/and vector?
                             (s/cat :sql string?,
                                    :param-groups (s/? (s/alt :rows (s/* (s/coll-of any? :kind sequential?))
-                                                             :bytes #(= :varbinary (vw/value->col-type %))))))))
+                                                             :bytes #(= :varbinary (types/field->col-type (vw/value->field %)))))))))
 
 (def ^:private ^org.apache.arrow.vector.types.pojo.Field tx-ops-field
   (types/->field "tx-ops" (ArrowType$Union. UnionMode/Dense (int-array (range 6))) false
@@ -302,7 +302,7 @@
       (vw/write-value! (name (util/kw->normal-form-kw (.tableName op))) table-writer)
 
       (let [eid (.entityId op)]
-        (vw/write-value! eid (.writerForType id-writer (vw/value->col-type eid))))
+        (vw/write-value! eid (.writerForField id-writer (vw/value->field eid))))
 
       (vw/write-value! (.validFrom op) valid-from-writer)
       (vw/write-value! (.validTo op) valid-to-writer)
@@ -318,7 +318,7 @@
       (vw/write-value! (name (.tableName op)) table-writer)
 
       (let [eid (.entityId op)]
-        (vw/write-value! eid (.writerForType id-writer (vw/value->col-type eid))))
+        (vw/write-value! eid (.writerForField id-writer (vw/value->field eid))))
 
       (.endStruct evict-writer))))
 
@@ -330,7 +330,7 @@
       (.startStruct call-writer)
 
       (let [fn-id (.fnId op)]
-        (vw/write-value! fn-id (.writerForType fn-id-writer (vw/value->col-type fn-id))))
+        (vw/write-value! fn-id (.writerForField fn-id-writer (vw/value->field fn-id))))
 
       (vw/write-value! (vec (.args op)) args-list-writer)
 

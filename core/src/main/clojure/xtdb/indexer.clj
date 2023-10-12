@@ -418,20 +418,20 @@
     (.logPut live-table (trie/->iid tx-id) system-time-µs util/end-of-time-μs
              (fn write-doc! []
                (.startStruct doc-writer)
-               (doto (.structKeyWriter doc-writer "xt$id" :i64)
+               (doto (.structKeyWriter doc-writer "xt$id" (types/col-type->field :i64))
                  (.writeLong tx-id))
 
-               (doto (.structKeyWriter doc-writer "xt$tx_time" types/temporal-col-type)
+               (doto (.structKeyWriter doc-writer "xt$tx_time" (types/col-type->field types/temporal-col-type))
                  (.writeLong system-time-µs))
 
-               (doto (.structKeyWriter doc-writer "xt$committed?" :bool)
+               (doto (.structKeyWriter doc-writer "xt$committed?" (types/col-type->field :bool))
                  (.writeBoolean (nil? t)))
 
-               (let [e-wtr (.structKeyWriter doc-writer "xt$error" [:union #{:null :clj-form}])]
+               (let [e-wtr (.structKeyWriter doc-writer "xt$error" (types/col-type->field [:union #{:null :clj-form}]))]
                  (if (or (nil? t) (= t abort-exn))
-                   (doto (.writerForType e-wtr :null)
+                   (doto (.writerForField e-wtr (types/col-type->field :null))
                      (.writeNull nil))
-                   (doto (.writerForType e-wtr :clj-form)
+                   (doto (.writerForField e-wtr (types/col-type->field :clj-form))
                      (.writeObject (pr-str t)))))
                (.endStruct doc-writer)))
 

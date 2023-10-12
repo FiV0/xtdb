@@ -93,8 +93,8 @@ abstract class BoxWriter implements IValueWriter {
     }
 
     @Override
-    public IValueWriter writerForType(Object colType) {
-        return box().writerForType(colType);
+    public IValueWriter writerForField(Field field) {
+        return box().writerForField(field);
     }
 
     @Override
