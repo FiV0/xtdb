@@ -96,7 +96,7 @@
   :hierarchy #'types/col-type-hierarchy)
 
 (defn- ->bool-type-handler [^IVectorWriter types-wtr, col-type]
-  (let [bit-wtr (.structKeyWriter types-wtr (types/col-type->field-name col-type) [:union #{:null :bool}])]
+  (let [bit-wtr (.structKeyWriter types-wtr (types/col-type->field-name col-type) (types/col-type->field [:union #{:null :bool}]))]
     (reify NestedMetadataWriter
       (appendNestedMetadata [_ _content-col]
         (reify ContentMetadataWriter
@@ -108,9 +108,9 @@
   (let [types-wp (.writerPosition types-wtr)
 
         struct-wtr (.structKeyWriter types-wtr (types/col-type->field-name col-type)
-                                     [:union #{:null
-                                               [:struct {'min [:union #{:null col-type}]
-                                                         'max [:union #{:null col-type}]}]}])
+                                     (types/col-type->field [:union #{:null
+                                                                      [:struct {'min [:union #{:null col-type}]
+                                                                                'max [:union #{:null col-type}]}]}]))
 
         min-wtr (.structKeyWriter struct-wtr "min")
         ^FieldVector min-vec (.getVector min-wtr)
@@ -175,7 +175,7 @@
   (let [types-wp (.writerPosition types-wtr)
         struct-type-wtr (.structKeyWriter types-wtr
                                           (str (types/col-type->field-name col-type) "-" (count (seq types-wtr)))
-                                          [:union #{:null [:list [:union #{:null :i32}]]}])
+                                          (types/col-type->field [:union #{:null [:list [:union #{:null :i32}]]}]))
         struct-type-el-wtr (.listElementWriter struct-type-wtr)]
     (reify NestedMetadataWriter
       (appendNestedMetadata [_ content-col]

@@ -121,7 +121,7 @@
             (let [wtrs (->> col-names
                             (into [] (keep (fn [col-name]
                                              (when (= normalised-col-name (util/str->normal-form-str col-name))
-                                               (.writerForName out-rel col-name types/temporal-col-type))))))]
+                                               (.writerForName out-rel col-name (types/col-type->field types/temporal-col-type)))))))]
               (reify IVectorWriter
                 (writeLong [_ l]
                   (doseq [^IVectorWriter wtr wtrs]
@@ -241,6 +241,7 @@
   (->VSRCache buffer-pool allocator (HashMap.)))
 
 (defn cache-vsr [{:keys [^Map cache, buffer-pool, allocator]} trie-leaf-file]
+  #_(bp/open-vsr buffer-pool trie-leaf-file allocator)
   (.computeIfAbsent cache trie-leaf-file
                     (util/->jfn
                       (fn [trie-leaf-file]

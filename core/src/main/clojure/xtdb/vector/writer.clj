@@ -897,9 +897,8 @@
    (->writer (-> (types/->field col-name types/dense-union-type false)
                  (.createVector allocator))))
 
-  ;; TODO get rid of col-name
-  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, _col-name,^Field field]
-   (->writer (.createVector field allocator))))
+  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name, ^Field field]
+   (->writer (.createVector (types/col-type->field col-name (types/field->col-type field)) allocator))))
 
 (defn ->rel-copier ^xtdb.vector.IRowCopier [^IRelationWriter rel-wtr, ^RelationReader in-rel]
   (let [wp (.writerPosition rel-wtr)
@@ -948,7 +947,7 @@
                                   (doto (->vec-writer allocator col-name
                                                       (-> (types/field->col-type field)
                                                           (types/merge-col-types :absent)
-                                                          (types/col-type->field )))
+                                                          (types/col-type->field)))
                                     (populate-with-absents pos))
                                   (->vec-writer allocator col-name field)))))))
 
@@ -984,7 +983,7 @@
             (throw (NullPointerException.
                     (pr-str {:writers (keys writers), :col-name col-name})))))
 
-      (writerForName [this col-name _col-type]
+      (writerForName [this col-name _field]
         (.writerForName this col-name))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
