@@ -224,6 +224,11 @@ class ListValueBox implements IValueWriter, IMonoVectorReader, IPolyVectorReader
     }
 
     @Override
+    public IValueWriter structKeyWriter(Field field) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public void startStruct() {
         writeBox = new ValueBox();
         els.add(wp.getPosition(), writeBox);
@@ -250,5 +255,10 @@ class ListValueBox implements IValueWriter, IMonoVectorReader, IPolyVectorReader
     @Override
     public IValueWriter writerForTypeId(byte typeId) {
         return writeBox.writerForTypeId(typeId);
+    }
+
+    @Override
+    public IValueWriter writerForField(Field field) {
+        throw new UnsupportedOperationException();
     }
 }

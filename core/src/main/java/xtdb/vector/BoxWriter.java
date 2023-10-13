@@ -66,7 +66,9 @@ abstract class BoxWriter implements IValueWriter {
     public IValueWriter structKeyWriter(String key, Object colType) {
         return box().structKeyWriter(key, colType);
     }
-
+    public IValueWriter structKeyWriter(Field field) {
+        throw new UnsupportedOperationException();
+    }
     @Override
     public void startStruct() {
         box().startStruct();
@@ -105,5 +107,10 @@ abstract class BoxWriter implements IValueWriter {
     @Override
     public IValueWriter writerForTypeId(byte typeId) {
         return box().writerForTypeId(typeId);
+    }
+
+    @Override
+    public IValueWriter writerForField(Field field) {
+        throw new UnsupportedOperationException();
     }
 }

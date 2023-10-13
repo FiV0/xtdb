@@ -41,6 +41,7 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     /**
      * will create
      */
+    @Override
     IVectorWriter structKeyWriter(Field field);
 
     @Override
@@ -59,6 +60,7 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     /**
      * will create a leg if it doesn't exist
      */
+    @Override
     IVectorWriter writerForField(Field field);
 
     @Override

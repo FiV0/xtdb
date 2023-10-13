@@ -129,6 +129,11 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
     }
 
     @Override
+    public IValueWriter structKeyWriter(Field field) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public void startStruct() {
         obj = new StructValueBox();
     }
@@ -175,5 +180,10 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
                 return ValueBox.this;
             }
         };
+    }
+
+    @Override
+    public IValueWriter writerForField(Field field) {
+        throw new UnsupportedOperationException();
     }
 }
