@@ -642,20 +642,10 @@
     (dotimes [n child-count]
       (let [src-type-id (or (when type-ids (aget type-ids n))
                             n)
-            ^Field child-field (.get child-fields n)
-            child-field-name (.getName child-field)]
+            ^Field child-field (.get child-fields n)]
         (aset copier-mapping src-type-id
               (.rowCopier (.writerForField dest-col child-field)
-                          (.getVectorByType src-vec src-type-id))
-              #_(.rowCopier (.writerForLeg dest-col (keyword child-field-name))
-                            (.getVectorByType src-vec src-type-id))
-
-              ;; HACK to make things work for named duv legs
-              #_(if-not (= child-field-name (types/col-type->field-name col-type))
-                  (.rowCopier (.writerForField dest-col child-field)
-                              (.getVectorByType src-vec src-type-id))
-                  (.rowCopier (.writerForType dest-col col-type)
-                              (.getVectorByType src-vec src-type-id))))))
+                          (.getVectorByType src-vec src-type-id)))))
 
     (reify IRowCopier
       (copyRow [_ src-idx]
@@ -767,9 +757,6 @@
                                     field)))
               (.get writers-by-name field-name)))
 
-          (writerForType [_this _col-type]
-            (throw (UnsupportedOperationException. "writerForType is deprecated!")))
-
           (writerForLeg [_this leg]
             (or (.get writers-by-name (name leg))
                 (throw (NullPointerException. (pr-str {:legs (set (keys writers-by-name))
@@ -824,7 +811,6 @@
 
         (registerNewType [_ field] (.registerNewType inner field))
         (writerForField [_ field] (.writerForField inner field))
-        (writerForType [_ _col-type] (throw (UnsupportedOperationException. "extension-type-vector")))
         (writerForTypeId [_ type-id] (.writerForTypeId inner type-id))))))
 
 (extend-protocol ArrowWriteable
