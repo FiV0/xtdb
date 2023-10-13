@@ -276,7 +276,7 @@
          (.startList ~writer-arg)
          (dotimes [~n-sym el-count#]
            ~(continue-read (fn [el-type code]
-                             (write-value-code el-type `(.writerForType ~el-writer-sym '~el-type) code))
+                             (write-value-code el-type `(.writerForField ~el-writer-sym (types/col-type->field '~el-type)) code))
                            list-el-type list-sym n-sym))
          (.endList ~writer-arg))
 
@@ -304,7 +304,8 @@
              (let [field-box-sym (gensym 'field_box)]
                `(let [~field-box-sym (.readField ~struct-sym ~field-name)]
                   ~(continue-read (fn [val-type code]
-                                    (write-value-code val-type `(-> (.structKeyWriter ~writer-arg ~field-name) (.writerForType '~val-type)) code))
+                                    (write-value-code val-type `(-> (.structKeyWriter ~writer-arg ~field-name)
+                                                                    (.writerForField (types/col-type->field '~val-type))) code))
                                   val-type field-box-sym)))
 
              (continue-read (fn [val-type code]
@@ -1511,7 +1512,7 @@
                            (into {} (map (juxt identity (fn [_] (gensym 'out-writer))))))]
       {:writer-bindings (into [out-writer-sym `(vw/->writer ~out-vec-sym)]
                               (mapcat (fn [[value-type writer-sym]]
-                                        [writer-sym `(.writerForType ~out-writer-sym '~value-type)]))
+                                        [writer-sym `(.writerForField ~out-writer-sym (types/col-type->field '~value-type))]))
                               writer-syms)
 
        :write-value-out! (fn [value-type code]

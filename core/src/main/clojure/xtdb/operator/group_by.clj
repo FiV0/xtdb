@@ -209,7 +209,7 @@
                                   ~(continue (fn [acc-type acc-code]
                                                `(do
                                                   (.setPosition (.writerPosition ~acc-writer-sym) ~group-idx-sym)
-                                                  ~(expr/write-value-code acc-type `(.writerForType ~acc-writer-sym '~acc-type) acc-code))))))))
+                                                  ~(expr/write-value-code acc-type `(.writerForField ~acc-writer-sym (types/col-type->field '~acc-type)) acc-code))))))))
                          #_(doto clojure.pprint/pprint)
                          eval)}))
       (util/lru-memoize)))
