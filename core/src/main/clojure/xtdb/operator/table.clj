@@ -57,7 +57,9 @@
           (dotimes [idx row-count]
             (let [row (nth rows idx)
                   v (-> (get row col-kw) (->v opts))]
-              (vw/write-value! v (.writerForType out-writer (vw/value->col-type v)))))
+              (vw/write-value! v
+                               #_(.writerForType out-writer (vw/value->col-type v))
+                               (.writerForField out-writer (types/col-type->field (vw/value->col-type v))))))
 
           (.setValueCount out-vec row-count))
 

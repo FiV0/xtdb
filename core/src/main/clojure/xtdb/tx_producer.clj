@@ -302,7 +302,7 @@
       (vw/write-value! (name (util/kw->normal-form-kw (.tableName op))) table-writer)
 
       (let [eid (.entityId op)]
-        (vw/write-value! eid (.writerForType id-writer (vw/value->col-type eid))))
+        (vw/write-value! eid (.writerForField id-writer (types/col-type->field (vw/value->col-type eid)))))
 
       (vw/write-value! (.validFrom op) valid-from-writer)
       (vw/write-value! (.validTo op) valid-to-writer)
@@ -318,7 +318,7 @@
       (vw/write-value! (name (.tableName op)) table-writer)
 
       (let [eid (.entityId op)]
-        (vw/write-value! eid (.writerForType id-writer (vw/value->col-type eid))))
+        (vw/write-value! eid (.writerForField id-writer (types/col-type->field (vw/value->col-type eid)))))
 
       (.endStruct evict-writer))))
 
@@ -330,7 +330,7 @@
       (.startStruct call-writer)
 
       (let [fn-id (.fnId op)]
-        (vw/write-value! fn-id (.writerForType fn-id-writer (vw/value->col-type fn-id))))
+        (vw/write-value! fn-id (.writerForField fn-id-writer (types/col-type->field (vw/value->col-type fn-id)))))
 
       (vw/write-value! (vec (.args op)) args-list-writer)
 

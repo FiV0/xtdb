@@ -430,9 +430,9 @@
 
                (let [e-wtr (.structKeyWriter doc-writer "xt$error" [:union #{:null :clj-form}])]
                  (if (or (nil? t) (= t abort-exn))
-                   (doto (.writerForType e-wtr :null)
+                   (doto (.writerForField e-wtr (types/col-type->field :null))
                      (.writeNull nil))
-                   (doto (.writerForType e-wtr :clj-form)
+                   (doto (.writerForField e-wtr (types/col-type->field :clj-form))
                      (.writeObject (pr-str t)))))
                (.endStruct doc-writer)))
 
