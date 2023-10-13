@@ -679,16 +679,13 @@
   (->writer* [duv notify!]
     (let [wp (IVectorPosition/build (.getValueCount duv))
           children (.getChildren (.getField duv))
-          ^:deprecated writers-by-type-id (ArrayList.)
-          ^:deprecated writers-by-type (HashMap.)
-          ;; TODO writers-by-name -> leg-writers, keyed by keyword
           writers-by-leg (HashMap.)
           !col-type (atom nil)]
 
       (letfn [(->col-type []
-                (apply types/merge-col-types (into #{} (map #(.getColType ^IVectorWriter %)) writers-by-type-id)))
+                (apply types/merge-col-types (into #{} (map #(.getColType ^IVectorWriter %)) (vals writers-by-leg))))
 
-              (->child-writer [^long type-id]
+              (->child-writer [^long type-id ^Field field]
                 (let [v (.getVectorByType duv type-id)
                       child-wtr (->writer* v (fn [_]
                                                (notify! (reset! !col-type (->col-type)))))
@@ -699,18 +696,12 @@
                                                         (let [pos (.getPositionAndIncrement wp)]
                                                           (.setTypeId duv pos type-id)
                                                           (.setOffset duv pos (.getPosition child-wp))))))]
-                  (.add writers-by-type-id type-id child-wtr)
+                  (.put writers-by-leg (keyword (.getName field)) child-wtr)
                   child-wtr))]
 
+        ;; HACK this makes assumption about initial type-id layout which might not hold for arbitrary arrow data
         (doseq [[type-id ^Field field] (map-indexed vector children)]
-          (let [child-wtr (->child-writer type-id)
-                col-type (-> (.getVectorByType duv type-id)
-                             (.getField)
-                             (types/field->col-type)
-                             (types/col-type->leg))]
-            (.put writers-by-type col-type child-wtr)
-            (.put writers-by-leg (keyword (.getName field)) child-wtr)
-            child-wtr))
+          (->child-writer type-id field))
 
         (reset! !col-type (->col-type))
 
@@ -718,7 +709,7 @@
           (getVector [_] duv)
           (getColType [_] @!col-type)
 
-          (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) writers-by-type-id))
+          (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (vals writers-by-leg)))
           (rowCopier [this-writer src-vec]
             (let [inner-copier (if (instance? DenseUnionVector src-vec)
                                  (duv->duv-copier this-writer src-vec)
@@ -732,8 +723,7 @@
             (let [type-id (.registerNewTypeId duv field)
                   new-vec (.createVector field (.getAllocator duv))]
               (.addVector duv type-id new-vec)
-              (let [child-wtr (->child-writer type-id)]
-                (.put writers-by-leg (keyword (.getName field)) child-wtr))
+              (->child-writer type-id field)
               (notify! (reset! !col-type (->col-type)))
 
               type-id))
@@ -761,10 +751,7 @@
           (writerForLeg [_this leg]
             (or (.get writers-by-leg leg)
                 (throw (NullPointerException. (pr-str {:legs (set (keys writers-by-leg))
-                                                       :leg leg})))))
-
-          (writerForTypeId [_ type-id]
-            (.get writers-by-type-id type-id)))))))
+                                                       :leg leg}))))))))))
 
 (extend-protocol WriterFactory
   ExtensionTypeVector
