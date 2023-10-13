@@ -682,7 +682,7 @@
           ^:deprecated writers-by-type-id (ArrayList.)
           ^:deprecated writers-by-type (HashMap.)
           ;; TODO writers-by-name -> leg-writers, keyed by keyword
-          writers-by-name (HashMap.)
+          writers-by-leg (HashMap.)
           !col-type (atom nil)]
 
       (letfn [(->col-type []
@@ -709,7 +709,7 @@
                              (types/field->col-type)
                              (types/col-type->leg))]
             (.put writers-by-type col-type child-wtr)
-            (.put writers-by-name (.getName field) child-wtr)
+            (.put writers-by-leg (keyword (.getName field)) child-wtr)
             child-wtr))
 
         (reset! !col-type (->col-type))
@@ -733,7 +733,7 @@
                   new-vec (.createVector field (.getAllocator duv))]
               (.addVector duv type-id new-vec)
               (let [child-wtr (->child-writer type-id)]
-                (.put writers-by-name (.getName field) child-wtr))
+                (.put writers-by-leg (keyword (.getName field)) child-wtr))
               (notify! (reset! !col-type (->col-type)))
 
               type-id))
@@ -741,8 +741,9 @@
           (writerForField [this field]
             ;; doesn't add into writers-by-type because we might have more than one field with similar types
             ;; so don't use both writerForField and writerForType on one writer.
-            (let [field-name (.getName field)]
-              (when-not (.containsKey writers-by-name field-name)
+            (let [field-name (.getName field)
+                  field-leg (keyword field-name)]
+              (when-not (.containsKey writers-by-leg field-leg)
                 (.registerNewType this
                                   (case (types/col-type-head (types/field->col-type field))
                                     :list
@@ -755,11 +756,11 @@
                                     (types/->field field-name ArrowType$Struct/INSTANCE false)
 
                                     field)))
-              (.get writers-by-name field-name)))
+              (.get writers-by-leg field-leg)))
 
           (writerForLeg [_this leg]
-            (or (.get writers-by-name (name leg))
-                (throw (NullPointerException. (pr-str {:legs (set (keys writers-by-name))
+            (or (.get writers-by-leg leg)
+                (throw (NullPointerException. (pr-str {:legs (set (keys writers-by-leg))
                                                        :leg leg})))))
 
           (writerForTypeId [_ type-id]
