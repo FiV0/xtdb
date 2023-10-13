@@ -6,14 +6,105 @@
             [xtdb.util :as util])
   (:import (clojure.lang MapEntry)
            (org.apache.arrow.vector.types DateUnit FloatingPointPrecision IntervalUnit TimeUnit Types$MinorType UnionMode)
-           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Binary ArrowType$Bool ArrowType$Date ArrowType$Decimal ArrowType$Duration ArrowType$FixedSizeBinary ArrowType$FixedSizeList ArrowType$FloatingPoint ArrowType$Int ArrowType$Interval ArrowType$List ArrowType$Null ArrowType$Struct ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union ArrowType$Utf8 Field FieldType)
+           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Binary ArrowType$Bool ArrowType$Date ArrowType$Decimal ArrowType$Duration ArrowType$FixedSizeBinary ArrowType$FixedSizeList ArrowType$FloatingPoint ArrowType$Int ArrowType$Interval ArrowType$List ArrowType$Null ArrowType$Struct ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union ArrowType$Utf8 Field FieldType ArrowType$ArrowTypeID)
            (xtdb.vector.extensions AbsentType ClojureFormType KeywordType SetType UriType UuidType)))
 
 (set! *unchecked-math* :warn-on-boxed)
 
+;;;; fields
+
+(declare merge-col-types)
+(declare col-type->field)
+(declare field->col-type)
+(declare ->field-default-name)
+(declare ->canonical-field)
+(declare ->field)
+
+(defmulti ^String arrow-type->field-name (fn [^ArrowType arrow-type] arrow-type), :default ::default)
+;; decimal, fixed-size-list and time/date types are caught by this
+(defmethod arrow-type->field-name ::default [^ArrowType arrow-type] (.toString arrow-type))
+
+(let [keyword->arrow-type
+      (update-vals {:null Types$MinorType/NULL, :bool Types$MinorType/BIT
+                    :f32 Types$MinorType/FLOAT4, :f64 Types$MinorType/FLOAT8
+                    :i8 Types$MinorType/TINYINT, :i16 Types$MinorType/SMALLINT, :i32 Types$MinorType/INT, :i64 Types$MinorType/BIGINT
+                    :utf8 Types$MinorType/VARCHAR, :varbinary Types$MinorType/VARBINARY}
+                   #(.getType ^Types$MinorType %))]
+  (doseq [[k type] keyword->arrow-type]
+    (defmethod arrow-type->field-name type [_arrow-type] (name k))))
+
+(defmethod arrow-type->field-name KeywordType/INSTANCE [_] (name :keyword))
+(defmethod arrow-type->field-name UuidType/INSTANCE [_] (name :uuid))
+(defmethod arrow-type->field-name UriType/INSTANCE [_] (name :uri))
+(defmethod arrow-type->field-name ClojureFormType/INSTANCE  [_] (name :clj-form))
+(defmethod arrow-type->field-name AbsentType/INSTANCE [_] (name :absent))
+
 (def struct-type (.getType Types$MinorType/STRUCT))
 (def dense-union-type (ArrowType$Union. UnionMode/Dense nil))
 (def list-type (.getType Types$MinorType/LIST))
+
+(defmethod arrow-type->field-name struct-type [_arrow-type] (name :struct))
+(defmethod arrow-type->field-name dense-union-type [_arrow-type] (name :union))
+(defmethod arrow-type->field-name list-type [_arrow-type] (name :list))
+
+(defn ->arrow-type [^Field field] (.getType (.getFieldType field)))
+
+(def ^:private ^Field absent-field (delay (col-type->field :absent)))
+
+
+(defn merge-fields [& fields]
+  (letfn [(nullable? [col-type-map] (contains? col-type-map :null))
+
+          (merge-field* [acc ^Field field]
+            (let [nullable? (.isNullable field)
+                  acc (cond-> acc
+                        nullable? (assoc :null nil))
+                  ^ArrowType arrow-type (->arrow-type field)]
+              (condp = (.getTypeID arrow-type)
+                ArrowType$ArrowTypeID/Union (reduce merge-field* acc (.getChildren field))
+                ArrowType$ArrowTypeID/List (update acc :list merge-field* (first (.getChildren field)))
+                ArrowType$ArrowTypeID/FixedSizeList (update acc [:fixed-size-list
+                                                                 (.getListSize ^ArrowType$FixedSizeList arrow-type)] merge-field*
+                                                            (first (.getChildren field)))
+                ArrowType$ArrowTypeID/Struct (update acc :struct
+                                                     (fn [acc]
+                                                       (let [default-field-mapping (if acc {@absent-field nil} nil)
+                                                             children (.getChildren field)]
+                                                         (as-> acc acc
+                                                               (reduce (fn [acc ^Field field]
+                                                                         (update acc (.getName field) (fnil merge-field* default-field-mapping) field))
+                                                                       acc
+                                                                       children)
+                                                               (reduce (fn [acc absent-k]
+                                                                         (update acc absent-k merge-field* @absent-field))
+                                                                       acc
+                                                                       (set/difference (set (keys acc))
+                                                                                       (set (map #(.getName ^Field %) children))))))))
+                (assoc acc field nil))))
+
+          (kv->field [[head opts]]
+            (case (if (vector? head) (first head) head)
+              :list (->field-default-name list-type (nullable? opts) [(map->field (dissoc opts :null))])
+              :fixed-size-list (->field-default-name (ArrowType$FixedSizeList. (second head)) (nullable? opts) [(map->field (dissoc opts :null))])
+              ;; TODO adapt once naming is supported everywhere
+              :struct (->field-default-name struct-type (nullable? opts)
+                                            (map (fn [[name opts]]
+                                                   (let [^Field field (map->field opts)]
+                                                     (apply ->field name (.getType field) (.isNullable field)
+                                                            (map ->canonical-field (.getChildren field)))))
+                                                 (dissoc opts :null)))
+
+              head))
+
+          (map->field [col-type-map]
+            (let [without-null (dissoc col-type-map :null)]
+              (case (count without-null)
+                0 (col-type->field :null)
+                1 (kv->field (first col-type-map))
+                (->field-default-name dense-union-type (contains? col-type-map :null) (map kv->field without-null)))))]
+
+    (-> (transduce (comp (remove nil?) (distinct)) (completing merge-field*) {} fields)
+        (map->field))))
 
 (def temporal-col-type [:timestamp-tz :micro "UTC"])
 (def nullable-temporal-type [:union #{:null temporal-col-type}])
@@ -28,6 +119,12 @@
 
 (defn ->field ^org.apache.arrow.vector.types.pojo.Field [^String field-name ^ArrowType arrow-type nullable & children]
   (Field. field-name (FieldType. nullable arrow-type nil nil) children))
+
+(defn ->field-default-name [^ArrowType arrow-type nullable children]
+  (apply ->field (arrow-type->field-name arrow-type) arrow-type nullable children))
+
+(defn ->canonical-field [^Field field]
+  (->field-default-name (->arrow-type field) (.isNullable field) (map ->canonical-field (.getChildren field))))
 
 ;;;; col-types
 
@@ -144,8 +241,7 @@
                      :null Types$MinorType/NULL, :bool Types$MinorType/BIT
                      :f32 Types$MinorType/FLOAT4, :f64 Types$MinorType/FLOAT8
                      :i8 Types$MinorType/TINYINT, :i16 Types$MinorType/SMALLINT, :i32 Types$MinorType/INT, :i64 Types$MinorType/BIGINT
-                     :utf8 Types$MinorType/VARCHAR, :varbinary Types$MinorType/VARBINARY
-                     :decimal Types$MinorType/DECIMAL)]
+                     :utf8 Types$MinorType/VARCHAR, :varbinary Types$MinorType/VARBINARY)]
     (->field col-name (.getType minor-type) (or nullable? (= col-type :null)))))
 
 (defmethod col-type->field* :decimal [col-name nullable? _col-type]
@@ -171,6 +267,12 @@
 (defn col-type->field
   (^org.apache.arrow.vector.types.pojo.Field [col-type] (col-type->field (col-type->field-name col-type) col-type))
   (^org.apache.arrow.vector.types.pojo.Field [col-name col-type] (col-type->field* (str col-name) false col-type)))
+
+;; HACK to test things more easily
+(defn col-type->field-default-name
+  (^org.apache.arrow.vector.types.pojo.Field [col-type] (let [field (col-type->field col-type)]
+                                                          #_(->canonical-field field)
+                                                          (col-type->field (.toString (->arrow-type field)) col-type))))
 
 (defn without-null [col-type]
   (let [without-null (-> (flatten-union-types col-type)
@@ -223,23 +325,24 @@
 
 ;;; list
 
+
 (defmethod col-type->field* :list [col-name nullable? [_ inner-col-type]]
   (->field col-name ArrowType$List/INSTANCE nullable?
-           (col-type->field "$data" inner-col-type)))
+           (col-type->field inner-col-type)))
 
 (defmethod arrow-type->col-type ArrowType$List [_ data-field]
   [:list (field->col-type data-field)])
 
 (defmethod col-type->field* :fixed-size-list [col-name nullable? [_ list-size inner-col-type]]
   (->field col-name (ArrowType$FixedSizeList. list-size) nullable?
-           (col-type->field "$data" inner-col-type)))
+           (col-type->field inner-col-type)))
 
 (defmethod arrow-type->col-type ArrowType$FixedSizeList [^ArrowType$FixedSizeList list-type, data-field]
   [:fixed-size-list (.getListSize list-type) (field->col-type data-field)])
 
 (defmethod col-type->field* :set [col-name nullable? [_ inner-col-type]]
   (->field col-name SetType/INSTANCE nullable?
-           (col-type->field "$data" inner-col-type)))
+           (col-type->field inner-col-type)))
 
 (defmethod arrow-type->col-type SetType [_ data-field]
   [:set (field->col-type data-field)])

@@ -189,3 +189,57 @@
     (t/is (= '[:union #{:f64 [:struct {a [:union #{:i64 :utf8}]}]}]
              (types/merge-col-types '[:union #{:f64, [:struct {a :i64}]}]
                                     '[:struct {a :utf8}])))))
+
+
+(t/deftest test-merge-fields
+  (t/is (= (types/col-type->field :utf8)
+           (types/merge-fields (types/col-type->field :utf8) (types/col-type->field :utf8))))
+
+  (t/is (= (types/col-type->field [:union #{:utf8 :i64}])
+           (types/merge-fields (types/col-type->field :utf8) (types/col-type->field :i64))))
+
+  (t/is (=
+         ;; ordering seems to be important
+         ;; (types/col-type->field [:union #{:utf8 :i64 :f64}])
+         (types/->field-default-name types/dense-union-type false
+                                     [(types/col-type->field :utf8)
+                                      (types/col-type->field :i64)
+                                      (types/col-type->field :f64)])
+         (types/merge-fields (types/col-type->field [:union #{:utf8 :i64}]) (types/col-type->field :f64))))
+
+  (t/testing "merges list types"
+    (t/is (= (types/col-type->field [:list :utf8])
+             (types/merge-fields (types/col-type->field [:list :utf8])
+                                 (types/col-type->field [:list :utf8]))))
+
+    (t/is (=
+           (types/col-type->field [:list [:union #{:utf8 :i64}]])
+           (types/merge-fields (types/col-type->field [:list :utf8])
+                               (types/col-type->field [:list :i64])))))
+
+  (t/testing "merges struct types"
+    (t/is (= (types/col-type->field '[:struct {a :utf8, b :utf8}])
+             (types/merge-fields (types/col-type->field '[:struct {a :utf8, b :utf8}])
+                                 (types/col-type->field '[:struct {a :utf8, b :utf8}]))))
+
+    (t/is (= (types/col-type->field '[:struct {a :utf8
+                                               b [:union #{:utf8 :i64}]}])
+             (types/merge-fields (types/col-type->field '[:struct {a :utf8, b :utf8}])
+                                 (types/col-type->field '[:struct {a :utf8, b :i64}]))))
+
+    (let [struct0 (types/col-type->field '[:struct {a :utf8, b :utf8}])
+          struct1 (types/col-type->field '[:struct {b :utf8, c :i64}])]
+      (t/is (= (types/col-type->field '[:struct {a [:union #{:utf8 :absent}]
+                                                 b :utf8
+                                                 c [:union #{:i64 :absent}]}])
+               (types/merge-fields struct0 struct1))))
+
+    (t/is (= #_(types/col-type->field '[:union #{:f64 [:struct {a [:union #{:utf8 :i64}]}]}])
+             (types/->field-default-name types/dense-union-type false
+                                         [(types/col-type->field :f64)
+                                          (types/->field-default-name types/struct-type false
+                                                                      [(types/->field "a" types/dense-union-type false
+                                                                                      (types/col-type->field :i64)
+                                                                                      (types/col-type->field :utf8))])])
+             (types/merge-fields (types/col-type->field '[:union #{:f64, [:struct {a :i64}]}])
+                                 (types/col-type->field '[:struct {a :utf8}]))))))
