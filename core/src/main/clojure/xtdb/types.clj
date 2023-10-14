@@ -20,9 +20,24 @@
 (declare ->canonical-field)
 (declare ->field)
 
-(defmulti ^String arrow-type->field-name (fn [^ArrowType arrow-type] arrow-type), :default ::default)
-;; decimal, fixed-size-list and time/date types are caught by this
-(defmethod arrow-type->field-name ::default [^ArrowType arrow-type] (.toString arrow-type))
+(defmulti ^String arrow-type->field-name (fn [arrow-type] arrow-type), :default ::default)
+
+(defmethod arrow-type->field-name ::default [^ArrowType arrow-type]
+  (cond
+    (instance? ArrowType$Decimal arrow-type) (name :decimal)
+    (instance? ArrowType$FixedSizeList arrow-type) (name :fixed-size-list)
+
+    (instance? ArrowType$Timestamp arrow-type)
+    (let [^ArrowType$Timestamp arrow-type arrow-type]
+      (if (.getTimezone arrow-type)
+        (name :timestamp-tz)
+        (name :timestamp-local)))
+
+    (instance? ArrowType$Date arrow-type) (name :date)
+    (instance? ArrowType$Time arrow-type) (name :time-local)
+    (instance? ArrowType$Duration arrow-type) (name :duration)
+
+    :else (.toString arrow-type)))
 
 (let [keyword->arrow-type
       (update-vals {:null Types$MinorType/NULL, :bool Types$MinorType/BIT
@@ -46,6 +61,7 @@
 (defmethod arrow-type->field-name struct-type [_arrow-type] (name :struct))
 (defmethod arrow-type->field-name dense-union-type [_arrow-type] (name :union))
 (defmethod arrow-type->field-name list-type [_arrow-type] (name :list))
+(defmethod arrow-type->field-name SetType/INSTANCE [_arrow-type] (name :set))
 
 (defn ->arrow-type [^Field field] (.getType (.getFieldType field)))
 

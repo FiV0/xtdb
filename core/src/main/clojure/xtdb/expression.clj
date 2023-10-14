@@ -358,7 +358,7 @@
      (PeriodDuration. (.-period imdn#) (.-duration imdn#))))
 
 (defmethod codegen-expr :literal [{:keys [literal]} _]
-  (let [return-type (vw/value->col-type literal)
+  (let [return-type (types/field->col-type  (vw/value->field literal))
         literal-type (class literal)]
     {:return-type return-type
      :continue (fn [f]
@@ -369,7 +369,7 @@
   (if (= op :literal)
     (let [{:keys [literal]} expr]
       {:op :param, :param (gensym 'lit),
-       :param-type (vw/value->col-type literal)
+       :param-type (types/field->col-type (vw/value->field literal))
        :literal literal})
     expr))
 
@@ -429,7 +429,7 @@
 
 (defmethod codegen-expr :param [{:keys [param] :as expr} {:keys [param-types]}]
   (if-let [[_ literal] (find expr :literal)]
-    (let [lit-type (vw/value->col-type literal)
+    (let [lit-type (types/field->col-type (vw/value->field literal))
           lit-class (class literal)]
       (into {:return-type lit-type
              :batch-bindings [[param (emit-value lit-class literal)]]

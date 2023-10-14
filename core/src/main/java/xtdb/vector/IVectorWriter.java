@@ -15,7 +15,9 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
 
     ValueVector getVector();
 
+    @Deprecated
     Object getColType();
+    Field getField();
 
     /**
      * This method calls {@link ValueVector#setValueCount} on the underlying vector, so that all of the values written

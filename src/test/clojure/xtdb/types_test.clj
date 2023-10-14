@@ -11,6 +11,7 @@
            (java.time Instant LocalDate LocalTime OffsetDateTime ZonedDateTime)
            (org.apache.arrow.vector BigIntVector BitVector DateDayVector DecimalVector Float4Vector Float8Vector IntVector IntervalMonthDayNanoVector NullVector SmallIntVector TimeNanoVector TimeStampMicroTZVector TinyIntVector VarBinaryVector VarCharVector)
            (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
+           (org.apache.arrow.vector.types.pojo Field)
            (xtdb.types IntervalDayTime IntervalYearMonth)
            (xtdb.vector IVectorWriter)
            (xtdb.vector.extensions ClojureFormVector KeywordVector UriVector UuidVector)))
@@ -22,7 +23,7 @@
   (with-open [duv (DenseUnionVector/empty "" tu/*allocator*)]
     (let [duv-writer (vw/->writer duv)]
       (doseq [v vs]
-        (doto (.writerForField duv-writer (field-fn v))
+        (doto (.writerForField duv-writer ^Field (field-fn v))
           (write-fn v)))
       (let [duv-rdr (vw/vec-wtr->rdr duv-writer)]
         {:vs (vec (for [idx (range (count vs))]
@@ -31,7 +32,7 @@
                            (class (.getVectorByType duv (.getTypeId duv idx)))))}))))
 
 (defn- test-round-trip [vs]
-  (test-read (comp types/col-type->field vw/value->col-type) #(vw/write-value! %2 %1) vs))
+  (test-read vw/value->field #(vw/write-value! %2 %1) vs))
 
 (t/deftest round-trips-values
   (t/is (= {:vs [false nil 2 1 6 4 3.14 2.0 BigDecimal/ONE]

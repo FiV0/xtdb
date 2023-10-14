@@ -32,7 +32,7 @@
   (->writer* arrow-vec (fn [_])))
 
 (defprotocol ArrowWriteable
-  (value->col-type [v])
+  (^org.apache.arrow.vector.types.pojo.Field value->field [v])
   (write-value! [v ^xtdb.vector.IVectorWriter writer]))
 
 (defn- null->vec-copier [^IVectorWriter dest-wtr]
@@ -165,41 +165,42 @@
             (.setSafe arrow-vec (.getPositionAndIncrement wp) new-decimal)))
         (writerForField [this _col-type] this)))))
 
+
 (extend-protocol ArrowWriteable
   nil
-  (value->col-type [_] :null)
+  (value->field [_] (types/col-type->field :null))
   (write-value! [_v ^IVectorWriter w] (.writeNull w nil))
 
   Boolean
-  (value->col-type [_] :bool)
+  (value->field [_] (types/col-type->field :bool))
   (write-value! [v ^IVectorWriter w] (.writeBoolean w v))
 
   Byte
-  (value->col-type [_] :i8)
+  (value->field [_] (types/col-type->field :i8))
   (write-value! [v ^IVectorWriter w] (.writeByte w v))
 
   Short
-  (value->col-type [_] :i16)
+  (value->field [_] (types/col-type->field :i16))
   (write-value! [v ^IVectorWriter w] (.writeShort w v))
 
   Integer
-  (value->col-type [_] :i32)
+  (value->field [_] (types/col-type->field :i32))
   (write-value! [v ^IVectorWriter w] (.writeInt w v))
 
   Long
-  (value->col-type [_] :i64)
+  (value->field [_] (types/col-type->field :i64))
   (write-value! [v ^IVectorWriter w] (.writeLong w v))
 
   Float
-  (value->col-type [_] :f32)
+  (value->field [_] (types/col-type->field :f32))
   (write-value! [v ^IVectorWriter w] (.writeFloat w v))
 
   Double
-  (value->col-type [_] :f64)
+  (value->field [_] (types/col-type->field :f64))
   (write-value! [v ^IVectorWriter w] (.writeDouble w v))
 
   BigDecimal
-  (value->col-type [_] :decimal)
+  (value->field [_] (types/col-type->field :decimal))
   (write-value! [v ^IVectorWriter w] (.writeObject w v)))
 
 (extend-protocol WriterFactory
@@ -280,52 +281,52 @@
 
 (extend-protocol ArrowWriteable
   Date
-  (value->col-type [_] [:timestamp-tz :micro "UTC"])
+  (value->field [_] (types/col-type->field [:timestamp-tz :micro "UTC"]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (Math/multiplyExact (.getTime v) 1000)))
 
   Instant
-  (value->col-type [_] [:timestamp-tz :micro "UTC"])
+  (value->field [_] (types/col-type->field [:timestamp-tz :micro "UTC"]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (util/instant->micros v)))
 
   ZonedDateTime
-  (value->col-type [v] [:timestamp-tz :micro (.getId (.getZone v))])
+  (value->field [v] (types/col-type->field [:timestamp-tz :micro (.getId (.getZone v))]))
   (write-value! [v ^IVectorWriter w] (write-value! (.toInstant v) w))
 
   OffsetDateTime
-  (value->col-type [v] [:timestamp-tz :micro (.getId (.getOffset v))])
+  (value->field [v] (types/col-type->field [:timestamp-tz :micro (.getId (.getOffset v))]))
   (write-value! [v ^IVectorWriter w] (write-value! (.toInstant v) w))
 
   LocalDateTime
-  (value->col-type [_] [:timestamp-local :micro])
+  (value->field [_] (types/col-type->field [:timestamp-local :micro]))
   (write-value! [v ^IVectorWriter w] (write-value! (.toInstant v ZoneOffset/UTC) w))
 
   Duration
-  (value->col-type [_] [:duration :micro])
+  (value->field [_] (types/col-type->field [:duration :micro]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (quot (.toNanos v) 1000)))
 
   LocalDate
-  (value->col-type [_] [:date :day])
+  (value->field [_] (types/col-type->field [:date :day]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (.toEpochDay v)))
 
   LocalTime
-  (value->col-type [_] [:time-local :nano])
+  (value->field [_] (types/col-type->field [:time-local :nano]))
   (write-value! [v ^IVectorWriter w] (.writeLong w (.toNanoOfDay v)))
 
   IntervalYearMonth
-  (value->col-type [_] [:interval :year-month])
+  (value->field [_] (types/col-type->field [:interval :year-month]))
   (write-value! [v ^IVectorWriter w] (.writeInt w (.toTotalMonths (.period v))))
 
   IntervalDayTime
-  (value->col-type [_] [:interval :day-time])
+  (value->field [_] (types/col-type->field [:interval :day-time]))
   (write-value! [v ^IVectorWriter w] (write-value! (PeriodDuration. (.period v) (.duration v)) w))
 
   IntervalMonthDayNano
-  (value->col-type [_] [:interval :month-day-nano])
+  (value->field [_] (types/col-type->field [:interval :month-day-nano]))
   (write-value! [v ^IVectorWriter w] (write-value! (PeriodDuration. (.period v) (.duration v)) w))
 
   ;; allow the use of PeriodDuration for more precision
   PeriodDuration
-  (value->col-type [_] [:interval :month-day-nano])
+  (value->field [_] (types/col-type->field [:interval :month-day-nano]))
   (write-value! [v ^IVectorWriter w] (.writeObject w v)))
 
 (extend-protocol WriterFactory
@@ -397,15 +398,15 @@
 
 (extend-protocol ArrowWriteable
   (Class/forName "[B")
-  (value->col-type [_] :varbinary)
+  (value->field [_] (types/col-type->field :varbinary))
   (write-value! [v ^IVectorWriter w] (.writeObject w v))
 
   ByteBuffer
-  (value->col-type [_] :varbinary)
+  (value->field [_] (types/col-type->field :varbinary))
   (write-value! [v ^IVectorWriter w] (.writeBytes w v))
 
   CharSequence
-  (value->col-type [_] :utf8)
+  (value->field [_] (types/col-type->field :utf8))
   (write-value! [v ^IVectorWriter w] (.writeObject w v)))
 
 (defn populate-with-absents [^IVectorWriter w, ^long pos]
@@ -557,27 +558,31 @@
 
 (extend-protocol ArrowWriteable
   List
-  (value->col-type [v] [:list (apply types/merge-col-types (into #{} (map value->col-type) v))])
+  (value->field [v] (types/->field-default-name types/list-type false [(apply types/merge-fields (into #{} (map value->field) v))]))
   (write-value! [v ^IVectorWriter writer]
     (let [el-writer (.listElementWriter writer)]
       (.startList writer)
       (doseq [el v]
-        (write-value! el (.writerForField el-writer (types/col-type->field (value->col-type el)))))
+        (write-value! el (.writerForField el-writer (value->field el))))
       (.endList writer)))
 
   Set
-  (value->col-type [v] [:set (apply types/merge-col-types (into #{} (map value->col-type) v))])
+  (value->field [v] (types/->field-default-name SetType/INSTANCE false [(apply types/merge-fields (into #{} (map value->field) v))]))
   (write-value! [v ^IVectorWriter writer] (write-value! (vec v) writer))
 
   Map
-  (value->col-type [v]
+  (value->field [v]
     (if (every? keyword? (keys v))
-      [:struct (->> v
-                    (into {} (map (juxt (comp symbol key)
-                                        (comp value->col-type val)))))]
-      [:map
-       (apply types/merge-col-types (into #{} (map (comp value->col-type key)) v))
-       (apply types/merge-col-types (into #{} (map (comp value->col-type val)) v))]))
+      (types/->field-default-name types/struct-type false
+                                  (map (fn [v] (let [field-name (name (key v))
+                                                     field (value->field (val v))]
+                                                 (apply types/->field field-name (types/->arrow-type field) (.isNullable field) (.getChildren field))))
+                                       v))
+      ;; TODO this col-type doesn't seem to exist anymore
+      (throw (UnsupportedOperationException. "unsupported :map type"))
+      #_[:map
+         (apply types/merge-col-types (into #{} (map (comp value->field key)) v))
+         (apply types/merge-col-types (into #{} (map (comp value->field val)) v))]))
 
   (write-value! [m ^IVectorWriter writer]
     (if (every? keyword? (keys m))
@@ -586,7 +591,7 @@
 
         (doseq [[k v] m
                 :let [v-writer (-> (.structKeyWriter writer (str (symbol k)))
-                                   (.writerForField (types/col-type->field (value->col-type v))))]]
+                                   (.writerForField (value->field v)))]]
           (write-value! v v-writer))
 
         (.endStruct writer))
@@ -803,22 +808,22 @@
 
 (extend-protocol ArrowWriteable
   Keyword
-  (value->col-type [_] :keyword)
+  (value->field [_] (types/col-type->field :keyword))
   (write-value! [kw ^IVectorWriter w]
     (write-value! (str (symbol kw)) w))
 
   UUID
-  (value->col-type [_] :uuid)
+  (value->field [_] (types/col-type->field :uuid))
   (write-value! [^UUID uuid ^IVectorWriter w]
     (write-value! (util/uuid->bytes uuid) w))
 
   URI
-  (value->col-type [_] :uri)
+  (value->field [_] (types/col-type->field :uri))
   (write-value! [^URI uri ^IVectorWriter w]
     (write-value! (str uri) w))
 
   ClojureForm
-  (value->col-type [_] :clj-form)
+  (value->field [_] (types/col-type->field :clj-form))
   (write-value! [clj-form ^IVectorWriter w]
     (write-value! (pr-str (.form clj-form)) w)))
 
@@ -827,7 +832,7 @@
 
   (let [writer (->writer v)]
     (doseq [v vs]
-      (write-value! v (.writerForField writer (types/col-type->field (value->col-type v)))))
+      (write-value! v (.writerForField writer (value->field v))))
 
     (.syncValueCount writer)
 
@@ -837,11 +842,12 @@
   (->> (for [col-name (into #{} (mapcat keys) rows)]
          [(symbol col-name) (->> rows
                                  (into #{} (map (fn [row]
-                                                  (value->col-type (get row col-name)))))
+                                                  (types/field->col-type (value->field (get row col-name))))))
                                  (apply types/merge-col-types))])
        (into {})))
 
 
+;; TODO
 (defn ->vec-writer
   (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name]
    (->writer (-> (types/->field col-name types/dense-union-type false)
@@ -864,6 +870,7 @@
           (.endRow rel-wtr)
           pos)))))
 
+;; TODO IRelationWriter
 (defn ->rel-writer ^xtdb.vector.IRelationWriter [^BufferAllocator allocator]
   (let [writer-array (volatile! nil)
         writers (LinkedHashMap.)
@@ -907,6 +914,7 @@
       (close [this]
         (run! util/try-close (vals this))))))
 
+;; TODO IRelationWriter
 (defn root->writer ^xtdb.vector.IRelationWriter [^VectorSchemaRoot root]
   (let [writer-array (volatile! nil)
         writers (LinkedHashMap.)
@@ -961,10 +969,11 @@
           (.endStruct vec-wtr)
           pos)))))
 
+;; TODO col-type
 (defn open-vec
   (^org.apache.arrow.vector.ValueVector [allocator col-name vs]
    (open-vec allocator col-name
-             (->> (into #{} (map value->col-type) vs)
+             (->> (into #{} (map (comp types/field->col-type value->field) vs))
                   (apply types/merge-col-types))
              vs))
 
