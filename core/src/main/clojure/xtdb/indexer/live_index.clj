@@ -61,7 +61,7 @@
   (^xtdb.vector.IRelationWriter live-rel [test-live-table]))
 
 (defn- live-rel->col-types [^IRelationWriter live-rel]
-  (let [col-type (-> (.writerForName live-rel "op")
+  (let [col-type (-> (.writerForLeg live-rel :op)
                      (.writerForLeg :put)
                      (.structKeyWriter "xt$doc")
                      (.getColType)
@@ -196,13 +196,13 @@
                                          :or {->live-trie (fn [iid-rdr]
                                                             (LiveHashTrie/emptyTrie iid-rdr))}}]
    (util/with-close-on-catch [rel (trie/open-log-data-root allocator)]
-     (let [iid-wtr (.writerForName rel "xt$iid")
-           op-wtr (.writerForName rel "op")
+     (let [iid-wtr (.writerForLeg rel :xt$iid)
+           op-wtr (.writerForLeg rel :op)
            put-wtr (.writerForLeg op-wtr :put)
            delete-wtr (.writerForLeg op-wtr :delete)]
        (->LiveTable allocator buffer-pool table-name rel
                     (->live-trie (vw/vec-wtr->rdr iid-wtr))
-                    iid-wtr (.writerForName rel "xt$system_from")
+                    iid-wtr (.writerForLeg rel :xt$system_from)
                     put-wtr (.structKeyWriter put-wtr "xt$valid_from") (.structKeyWriter put-wtr "xt$valid_to")
                     (.structKeyWriter put-wtr "xt$doc") delete-wtr (.structKeyWriter delete-wtr "xt$valid_from")
                     (.structKeyWriter delete-wtr "xt$valid_to")

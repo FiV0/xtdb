@@ -63,7 +63,7 @@
 (defmethod arrow-type->field-name list-type [_arrow-type] (name :list))
 (defmethod arrow-type->field-name SetType/INSTANCE [_arrow-type] (name :set))
 
-(defn ->arrow-type [^Field field] (.getType (.getFieldType field)))
+(defn ->arrow-type ^ArrowType [^Field field] (.getType (.getFieldType field)))
 
 (def ^:private ^Field absent-field (delay (col-type->field :absent)))
 
@@ -116,6 +116,7 @@
             (let [without-null (dissoc col-type-map :null)]
               (case (count without-null)
                 0 (col-type->field :null)
+                ;; TODO deal with :null in this case
                 1 (kv->field (first col-type-map))
                 (->field-default-name dense-union-type (contains? col-type-map :null) (map kv->field without-null)))))]
 
@@ -141,6 +142,9 @@
 
 (defn ->canonical-field [^Field field]
   (->field-default-name (->arrow-type field) (.isNullable field) (map ->canonical-field (.getChildren field))))
+
+(defn field-with-name [^Field field name]
+  (apply ->field name (->arrow-type field) (.isNullable field) (.getChildren field)))
 
 ;;;; col-types
 
@@ -287,7 +291,6 @@
 ;; HACK to test things more easily
 (defn col-type->field-default-name
   (^org.apache.arrow.vector.types.pojo.Field [col-type] (let [field (col-type->field col-type)]
-                                                          #_(->canonical-field field)
                                                           (col-type->field (.toString (->arrow-type field)) col-type))))
 
 (defn without-null [col-type]

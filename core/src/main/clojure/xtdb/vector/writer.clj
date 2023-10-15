@@ -847,20 +847,14 @@
        (into {})))
 
 
-;; TODO
 (defn ->vec-writer
-  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name]
-   (->writer (-> (types/->field col-name types/dense-union-type false)
-                 (.createVector allocator))))
-
-  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, col-name, col-type]
-   (->writer (-> (types/col-type->field col-name col-type)
-                 (.createVector allocator)))))
+  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, ^Field field]
+   (->writer (.createVector field allocator))))
 
 (defn ->rel-copier ^xtdb.vector.IRowCopier [^IRelationWriter rel-wtr, ^RelationReader in-rel]
   (let [wp (.writerPosition rel-wtr)
         copiers (vec (for [^IVectorReader in-vec in-rel]
-                       (.rowCopier in-vec (.writerForName rel-wtr (.getName in-vec)))))]
+                       (.rowCopier in-vec (.writerForLeg rel-wtr (keyword (.getName in-vec))))))]
     (reify IRowCopier
       (copyRow [_ src-idx]
         (.startRow rel-wtr)
@@ -870,7 +864,6 @@
           (.endRow rel-wtr)
           pos)))))
 
-;; TODO IRelationWriter
 (defn ->rel-writer ^xtdb.vector.IRelationWriter [^BufferAllocator allocator]
   (let [writer-array (volatile! nil)
         writers (LinkedHashMap.)
@@ -889,22 +882,24 @@
           (dotimes [i (alength arr)]
             (populate-with-absents (aget arr i) (inc pos)))))
 
-      (writerForName [_ col-name]
-        (.computeIfAbsent writers col-name
+      (writerForLeg [_ leg]
+        (.computeIfAbsent writers (str (symbol leg))
                           (reify Function
                             (apply [_ col-name]
-                              (doto (->vec-writer allocator col-name)
+                              (doto (->vec-writer allocator (types/->field col-name types/dense-union-type false))
                                 (populate-with-absents (.getPosition wp)))))))
 
-      (writerForName [_ col-name col-type]
-        (.computeIfAbsent writers col-name
+      (writerForField [_ field]
+        (.computeIfAbsent writers (.getName field)
                           (reify Function
                             (apply [_ col-name]
                               (let [pos (.getPosition wp)]
                                 (if (pos? pos)
-                                  (doto (->vec-writer allocator col-name (types/merge-col-types col-type :absent))
+                                  (doto (->vec-writer allocator
+                                                      (-> (types/merge-fields field (types/col-type->field :absent))
+                                                          (types/field-with-name col-name)))
                                     (populate-with-absents pos))
-                                  (->vec-writer allocator col-name col-type)))))))
+                                  (->vec-writer allocator field)))))))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
 
@@ -914,7 +909,7 @@
       (close [this]
         (run! util/try-close (vals this))))))
 
-;; TODO IRelationWriter
+
 (defn root->writer ^xtdb.vector.IRelationWriter [^VectorSchemaRoot root]
   (let [writer-array (volatile! nil)
         writers (LinkedHashMap.)
@@ -934,13 +929,13 @@
           (dotimes [i (alength arr)]
             (populate-with-absents (aget arr i) (inc pos)))))
 
-      (writerForName [_ col-name]
-        (or (.get writers col-name)
+      (writerForLeg [_ leg]
+        (or (.get writers (str (symbol leg)))
             (throw (NullPointerException.
-                    (pr-str {:writers (keys writers), :col-name col-name})))))
+                    (pr-str {:writers (keys writers), :leg leg})))))
 
-      (writerForName [this col-name _col-type]
-        (.writerForName this col-name))
+      (writerForField [this field]
+        (.writerForLeg this (keyword (.getName field))))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
 
@@ -1004,10 +999,8 @@
       (.copyRow row-copier src-idx))))
 
 (defn append-rel [^IRelationWriter dest-rel, ^RelationReader src-rel]
-  (doseq [^IVectorReader src-col src-rel
-          :let [col-type (types/field->col-type (.getField src-col))
-                ^IVectorWriter vec-writer (.writerForName dest-rel (.getName src-col) col-type)]]
-    (append-vec vec-writer src-col))
+  (doseq [^IVectorReader src-col src-rel]
+    (append-vec (.writerForField dest-rel (types/field-with-name (.getField src-col) (.getName src-col))) src-col))
 
   (let [wp (.writerPosition dest-rel)]
     (.setPosition wp (+ (.getPosition wp) (.rowCount src-rel)))))

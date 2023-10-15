@@ -312,7 +312,7 @@
   (util/with-close-on-catch [meta-root (VectorSchemaRoot/create trie/meta-rel-schema al)]
     (let [meta-wtr (vw/root->writer meta-root)
           meta-wp (.writerPosition meta-wtr)
-          nodes-wtr (.writerForName meta-wtr "nodes")
+          nodes-wtr (.writerForLeg meta-wtr :nodes)
           nil-wtr (.writerForLeg nodes-wtr :nil)
           branch-wtr (.writerForLeg nodes-wtr :branch)
           branch-el-wtr (.listElementWriter branch-wtr)

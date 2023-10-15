@@ -6,7 +6,8 @@
             [xtdb.operator.scan :as scan]
             [xtdb.test-util :as tu]
             [xtdb.util :as util]
-            [xtdb.vector.writer :as vw])
+            [xtdb.vector.writer :as vw]
+            [xtdb.types :as types])
   (:import (java.util.function IntPredicate)
            xtdb.operator.IRaQuerySource
            xtdb.operator.IRelationSelector
@@ -531,7 +532,7 @@
         ^IRelationSelector iid-selector (scan/iid-selector (util/uuid->byte-buffer search-uuid))]
     (letfn [(test-uuids [uuids]
               (with-open [rel-wrt (vw/->rel-writer tu/*allocator*)]
-                (let [iid-wtr (.writerForName rel-wrt "xt$iid" [:fixed-size-binary 16])]
+                (let [iid-wtr (.writerForField rel-wrt (types/col-type->field "xt$iid" [:fixed-size-binary 16]))]
                   (doseq [uuid uuids]
                     (.writeBytes iid-wtr (util/uuid->byte-buffer uuid))))
                 (.select iid-selector tu/*allocator* (vw/rel-wtr->rdr rel-wrt) nil)))]

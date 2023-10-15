@@ -180,13 +180,13 @@
                                                                                  (cond-> col-type
                                                                                    with-nil-row? (types/merge-col-types :null)))
                                                                                val))))))]
-      (.writerForName rel-writer (name col-name) col-type))
+      (.writerForField rel-writer (types/col-type->field (name col-name) col-type)))
 
     (when with-nil-row?
       (doto (.rowCopier rel-writer (->nil-rel (keys build-col-types)))
         (.copyRow 0)))
 
-    (let [build-key-cols (mapv #(vw/vec-wtr->rdr (.writerForName rel-writer (name %))) build-key-col-names)]
+    (let [build-key-cols (mapv #(vw/vec-wtr->rdr (.writerForLeg rel-writer (keyword %))) build-key-col-names)]
       (letfn [(compute-hash-bitmap [^long row-hash]
                 (or (.get hash->bitmap row-hash)
                     (let [bitmap (RoaringBitmap.)]

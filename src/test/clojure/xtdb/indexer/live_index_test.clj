@@ -48,7 +48,7 @@
 
         (let [live-table (.liveTable live-index "my-table")
               live-rel (li/live-rel live-table)
-              iid-vec (.getVector (.writerForName live-rel "xt$iid"))
+              iid-vec (.getVector (.writerForLeg live-rel :xt$iid))
 
               ^LiveHashTrie trie (li/live-trie live-table)]
 

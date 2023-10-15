@@ -121,7 +121,7 @@
             (let [wtrs (->> col-names
                             (into [] (keep (fn [col-name]
                                              (when (= normalised-col-name (util/str->normal-form-str col-name))
-                                               (.writerForName out-rel col-name types/temporal-col-type))))))]
+                                               (.writerForField out-rel (types/col-type->field col-name types/temporal-col-type)))))))]
               (reify IVectorWriter
                 (writeLong [_ l]
                   (doseq [^IVectorWriter wtr wtrs]
@@ -140,8 +140,8 @@
                              :when rdr]
                          (.rowCopier rdr
                                      (case normalized-name
-                                       "xt$iid" (.writerForName out-rel col-name [:fixed-size-binary 16])
-                                       (.writerForName out-rel col-name)))))
+                                       "xt$iid" (.writerForField out-rel (types/col-type->field col-name [:fixed-size-binary 16]))
+                                       (.writerForLeg out-rel (keyword col-name))))))
 
           ^IVectorWriter valid-from-wtr (writer-for "xt$valid_from")
           ^IVectorWriter valid-to-wtr (writer-for "xt$valid_to")

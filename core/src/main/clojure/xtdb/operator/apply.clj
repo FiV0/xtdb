@@ -40,7 +40,7 @@
     (let [[col-name _expr] (first (:mark-join mark-spec))]
       (reify ModeStrategy
         (accept [_ dep-cursor dep-out-writer idxs in-idx]
-          (let [out-writer (.writerForName dep-out-writer (name col-name) [:union #{:null :bool}])]
+          (let [out-writer (.writerForField dep-out-writer (types/col-type->field (name col-name) [:union #{:null :bool}]))]
             (.add idxs in-idx)
             (let [!match (int-array [-1])]
               (while (and (not (== 1 (aget !match 0)))
@@ -67,7 +67,7 @@
       (reify ModeStrategy
         (accept [_ dep-cursor dep-out-writer idxs in-idx]
           (doseq [[col-name col-type] dependent-col-types]
-            (.writerForName dep-out-writer (name col-name) col-type))
+            (.writerForField dep-out-writer (types/col-type->field (name col-name) col-type)))
 
           (.forEachRemaining dep-cursor
                              (reify Consumer
@@ -82,7 +82,7 @@
       (reify ModeStrategy
         (accept [_ dep-cursor dep-out-writer idxs in-idx]
           (doseq [[col-name col-type] dependent-col-types]
-            (.writerForName dep-out-writer (name col-name) col-type))
+            (.writerForField dep-out-writer (types/col-type->field (name col-name) col-type)))
 
           (let [match? (boolean-array [false])]
             (.forEachRemaining dep-cursor
@@ -99,7 +99,7 @@
             (when-not (aget match? 0)
               (.add idxs in-idx)
               (doseq [[col-name col-type] dependent-col-types]
-                (vw/append-vec (.writerForName dep-out-writer (name col-name) col-type)
+                (vw/append-vec (.writerForField dep-out-writer (types/col-type->field (name col-name) col-type))
                                (vr/vec->reader (doto (NullVector. (name col-name))
                                                  (.setValueCount 1)))))))))
 
@@ -134,7 +134,7 @@
       (reify ModeStrategy
         (accept [_ dep-cursor dep-out-writer idxs in-idx]
           (doseq [[col-name col-type] dependent-col-types]
-            (.writerForName dep-out-writer (name col-name) col-type))
+            (.writerForField dep-out-writer (types/col-type->field (name col-name) col-type)))
 
           (let [match? (boolean-array [false])]
             (.forEachRemaining dep-cursor
@@ -158,7 +158,7 @@
             (when-not (aget match? 0)
               (.add idxs in-idx)
               (doseq [[col-name col-type] dependent-col-types]
-                (vw/append-vec (.writerForName dep-out-writer (name col-name) col-type)
+                (vw/append-vec (.writerForField dep-out-writer (types/col-type->field (name col-name) col-type))
                                (vr/vec->reader (doto (NullVector. (name col-name))
                                                  (.setValueCount 1))))))))))))
 

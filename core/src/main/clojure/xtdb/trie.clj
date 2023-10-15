@@ -100,7 +100,7 @@
     (let [data-rel-wtr (vw/root->writer data-vsr)
           meta-rel-wtr (vw/root->writer meta-vsr)
 
-          node-wtr (.writerForName meta-rel-wtr "nodes")
+          node-wtr (.writerForLeg meta-rel-wtr :nodes)
           node-wp (.writerPosition node-wtr)
 
           branch-wtr (.writerForLeg node-wtr :branch)
