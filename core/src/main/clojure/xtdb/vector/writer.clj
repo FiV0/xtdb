@@ -688,7 +688,7 @@
           !col-type (atom nil)]
 
       (letfn [(->col-type []
-                (apply types/merge-col-types (into #{} (map #(.getColType ^IVectorWriter %)) (vals writers-by-leg))))
+                (apply types/merge-col-types (into #{} (map #(types/field->col-type (.getField ^IVectorWriter %))) (vals writers-by-leg))))
 
               (->child-writer [^long type-id ^Field field]
                 (let [v (.getVectorByType duv type-id)
