@@ -136,11 +136,8 @@
   (idx/finish-chunk! (component node :xtdb/indexer)))
 
 (defn open-vec
-  (^org.apache.arrow.vector.ValueVector [col-name vs]
-   (vw/open-vec *allocator* col-name vs))
-
-  (^org.apache.arrow.vector.ValueVector [col-name col-type vs]
-   (vw/open-vec *allocator* col-name col-type vs)))
+  (^org.apache.arrow.vector.ValueVector [col-name-or-field vs]
+   (vw/open-vec *allocator* col-name-or-field vs)))
 
 (defn open-rel ^xtdb.vector.RelationReader [vecs]
   (vw/open-rel vecs))

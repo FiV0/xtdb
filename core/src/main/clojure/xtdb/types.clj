@@ -67,7 +67,6 @@
 
 (def ^:private ^Field absent-field (delay (col-type->field :absent)))
 
-
 (defn merge-fields [& fields]
   (letfn [(nullable? [col-type-map] (contains? col-type-map :null))
 
@@ -102,7 +101,6 @@
             (case (if (vector? head) (first head) head)
               :list (->field-default-name list-type (nullable? opts) [(map->field (dissoc opts :null))])
               :fixed-size-list (->field-default-name (ArrowType$FixedSizeList. (second head)) (nullable? opts) [(map->field (dissoc opts :null))])
-              ;; TODO adapt once naming is supported everywhere
               :struct (->field-default-name struct-type (nullable? opts)
                                             (map (fn [[name opts]]
                                                    (let [^Field field (map->field opts)]
@@ -117,7 +115,7 @@
               (case (count without-null)
                 0 (col-type->field :null)
                 ;; TODO deal with :null in this case
-                1 (kv->field (first col-type-map))
+                1 (kv->field (first without-null))
                 (->field-default-name dense-union-type (contains? col-type-map :null) (map kv->field without-null)))))]
 
     (-> (transduce (comp (remove nil?) (distinct)) (completing merge-field*) {} fields)
@@ -143,7 +141,7 @@
 (defn ->canonical-field [^Field field]
   (->field-default-name (->arrow-type field) (.isNullable field) (map ->canonical-field (.getChildren field))))
 
-(defn field-with-name [^Field field name]
+(defn field-with-name ^Field [^Field field name]
   (apply ->field name (->arrow-type field) (.isNullable field) (.getChildren field)))
 
 ;;;; col-types

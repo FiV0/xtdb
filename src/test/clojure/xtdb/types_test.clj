@@ -243,4 +243,12 @@
                                                                                       (types/col-type->field :i64)
                                                                                       (types/col-type->field :utf8))])])
              (types/merge-fields (types/col-type->field '[:union #{:f64, [:struct {a :i64}]}])
-                                 (types/col-type->field '[:struct {a :utf8}]))))))
+                                 (types/col-type->field '[:struct {a :utf8}])))))
+
+  (t/testing "null behaviour"
+    (t/is (= (types/col-type->field :null)
+             (types/merge-fields (types/col-type->field :null))))
+    ;; TODO
+    #_(t/is (=
+           (types/col-type->field [:union #{:null :i64}])
+           (types/merge-fields (types/col-type->field :null) (types/col-type->field :i64))))))

@@ -964,18 +964,20 @@
           (.endStruct vec-wtr)
           pos)))))
 
-;; TODO col-type
-(defn open-vec
-  (^org.apache.arrow.vector.ValueVector [allocator col-name vs]
-   (open-vec allocator col-name
-             (->> (into #{} (map (comp types/field->col-type value->field) vs))
-                  (apply types/merge-col-types))
-             vs))
+(defmulti open-vec (fn [_allocator col-name-or-field _vs]
+                     (if (instance? Field col-name-or-field)
+                       :field
+                       :col-name)))
 
-  (^org.apache.arrow.vector.ValueVector [allocator col-name col-type vs]
-   (util/with-close-on-catch [res (-> (types/col-type->field col-name col-type)
-                                      (.createVector allocator))]
-     (doto res (write-vec! vs)))))
+(defmethod open-vec :col-name [allocator col-name vs]
+  (util/with-close-on-catch [res (-> (apply types/merge-fields (map value->field vs))
+                                     (types/field-with-name (str col-name))
+                                     (.createVector allocator))]
+    (doto res (write-vec! vs))))
+
+(defmethod open-vec :field [allocator ^Field field vs]
+  (util/with-close-on-catch [res (.createVector field allocator)]
+    (doto res (write-vec! vs))))
 
 (defn open-rel ^xtdb.vector.RelationReader [vecs]
   (vr/rel-reader (map vr/vec->reader vecs)))
