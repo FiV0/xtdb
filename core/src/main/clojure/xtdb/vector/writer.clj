@@ -633,7 +633,6 @@
     (startList [_] (.startList w))
     (endList [_] (write-value!) (.endList w))
 
-    (registerNewType [_ field] (.registerNewType w field))
     (writerForField [_ col-type] (.writerForField w col-type))
     (writerForTypeId [_ type-id] (.writerForTypeId w type-id))))
 
@@ -690,7 +689,7 @@
 
       (letfn [(->field [] (apply types/merge-fields (into #{} (map #(.getField ^IVectorWriter %)) (vals writers-by-leg))))
 
-              (->child-writer [^long type-id ^Field field]
+              (->child-writer [^long type-id]
                 (let [v (.getVectorByType duv type-id)
                       child-wtr (->writer* v (fn [_]
                                                (notify! (reset! !field (->field)))))
@@ -701,12 +700,20 @@
                                                         (let [pos (.getPositionAndIncrement wp)]
                                                           (.setTypeId duv pos type-id)
                                                           (.setOffset duv pos (.getPosition child-wp))))))]
-                  (.put writers-by-leg (keyword (.getName field)) child-wtr)
-                  child-wtr))]
+                  child-wtr))
+
+              (->new-child-writer [^Field field]
+                (let [type-id (.registerNewTypeId duv field)
+                      new-vec (.createVector field (.getAllocator duv))]
+                  (.addVector duv type-id new-vec)
+                  (let [child-wrt (->child-writer type-id)]
+                    (.put writers-by-leg (keyword (.getName field)) child-wrt)
+                    (notify! (reset! !field (->field)))
+                    child-wrt)))]
 
         ;; HACK this makes assumption about initial type-id layout which might not hold for arbitrary arrow data
         (doseq [[type-id ^Field field] (map-indexed vector children)]
-          (->child-writer type-id field))
+          (.put writers-by-leg (keyword (.getName field)) (->child-writer type-id)))
 
         (reset! !field (->field))
 
@@ -724,33 +731,25 @@
 
           (writerPosition [_] wp)
 
-          (registerNewType [_ field]
-            (let [type-id (.registerNewTypeId duv field)
-                  new-vec (.createVector field (.getAllocator duv))]
-              (.addVector duv type-id new-vec)
-              (->child-writer type-id field)
-              (notify! (reset! !field (->field)))
 
-              type-id))
-
-          (writerForField [this field]
+          (writerForField [_ field]
             ;; doesn't add into writers-by-type because we might have more than one field with similar types
             ;; so don't use both writerForField and writerForType on one writer.
             (let [field-name (.getName field)
                   field-leg (keyword field-name)]
               (when-not (.containsKey writers-by-leg field-leg)
-                (.registerNewType this
-                                  (case (types/col-type-head (types/field->col-type field))
-                                    :list
-                                    (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                (->new-child-writer
+                 (case (types/col-type-head (types/field->col-type field))
+                   :list
+                   (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
 
-                                    :set
-                                    (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                   :set
+                   (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
 
-                                    :struct
-                                    (types/->field field-name ArrowType$Struct/INSTANCE false)
+                   :struct
+                   (types/->field field-name ArrowType$Struct/INSTANCE false)
 
-                                    field)))
+                   field)))
               (.get writers-by-leg field-leg)))
 
           (writerForLeg [_this leg]
@@ -802,7 +801,6 @@
         (startList [_] (.startList inner))
         (endList [_] (.endList inner))
 
-        (registerNewType [_ field] (.registerNewType inner field))
         (writerForField [_ field] (.writerForField inner field))
         (writerForTypeId [_ type-id] (.writerForTypeId inner type-id))))))
 
