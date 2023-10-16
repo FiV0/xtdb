@@ -88,7 +88,7 @@
                 ArrowType$ArrowTypeID/Struct (update acc :struct
                                                      (fn [acc]
                                                        (let [default-field-mapping (if acc {@absent-field nil} nil)
-                                                             children (.getChildren field)]
+                                                             children (.getChildren field) #_(remove nil? (.getChildren field))]
                                                          (as-> acc acc
                                                                (reduce (fn [acc ^Field field]
                                                                          (update acc (.getName field) (fnil merge-field* default-field-mapping) field))

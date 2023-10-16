@@ -268,7 +268,13 @@
   (t/testing "null behaviour"
     (t/is (= (types/col-type->field :null)
              (types/merge-fields (types/col-type->field :null))))
+
+    (t/is (= (types/col-type->field :null)
+             (types/merge-fields (types/col-type->field :null) (types/col-type->field :null))))
     ;; TODO
     #_(t/is (=
              (types/col-type->field [:union #{:null :i64}])
              (types/merge-fields (types/col-type->field :null) (types/col-type->field :i64))))))
+
+#_
+(.toString (types/col-type->field :null))

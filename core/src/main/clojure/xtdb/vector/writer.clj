@@ -423,7 +423,7 @@
           data-vec (.getDataVector arrow-vec)
           !field (atom nil)
           el-writer (->writer* data-vec (fn notify-list-writer! [el-field]
-                                          (notify! (types/field->col-type (reset! !field (types/->field-default-name types/list-type false [(types/col-type->field el-field)]))))))
+                                          (notify! (reset! !field (types/->field-default-name types/list-type false [el-field])))))
           el-wp (.writerPosition el-writer)]
 
       (reset! !field (types/->field-default-name types/list-type false [(.getField el-writer)]))
@@ -474,19 +474,19 @@
           writers (HashMap.)
           !fields (atom {})]
 
-      (letfn [(notify-struct! [col-name col-type]
-                (notify! [:struct (update-vals (swap! !fields assoc (symbol col-name) (types/col-type->field col-type))
-                                               types/field->col-type)]))
+      (letfn [(notify-struct! [col-name ^Field field]
+                (notify! (types/->field-default-name types/struct-type false (vals (swap! !fields assoc col-name
+                                                                                          (types/field-with-name field col-name))))))
               (->key-writer [^ValueVector child-vec]
                 (let [col-name (.getName child-vec)
                       w (->writer* child-vec (partial notify-struct! col-name))]
-                  (notify-struct! col-name (types/field->col-type (.getField w)))
+                  (notify-struct! col-name (.getField w))
                   w))]
 
         (reify IVectorWriter
           (getVector [_] arrow-vec)
 
-          (getField [_] (types/col-type->field [:struct (update-vals @!fields types/field->col-type)]))
+          (getField [_] (types/->field-default-name types/struct-type false (vals @!fields)))
 
           (clear [_] (.clear arrow-vec) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (.values writers)))
 
@@ -688,13 +688,12 @@
           writers-by-leg (HashMap.)
           !field (atom nil)]
 
-      (letfn [(->field []
-                (apply types/merge-fields (into #{} (map #(.getField ^IVectorWriter %)) (vals writers-by-leg))))
+      (letfn [(->field [] (apply types/merge-fields (into #{} (map #(.getField ^IVectorWriter %)) (vals writers-by-leg))))
 
               (->child-writer [^long type-id ^Field field]
                 (let [v (.getVectorByType duv type-id)
                       child-wtr (->writer* v (fn [_]
-                                               (notify! (types/field->col-type (reset! !field (->field))))))
+                                               (notify! (reset! !field (->field)))))
                       child-wp (.writerPosition child-wtr)
 
                       child-wtr (-> child-wtr
@@ -730,7 +729,7 @@
                   new-vec (.createVector field (.getAllocator duv))]
               (.addVector duv type-id new-vec)
               (->child-writer type-id field)
-              (notify! (types/field->col-type (reset! !field (->field))))
+              (notify! (reset! !field (->field)))
 
               type-id))
 
@@ -765,7 +764,7 @@
     (let [!field (atom nil)
           inner (->writer* (.getUnderlyingVector arrow-vec)
                            (fn [_]
-                             (types/field->col-type (reset! !field (.getField arrow-vec)))))]
+                             (reset! !field (.getField arrow-vec))))]
 
       (reset! !field (.getField arrow-vec))
 
