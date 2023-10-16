@@ -421,16 +421,16 @@
   (->writer* [arrow-vec notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))
           data-vec (.getDataVector arrow-vec)
-          !col-type (atom nil)
-          el-writer (->writer* data-vec (fn notify-list-writer! [el-type]
-                                          (notify! (reset! !col-type [:list el-type]))))
+          !field (atom nil)
+          el-writer (->writer* data-vec (fn notify-list-writer! [el-field]
+                                          (notify! (types/field->col-type (reset! !field (types/->field-default-name types/list-type false [(types/col-type->field el-field)]))))))
           el-wp (.writerPosition el-writer)]
 
-      (reset! !col-type [:list (types/field->col-type (.getField el-writer))])
+      (reset! !field (types/->field-default-name types/list-type false [(.getField el-writer)]))
 
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getField [_] (types/col-type->field @!col-type))
+        (getField [_] @!field)
         (clear [_] (.clear arrow-vec) (.setPosition wp 0) (.clear el-writer))
 
         (rowCopier [this-wtr src-vec]
@@ -472,10 +472,11 @@
   (->writer* [arrow-vec notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))
           writers (HashMap.)
-          !col-types (atom {})]
+          !fields (atom {})]
 
       (letfn [(notify-struct! [col-name col-type]
-                (notify! [:struct (swap! !col-types assoc (symbol col-name) col-type)]))
+                (notify! [:struct (update-vals (swap! !fields assoc (symbol col-name) (types/col-type->field col-type))
+                                               types/field->col-type)]))
               (->key-writer [^ValueVector child-vec]
                 (let [col-name (.getName child-vec)
                       w (->writer* child-vec (partial notify-struct! col-name))]
@@ -485,7 +486,7 @@
         (reify IVectorWriter
           (getVector [_] arrow-vec)
 
-          (getField [_] (types/col-type->field [:struct @!col-types]))
+          (getField [_] (types/col-type->field [:struct (update-vals @!fields types/field->col-type)]))
 
           (clear [_] (.clear arrow-vec) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (.values writers)))
 
@@ -685,15 +686,15 @@
     (let [wp (IVectorPosition/build (.getValueCount duv))
           children (.getChildren (.getField duv))
           writers-by-leg (HashMap.)
-          !col-type (atom nil)]
+          !field (atom nil)]
 
-      (letfn [(->col-type []
-                (apply types/merge-col-types (into #{} (map #(types/field->col-type (.getField ^IVectorWriter %))) (vals writers-by-leg))))
+      (letfn [(->field []
+                (apply types/merge-fields (into #{} (map #(.getField ^IVectorWriter %)) (vals writers-by-leg))))
 
               (->child-writer [^long type-id ^Field field]
                 (let [v (.getVectorByType duv type-id)
                       child-wtr (->writer* v (fn [_]
-                                               (notify! (reset! !col-type (->col-type)))))
+                                               (notify! (types/field->col-type (reset! !field (->field))))))
                       child-wp (.writerPosition child-wtr)
 
                       child-wtr (-> child-wtr
@@ -708,11 +709,11 @@
         (doseq [[type-id ^Field field] (map-indexed vector children)]
           (->child-writer type-id field))
 
-        (reset! !col-type (->col-type))
+        (reset! !field (->field))
 
         (reify IVectorWriter
           (getVector [_] duv)
-          (getField [_] (types/col-type->field @!col-type))
+          (getField [_] @!field)
 
           (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (vals writers-by-leg)))
           (rowCopier [this-writer src-vec]
@@ -729,7 +730,7 @@
                   new-vec (.createVector field (.getAllocator duv))]
               (.addVector duv type-id new-vec)
               (->child-writer type-id field)
-              (notify! (reset! !col-type (->col-type)))
+              (notify! (types/field->col-type (reset! !field (->field))))
 
               type-id))
 
@@ -761,16 +762,16 @@
 (extend-protocol WriterFactory
   ExtensionTypeVector
   (->writer* [arrow-vec notify!]
-    (let [!col-type (atom nil)
+    (let [!field (atom nil)
           inner (->writer* (.getUnderlyingVector arrow-vec)
                            (fn [_]
-                             (reset! !col-type (types/field->col-type (.getField arrow-vec)))))]
+                             (reset! !field (.getField arrow-vec))))]
 
-      (reset! !col-type (types/field->col-type (.getField arrow-vec)))
+      (reset! !field (.getField arrow-vec))
 
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getField [_] (types/col-type->field @!col-type))
+        (getField [_] @!field)
         (clear [_] (.clear inner))
         (rowCopier [this-wtr src-vec]
           (cond
