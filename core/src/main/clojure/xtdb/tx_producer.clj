@@ -278,8 +278,7 @@
       (let [table-doc-writer (.computeIfAbsent table-doc-writers (util/kw->normal-form-kw (.tableName op))
                                                (util/->jfn
                                                  (fn [table]
-                                                   (.registerNewType doc-writer (types/col-type->field (name table) [:struct {}]))
-                                                   (.writerForLeg doc-writer table))))]
+                                                   (.writerForField doc-writer (types/col-type->field (name table) [:struct {}])))))]
         (vw/write-value! (->> (.doc op)
                               (into {} (map (juxt (comp util/kw->normal-form-kw key)
                                                   val))))
