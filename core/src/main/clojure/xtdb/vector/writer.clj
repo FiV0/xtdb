@@ -765,7 +765,7 @@
     (let [!field (atom nil)
           inner (->writer* (.getUnderlyingVector arrow-vec)
                            (fn [_]
-                             (reset! !field (.getField arrow-vec))))]
+                             (types/field->col-type (reset! !field (.getField arrow-vec)))))]
 
       (reset! !field (.getField arrow-vec))
 
