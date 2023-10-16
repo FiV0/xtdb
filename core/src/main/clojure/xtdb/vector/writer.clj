@@ -739,14 +739,14 @@
                   field-leg (keyword field-name)]
               (when-not (.containsKey writers-by-leg field-leg)
                 (->new-child-writer
-                 (case (types/col-type-head (types/field->col-type field))
-                   :list
-                   (types/->field field-name ArrowType$List/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                 (condp = (types/->arrow-type field)
+                   types/list-type
+                   (types/->field field-name ArrowType$List/INSTANCE false (types/->field-default-name types/dense-union-type false []))
 
-                   :set
-                   (types/->field field-name SetType/INSTANCE false (types/->field "$data$" types/dense-union-type false))
+                   SetType/INSTANCE
+                   (types/->field field-name SetType/INSTANCE false (types/->field-default-name types/dense-union-type false []))
 
-                   :struct
+                   types/struct-type
                    (types/->field field-name ArrowType$Struct/INSTANCE false)
 
                    field)))
@@ -966,6 +966,8 @@
                      (if (instance? Field col-name-or-field)
                        :field
                        :col-name)))
+
+(alter-meta! #'open-vec assoc :tag ValueVector)
 
 (defmethod open-vec :col-name [allocator col-name vs]
   (util/with-close-on-catch [res (-> (apply types/merge-fields (map value->field vs))
