@@ -210,7 +210,7 @@
           field (.getField arrow-vec)]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] field)
+        (getField [_] field)
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -357,7 +357,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :varbinary)
+        (getField [_] (types/col-type->field :varbinary))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -426,7 +426,7 @@
                                           (notify! (reset! !col-type [:list el-type]))))
           el-wp (.writerPosition el-writer)]
 
-      (reset! !col-type [:list (.getColType el-writer)])
+      (reset! !col-type [:list (types/field->col-type (.getField el-writer))])
 
       (reify IVectorWriter
         (getVector [_] arrow-vec)
@@ -479,7 +479,7 @@
               (->key-writer [^ValueVector child-vec]
                 (let [col-name (.getName child-vec)
                       w (->writer* child-vec (partial notify-struct! col-name))]
-                  (notify-struct! col-name (.getColType w))
+                  (notify-struct! col-name (types/field->col-type (.getField w)))
                   w))]
 
         (reify IVectorWriter
