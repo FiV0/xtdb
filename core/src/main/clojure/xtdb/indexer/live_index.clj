@@ -64,7 +64,8 @@
   (let [col-type (-> (.writerForLeg live-rel :op)
                      (.writerForLeg :put)
                      (.structKeyWriter "xt$doc")
-                     (.getColType)
+                     .getField
+                     types/field->col-type
                      types/without-null)]
     (assert (= :struct (types/col-type-head col-type)))
     (into {} (map (juxt (comp str key) val)) (second col-type))))

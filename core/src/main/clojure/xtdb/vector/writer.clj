@@ -71,7 +71,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :null)
+        (getField [_] (types/col-type->field :null))
 
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
 
@@ -92,7 +92,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :bool)
+        (getField [_] (types/col-type->field :bool))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -105,10 +105,10 @@
      ~clazz
      (~'->writer* [arrow-vec# _notify!#]
       (let [wp# (IVectorPosition/build (.getValueCount arrow-vec#))
-            col-type# (types/field->col-type (.getField arrow-vec#))]
+            field# (.getField arrow-vec#)]
         (reify IVectorWriter
           (~'getVector [_] arrow-vec#)
-          (~'getColType [_] col-type#)
+          (~'getField [_] field#)
           (~'clear [_] (.clear arrow-vec#) (.setPosition wp# 0))
           (~'rowCopier [this# src-vec#] (scalar-copier this# src-vec#))
           (~'writerPosition [_#] wp#)
@@ -142,7 +142,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:date :milli])
+        (getField [_] (types/col-type->field [:date :milli]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -155,7 +155,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :decimal)
+        (getField [_] (types/col-type->field :decimal))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -207,10 +207,10 @@
   DurationVector
   (->writer* [arrow-vec _notify!]
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))
-          col-type (types/field->col-type (.getField arrow-vec))]
+          field (.getField arrow-vec)]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] col-type)
+        (getColType [_] field)
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -223,7 +223,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:interval :year-month])
+        (getField [_] (types/col-type->field [:interval :year-month]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -239,7 +239,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:interval :day-time])
+        (getField [_] (types/col-type->field [:interval :day-time]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -262,7 +262,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:interval :month-day-nano])
+        (getField [_] (types/col-type->field [:interval :month-day-nano]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -335,7 +335,7 @@
     (let [wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] :utf8)
+        (getField [_] (types/col-type->field :utf8))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -379,7 +379,7 @@
           wp (IVectorPosition/build (.getValueCount arrow-vec))]
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] [:fixed-size-binary byte-width])
+        (getField [_] (types/col-type->field [:fixed-size-binary byte-width]))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0))
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
@@ -430,7 +430,7 @@
 
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] @!col-type)
+        (getField [_] (types/col-type->field @!col-type))
         (clear [_] (.clear arrow-vec) (.setPosition wp 0) (.clear el-writer))
 
         (rowCopier [this-wtr src-vec]
@@ -485,7 +485,7 @@
         (reify IVectorWriter
           (getVector [_] arrow-vec)
 
-          (getColType [_] [:struct @!col-types])
+          (getField [_] (types/col-type->field [:struct @!col-types]))
 
           (clear [_] (.clear arrow-vec) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (.values writers)))
 
@@ -712,7 +712,7 @@
 
         (reify IVectorWriter
           (getVector [_] duv)
-          (getColType [_] @!col-type)
+          (getField [_] (types/col-type->field @!col-type))
 
           (clear [_] (.clear duv) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (vals writers-by-leg)))
           (rowCopier [this-writer src-vec]
@@ -770,7 +770,7 @@
 
       (reify IVectorWriter
         (getVector [_] arrow-vec)
-        (getColType [_] @!col-type)
+        (getField [_] (types/col-type->field @!col-type))
         (clear [_] (.clear inner))
         (rowCopier [this-wtr src-vec]
           (cond
