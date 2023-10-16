@@ -601,7 +601,7 @@
 (defn- duv-child-writer [^IVectorWriter w, write-value!]
   (reify IVectorWriter
     (getVector [_] (.getVector w))
-    (getColType [_] (.getColType w))
+    (getField [_] (.getField w))
     (clear [_] (.clear w))
 
     (rowCopier [_ src-vec]
