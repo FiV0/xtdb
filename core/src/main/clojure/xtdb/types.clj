@@ -143,7 +143,7 @@
   (apply ->field (arrow-type->field-name arrow-type) arrow-type nullable children))
 
 (defn ->canonical-field [^Field field]
-  (->field-default-name (->arrow-type field) (.isNullable field) (map ->canonical-field (.getChildren field))))
+  (->field-default-name (->arrow-type field) (.isNullable field) (.getChildren field)))
 
 (defn field-with-name ^Field [^Field field name]
   (apply ->field name (->arrow-type field) (.isNullable field) (.getChildren field)))

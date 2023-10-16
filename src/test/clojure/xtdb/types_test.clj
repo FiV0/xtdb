@@ -243,12 +243,32 @@
                                                                                       (types/col-type->field :i64)
                                                                                       (types/col-type->field :utf8))])])
              (types/merge-fields (types/col-type->field '[:union #{:f64, [:struct {a :i64}]}])
-                                 (types/col-type->field '[:struct {a :utf8}])))))
+                                 (types/col-type->field '[:struct {a :utf8}]))))
+
+    (let [struct0 (types/col-type->field '[:struct {a :i64
+                                                    b [:struct {c :utf8, d :utf8}]}])
+          struct1 (types/col-type->field '[:struct {a :bool
+                                                    b :utf8}])]
+      (t/is (= #_(types/col-type->field [:struct '{a [:union #{:i64 :bool}]
+                                                   b [:union #{[:struct {c :utf8, d :utf8}]
+                                                               :utf8}]}])
+               (types/->field-default-name types/struct-type false
+                                           [(types/->field "a" types/dense-union-type false
+                                                           (types/col-type->field :i64)
+                                                           (types/col-type->field :bool))
+                                            (types/->field "b" types/dense-union-type false
+                                                           (types/->field-default-name types/struct-type false
+                                                                                       [(types/col-type->field "c" :utf8)
+                                                                                        (types/col-type->field "d" :utf8)])
+                                                           (types/col-type->field :utf8))])
+               (types/merge-fields struct0 struct1))))
+
+    )
 
   (t/testing "null behaviour"
     (t/is (= (types/col-type->field :null)
              (types/merge-fields (types/col-type->field :null))))
     ;; TODO
     #_(t/is (=
-           (types/col-type->field [:union #{:null :i64}])
-           (types/merge-fields (types/col-type->field :null) (types/col-type->field :i64))))))
+             (types/col-type->field [:union #{:null :i64}])
+             (types/merge-fields (types/col-type->field :null) (types/col-type->field :i64))))))
