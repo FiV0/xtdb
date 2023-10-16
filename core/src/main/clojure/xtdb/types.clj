@@ -19,6 +19,9 @@
 (declare ->field-default-name)
 (declare ->canonical-field)
 (declare ->field)
+(declare time-unit->kw)
+(declare date-unit->kw)
+(declare interval-unit->kw)
 
 (defmulti ^String arrow-type->field-name (fn [arrow-type] arrow-type), :default ::default)
 
@@ -28,15 +31,16 @@
     (instance? ArrowType$FixedSizeList arrow-type) (name :fixed-size-list)
 
     (instance? ArrowType$Timestamp arrow-type)
-    (let [^ArrowType$Timestamp arrow-type arrow-type]
-      (if (.getTimezone arrow-type)
-        (name :timestamp-tz)
-        (name :timestamp-local)))
+    (let [^ArrowType$Timestamp arrow-type arrow-type
+          time-unit (time-unit->kw (.getUnit arrow-type))]
+      (if-let [tz (.getTimezone arrow-type)]
+        (str (name :timestamp-tz) "-" (name time-unit) "-" (-> (str/lower-case tz) (str/replace #"[/:]" "_")))
+        (str (name :timestamp-local) "-" (name time-unit))))
 
-    (instance? ArrowType$Date arrow-type) (name :date)
-    (instance? ArrowType$Time arrow-type) (name :time-local)
-    (instance? ArrowType$Duration arrow-type) (name :duration)
-
+    (instance? ArrowType$Date arrow-type) (str (name :date) "-" (name (date-unit->kw (.getUnit ^ArrowType$Date arrow-type))))
+    (instance? ArrowType$Time arrow-type) (str (name :time-local) "-" (name (time-unit->kw (.getUnit ^ArrowType$Time arrow-type))))
+    (instance? ArrowType$Duration arrow-type) (str (name :duation) "-" (name (time-unit->kw (.getUnit ^ArrowType$Duration arrow-type))))
+    (instance? ArrowType$Interval arrow-type) (str (name :interval) "-" (name (interval-unit->kw (.getUnit ^ArrowType$Interval arrow-type))))
     :else (.toString arrow-type)))
 
 (let [keyword->arrow-type
