@@ -1,0 +1,67 @@
+= Types and Naming
+
+This proposal tries to specify the merging of col-types/fields quite precisely together with naming.
+
+For the purpose of this document I am going to extend our col-type syntax a bit so that I can talk about names in connection
+with col-types. This doesn't mean this syntax is necessarily supported in XT, I just need some notation to talk about Arrow Fields
+with names and their types.
+The syntax is going to be the same as previously except that you can wrap a type in a map if you want to give
+the (arrow) vector a name. That also means a map in the context of a top-level (arrow) vector can only have one entry. If the no name
+is specified the vector will get a default name. A couple of examples.
+`:i64` - int 64 bit vector with default name
+`{foo :i64}` - int 64 bit vector with name "foo"
+`{foo [:struct #{:i64 :bool}]}` - struct vector with the name "foo" and two struct fields which have default naming for `:i64` and `:bool`
+`{foo [:struct {a :i64 b :bool}]}` - same as above except that now the two fields have explicit names
+You can't currently mix default and named syntax, but one can always specify the default name in the named version.
+
+In this world `:union` also has a named and unnamed syntax.
+`{foo [:union #{:i64 :bool}]}`
+`{foo [:union {a :i64 b :bool}]}`
+
+== Nulls
+
+Null is a bit special in the context of Arrow as every vector can also be nulled, but one needs a special `NullVector` when the only type of that vector is `:null`. Hence the meaning of `:null` is a bit ambiguous. The idea is to always "pull" the `:null` into another vector whenever possible. What does that mean?
+
+`:null` results in `NullVector` with default name
+`{foo :null}` results in a `NullVector` with name "foo"
+`[:union #{:i64 :null}]` - results in a `Int64Vector` which is nullable
+`[:union {i64 :i64 foo :null}]` - results in a `UnionVector` with default name and leg of `:i64` not nullable and an explict `NullVector` with name "foo".
+
+
+Concepts:
+Promoting - wanting to write a float to `:i64` vector float should transform the vector to a `[:union #{:i64 :f64}]`
+Blocks: EE needs to be able to read from different vector types given some collection of possibility distinct vector types.
+
+== Merging
+
+Merging fields if the names are important needs to be handled carefully. I am proposing that we prefix our default naming with something like `xtdb` so that there can be no confusion when things should be merged and when not. Essentially the idea is to always
+keep names and preserve the structure of the underlying vectors when the naming differs from the default naming.
+
+Should merging should happen by name?
+
+== What do we need from our readers/writers?
+
+Supposing we use names to uniquely identify "legs"/ "structFields" of nested structures.
+
+`writerForLeg` should only get a writer if existent
+`writerForField` should create a writer with the given field type.
+
+What should happen when you call `writerForField` when previously the given field type was different to the currently passed one, but
+the naming is the same? Example:
+First call:
+`(writerForField wrt (->col-type->field "foo" :i64))`
+Second call:
+`(writerForField wrt (->col-type->field "foo" :f64))`
+
+1. Option
+We return a vector of type `:i64`. You are out of look and need to take care of what you are calling your writers with.
+
+2. Option
+We first create a `:i64` vector that later gets promoted to `[:union #{:i64 :f64}]`. Good thing about this approach is that whenever write to disk the format is as effiecient as possible. Downside is that you need to potentially do a lot of type reorganizing
+while writing to a relation.
+
+3.Option
+We always create a dense union even with only potentially one leg. Upside is there is no type reorganizing when writing to a relation.
+Downside is that monomorphic fields are stored quite inefficient on disk. We could potentially always do some simplify step
+when writing to disk. To also make the readers/writers work nicely one would need to abstract away this one level of
+union indirection (should this level be reflected in something like `getField`?)
