@@ -216,11 +216,22 @@ class ListValueBox implements IValueWriter, IMonoVectorReader, IPolyVectorReader
     }
 
     @Override
+    @Deprecated
     public IValueWriter structKeyWriter(String key, Object colType) {
         return new BoxWriter() {
             @Override
             IValueWriter box() {
                 return writeBox.structKeyWriter(key, colType);
+            }
+        };
+    }
+
+    @Override
+    public IValueWriter structKeyWriter(Field field) {
+        return new BoxWriter() {
+            @Override
+            IValueWriter box() {
+                return writeBox.structKeyWriter(field);
             }
         };
     }

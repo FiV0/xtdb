@@ -121,7 +121,7 @@
             (let [wtrs (->> col-names
                             (into [] (keep (fn [col-name]
                                              (when (= normalised-col-name (util/str->normal-form-str col-name))
-                                               (.writerForField out-rel (types/col-type->field col-name types/temporal-col-type)))))))]
+                                               (.colWriter out-rel col-name))))))]
               (reify IVectorWriter
                 (writeLong [_ l]
                   (doseq [^IVectorWriter wtr wtrs]
@@ -138,10 +138,7 @@
                                                         ("xt$system_from" "xt$system_to" "xt$valid_from" "xt$valid_to") nil
                                                         (.structKeyReader doc-rdr normalized-name))]
                              :when rdr]
-                         (.rowCopier rdr
-                                     (case normalized-name
-                                       "xt$iid" (.writerForField out-rel (types/col-type->field col-name [:fixed-size-binary 16]))
-                                       (.writerForLeg out-rel (keyword col-name))))))
+                         (.rowCopier rdr (.colWriter out-rel col-name))))
 
           ^IVectorWriter valid-from-wtr (writer-for "xt$valid_from")
           ^IVectorWriter valid-to-wtr (writer-for "xt$valid_to")

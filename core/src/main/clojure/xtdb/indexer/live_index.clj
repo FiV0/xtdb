@@ -61,8 +61,8 @@
   (^xtdb.vector.IRelationWriter live-rel [test-live-table]))
 
 (defn- live-rel->col-types [^IRelationWriter live-rel]
-  (let [col-type (-> (.writerForLeg live-rel :op)
-                     (.writerForLeg :put)
+  (let [col-type (-> (.colWriter live-rel "op")
+                     (.legWriter :put)
                      (.structKeyWriter "xt$doc")
                      .getField
                      types/field->col-type
@@ -197,17 +197,17 @@
                                          :or {->live-trie (fn [iid-rdr]
                                                             (LiveHashTrie/emptyTrie iid-rdr))}}]
    (util/with-close-on-catch [rel (trie/open-log-data-root allocator)]
-     (let [iid-wtr (.writerForLeg rel :xt$iid)
-           op-wtr (.writerForLeg rel :op)
-           put-wtr (.writerForLeg op-wtr :put)
-           delete-wtr (.writerForLeg op-wtr :delete)]
+     (let [iid-wtr (.colWriter rel "xt$iid")
+           op-wtr (.colWriter rel "op")
+           put-wtr (.legWriter op-wtr :put)
+           delete-wtr (.legWriter op-wtr :delete)]
        (->LiveTable allocator buffer-pool table-name rel
                     (->live-trie (vw/vec-wtr->rdr iid-wtr))
-                    iid-wtr (.writerForLeg rel :xt$system_from)
+                    iid-wtr (.colWriter rel "xt$system_from")
                     put-wtr (.structKeyWriter put-wtr "xt$valid_from") (.structKeyWriter put-wtr "xt$valid_to")
                     (.structKeyWriter put-wtr "xt$doc") delete-wtr (.structKeyWriter delete-wtr "xt$valid_from")
                     (.structKeyWriter delete-wtr "xt$valid_to")
-                    (.writerForLeg op-wtr :evict))))))
+                    (.legWriter op-wtr :evict))))))
 
 (defn ->live-trie [log-limit page-limit iid-rdr]
   (-> (doto (LiveHashTrie/builder iid-rdr)

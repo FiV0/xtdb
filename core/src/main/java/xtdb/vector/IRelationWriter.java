@@ -29,14 +29,9 @@ public interface IRelationWriter extends AutoCloseable, Iterable<Map.Entry<Strin
         }
     }
 
-    IVectorWriter writerForLeg(Keyword leg);
+    IVectorWriter colWriter(String colName);
 
-    @Deprecated
-    IVectorWriter writerForName(String name);
-    @Deprecated
-    IVectorWriter writerForName(String name, Object colType);
-
-    IVectorWriter writerForField(Field field);
+    IVectorWriter colWriter(Field field);
 
     IRowCopier rowCopier(RelationReader relation);
 

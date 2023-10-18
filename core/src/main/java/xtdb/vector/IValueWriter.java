@@ -42,6 +42,8 @@ public interface IValueWriter {
     @Deprecated
     IValueWriter structKeyWriter(String key, Object colType);
 
+    IValueWriter structKeyWriter(Field field);
+
     void startStruct();
 
     void endStruct();

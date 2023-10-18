@@ -43,6 +43,9 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     IVectorWriter structKeyWriter(String key, Object colType);
 
     @Override
+    IVectorWriter structKeyWriter(Field field);
+
+    @Override
     IVectorWriter listElementWriter();
 
     @Override

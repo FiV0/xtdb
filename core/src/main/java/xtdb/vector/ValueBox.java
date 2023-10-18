@@ -121,11 +121,22 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
     }
 
     @Override
+    @Deprecated
     public IValueWriter structKeyWriter(String key, Object colType) {
         return new BoxWriter() {
             @Override
             IValueWriter box() {
                 return ((StructValueBox) obj).fieldWriter(key);
+            }
+        };
+    }
+
+    @Override
+    public IValueWriter structKeyWriter(Field field) {
+        return new BoxWriter() {
+            @Override
+            IValueWriter box() {
+                return ((StructValueBox) obj).fieldWriter(field.getName());
             }
         };
     }
@@ -179,16 +190,19 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
     }
 
     @Override
+    @Deprecated
     public IValueWriter writerForType(Object colType) {
         throw new UnsupportedOperationException();
     }
 
     @Override
+    @Deprecated
     public byte registerNewType(Field field) {
         throw new UnsupportedOperationException();
     }
 
     @Override
+    @Deprecated
     public IValueWriter writerForTypeId(byte typeId) {
         return new BoxWriter() {
             @Override

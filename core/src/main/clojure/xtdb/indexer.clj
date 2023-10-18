@@ -255,7 +255,7 @@
 
             ;; if the user returns `nil` or `true`, we just continue with the rest of the transaction
             (when-not (or (nil? res) (true? res))
-              (util/with-close-on-catch [tx-ops-vec (txp/open-tx-ops-vec allocator)]
+              (util/with-close-on-catch [tx-ops-vec (txp/open-tx-ops-vec allocator (txp/put-tables res))]
                 (txp/write-tx-ops! allocator (vw/->writer tx-ops-vec) res)
                 (.setValueCount tx-ops-vec (count res))
                 tx-ops-vec)))
@@ -419,20 +419,23 @@
     (.logPut live-table (trie/->iid tx-id) system-time-µs Long/MAX_VALUE
              (fn write-doc! []
                (.startStruct doc-writer)
-               (doto (.structKeyWriter doc-writer "xt$id" :i64)
+               (doto (-> (.structKeyWriter doc-writer "xt$id")
+                         (.legWriter #xt.arrow/type :i64))
                  (.writeLong tx-id))
 
-               (doto (.structKeyWriter doc-writer "xt$tx_time" types/temporal-col-type)
+               (doto (-> (.structKeyWriter doc-writer "xt$tx_time")
+                         (.legWriter (types/->arrow-type types/temporal-col-type)))
                  (.writeLong system-time-µs))
 
-               (doto (.structKeyWriter doc-writer "xt$committed?" :bool)
+               (doto (-> (.structKeyWriter doc-writer "xt$committed?")
+                         (.legWriter #xt.arrow/type :bool))
                  (.writeBoolean (nil? t)))
 
-               (let [e-wtr (.structKeyWriter doc-writer "xt$error" [:union #{:null :clj-form}])]
+               (let [e-wtr (.structKeyWriter doc-writer "xt$error")]
                  (if (or (nil? t) (= t abort-exn))
-                   (doto (.writerForField e-wtr (types/col-type->field :null))
+                   (doto (.legWriter e-wtr #xt.arrow/type :null)
                      (.writeNull nil))
-                   (doto (.writerForField e-wtr (types/col-type->field :clj-form))
+                   (doto (.legWriter e-wtr #xt.arrow/type :clj-form)
                      (.writeObject (pr-str t)))))
                (.endStruct doc-writer)))
 

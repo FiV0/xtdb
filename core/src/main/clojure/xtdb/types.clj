@@ -131,7 +131,7 @@
   ArrowType$FixedSizeBinary (arrow-type->leg [arrow-type] (keyword (format "fixed-size-binary-%d" (second (<-arrow-type arrow-type))))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]} ; xt.arrow/type reader macro
-(defn ->arrow-type [col-type]
+(defn ->arrow-type ^org.apache.arrow.vector.types.pojo.ArrowType [col-type]
   (case col-type
     :null ArrowType$Null/INSTANCE
     :bool ArrowType$Bool/INSTANCE

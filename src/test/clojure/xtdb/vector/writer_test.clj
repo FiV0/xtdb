@@ -31,7 +31,7 @@
 
                (.getField duv-wtr))
 
-            "writerForField pessimistically adds lists/sets as unions")
+            "legWriter pessimistically adds lists/sets as unions")
 
       (doto (.listElementWriter my-list-wtr)
         (.legWriter (.getType (types/col-type->field :i64))))
@@ -78,7 +78,7 @@
 
                  (.getField duv-wtr))
 
-              "writerForField pessimistically adds struct keys as unions")
+              "legWriter pessimistically adds struct keys as unions")
 
         (.legWriter a-wtr (.getType Types$MinorType/BIGINT))
 

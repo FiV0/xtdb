@@ -358,7 +358,7 @@
      (PeriodDuration. (.-period imdn#) (.-duration imdn#))))
 
 (defmethod codegen-expr :literal [{:keys [literal]} _]
-  (let [return-type (types/field->col-type (vw/value->field literal))
+  (let [return-type (vw/value->col-type literal)
         literal-type (class literal)]
     {:return-type return-type
      :continue (fn [f]
@@ -369,7 +369,7 @@
   (if (= op :literal)
     (let [{:keys [literal]} expr]
       {:op :param, :param (gensym 'lit),
-       :param-type (types/field->col-type (vw/value->field literal))
+       :param-type (vw/value->col-type literal)
        :literal literal})
     expr))
 
@@ -429,7 +429,7 @@
 
 (defmethod codegen-expr :param [{:keys [param] :as expr} {:keys [param-types]}]
   (if-let [[_ literal] (find expr :literal)]
-    (let [lit-type (types/field->col-type (vw/value->field literal))
+    (let [lit-type (vw/value->col-type literal)
           lit-class (class literal)]
       (into {:return-type lit-type
              :batch-bindings [[param (emit-value lit-class literal)]]
@@ -1561,6 +1561,9 @@
                        (MapEntry/create
                         (symbol (.getName col))
                         (types/field->col-type (.getField col))))))))
+
+;; expression engine currently needs the entire nested type
+;; it needs that for a value (literal)
 
 (defn ->expression-projection-spec ^xtdb.operator.IProjectionSpec [col-name form {:keys [col-types param-types] :as input-types}]
   (let [expr (form->expr form input-types)

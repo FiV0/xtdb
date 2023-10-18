@@ -309,11 +309,11 @@
   (util/with-close-on-catch [meta-root (VectorSchemaRoot/create trie/meta-rel-schema al)]
     (let [meta-wtr (vw/root->writer meta-root)
           meta-wp (.writerPosition meta-wtr)
-          nodes-wtr (.writerForLeg meta-wtr :nodes)
-          nil-wtr (.writerForLeg nodes-wtr :nil)
-          branch-wtr (.writerForLeg nodes-wtr :branch)
+          nodes-wtr (.colWriter meta-wtr "nodes")
+          nil-wtr (.legWriter nodes-wtr :nil)
+          branch-wtr (.legWriter nodes-wtr :branch)
           branch-el-wtr (.listElementWriter branch-wtr)
-          data-wtr (.writerForLeg nodes-wtr :leaf)
+          data-wtr (.legWriter nodes-wtr :leaf)
           data-page-idx-wtr (.structKeyWriter data-wtr "data-page-idx")]
       (letfn [(write-paths [paths]
                 (cond
