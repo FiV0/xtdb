@@ -200,31 +200,31 @@
                                                        'params [:union #{:null :varbinary}]}])
 
 
-                 (types/->field "put" types/struct-type false
-                                (types/->field "document" types/dense-union-type false)
+                 (types/->field "put" #xt.arrow/type :struct false
+                                (types/->field "document" #xt.arrow/type :union false)
                                 (types/col-type->field 'xt$valid_from types/nullable-temporal-type)
                                 (types/col-type->field 'xt$valid_to types/nullable-temporal-type))
 
-                 (types/->field "delete" types/struct-type false
+                 (types/->field "delete" #xt.arrow/type :struct false
                                 (types/col-type->field 'table :utf8)
-                                (types/->field "xt$id" types/dense-union-type false)
+                                (types/->field "xt$id" #xt.arrow/type :union false)
                                 (types/col-type->field 'xt$valid_from types/nullable-temporal-type)
                                 (types/col-type->field 'xt$valid_to types/nullable-temporal-type))
 
-                 (types/->field "evict" types/struct-type false
+                 (types/->field "evict" #xt.arrow/type :struct false
                                 (types/col-type->field '_table [:union #{:null :utf8}])
-                                (types/->field "xt$id" types/dense-union-type false))
+                                (types/->field "xt$id" #xt.arrow/type :union false))
 
-                 (types/->field "call" types/struct-type false
-                                (types/->field "fn-id" types/dense-union-type false)
-                                (types/->field "args" types/list-type false
-                                               (types/->field "arg" types/dense-union-type false)))
+                 (types/->field "call" #xt.arrow/type :struct false
+                                (types/->field "fn-id" #xt.arrow/type :union false)
+                                (types/->field "args" #xt.arrow/type :list false
+                                               (types/->field "arg" #xt.arrow/type :union false)))
 
                  ;; C1 importer
                  (types/col-type->field 'abort :null)))
 
 (def ^:private ^org.apache.arrow.vector.types.pojo.Schema tx-schema
-  (Schema. [(types/->field "tx-ops" types/list-type false tx-ops-field)
+  (Schema. [(types/->field "tx-ops" #xt.arrow/type :list false tx-ops-field)
 
             (types/col-type->field "system-time" types/nullable-temporal-type)
             (types/col-type->field "default-tz" :utf8)

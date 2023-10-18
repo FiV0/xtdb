@@ -5,8 +5,9 @@
             [xtdb.rewrite :refer [zmatch]]
             [xtdb.util :as util])
   (:import (clojure.lang MapEntry)
-           (org.apache.arrow.vector.types DateUnit FloatingPointPrecision IntervalUnit TimeUnit Types$MinorType UnionMode)
-           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Binary ArrowType$Bool ArrowType$Date ArrowType$Decimal ArrowType$Duration ArrowType$FixedSizeBinary ArrowType$FixedSizeList ArrowType$FloatingPoint ArrowType$Int ArrowType$Interval ArrowType$List ArrowType$Null ArrowType$Struct ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union ArrowType$Utf8 Field FieldType ArrowType$ArrowTypeID)
+           [java.io Writer]
+           (org.apache.arrow.vector.types DateUnit FloatingPointPrecision IntervalUnit TimeUnit Types$MinorType)
+           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$ArrowTypeID ArrowType$Binary ArrowType$Bool ArrowType$Date ArrowType$Decimal ArrowType$Duration ArrowType$FixedSizeBinary ArrowType$FixedSizeList ArrowType$FloatingPoint ArrowType$Int ArrowType$Interval ArrowType$List ArrowType$Null ArrowType$Struct ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union ArrowType$Utf8 Field FieldType)
            (xtdb.vector.extensions AbsentType ClojureFormType KeywordType SetType UriType UuidType)))
 
 (set! *unchecked-math* :warn-on-boxed)
@@ -19,63 +20,192 @@
 (declare ->field-default-name)
 (declare ->canonical-field)
 (declare ->field)
-(declare time-unit->kw)
-(declare date-unit->kw)
-(declare interval-unit->kw)
 
-(defprotocol ArrowTypeLeg
-  (^String arrow-type->leg [arrow-type]))
+(defprotocol ArrowTypeLegs
+  (^clojure.lang.Keyword arrow-type->leg [arrow-type]))
 
-(extend-protocol ArrowTypeLeg
-  ArrowType$Null (arrow-type->leg [_] :null)
-  ArrowType$Bool (arrow-type->leg [_] :bool)
+(defprotocol FromArrowType
+  (<-arrow-type [arrow-type]))
+
+(defn- date-unit->kw [unit]
+  (util/case-enum unit
+    DateUnit/DAY :day
+    DateUnit/MILLISECOND :milli))
+
+(defn- kw->date-unit [kw]
+  (case kw
+    :day DateUnit/DAY
+    :milli DateUnit/MILLISECOND))
+
+(defn- time-unit->kw [unit]
+  (util/case-enum unit
+    TimeUnit/SECOND :second
+    TimeUnit/MILLISECOND :milli
+    TimeUnit/MICROSECOND :micro
+    TimeUnit/NANOSECOND :nano))
+
+(defn- kw->time-unit [kw]
+  (case kw
+    :second TimeUnit/SECOND
+    :milli TimeUnit/MILLISECOND
+    :micro TimeUnit/MICROSECOND
+    :nano TimeUnit/NANOSECOND))
+
+(defn- interval-unit->kw [unit]
+  (util/case-enum unit
+    IntervalUnit/DAY_TIME :day-time
+    IntervalUnit/MONTH_DAY_NANO :month-day-nano
+    IntervalUnit/YEAR_MONTH :year-month))
+
+(defn- kw->interval-unit [kw]
+  (case kw
+    :day-time IntervalUnit/DAY_TIME
+    :month-day-nano IntervalUnit/MONTH_DAY_NANO
+    :year-month IntervalUnit/YEAR_MONTH))
+
+(extend-protocol FromArrowType
+  ArrowType$Null (<-arrow-type [_] :null)
+  ArrowType$Bool (<-arrow-type [_] :bool)
 
   ArrowType$FloatingPoint
-  (arrow-type->leg [arrow-type]
-    (condp = (.getPrecision arrow-type)
+  (<-arrow-type [arrow-type]
+    (util/case-enum (.getPrecision arrow-type)
       FloatingPointPrecision/SINGLE :f32
       FloatingPointPrecision/DOUBLE :f64))
 
   ArrowType$Int
-  (arrow-type->leg [arrow-type]
+  (<-arrow-type [arrow-type]
     (if (.getIsSigned arrow-type)
       (case (.getBitWidth arrow-type)
         8 :i8, 16 :i16, 32 :i32, 64 :i64)
 
-      (throw (UnsupportedOperationException.))))
+      (throw (UnsupportedOperationException. "unsigned ints"))))
 
-  ArrowType$Utf8 (arrow-type->leg [_] :utf8)
-  ArrowType$Binary (arrow-type->leg [_] :varbinary)
+  ArrowType$Utf8 (<-arrow-type [_] :utf8)
+  ArrowType$Binary (<-arrow-type [_] :varbinary)
+  ArrowType$FixedSizeBinary (<-arrow-type [arrow-type] [:fixed-size-binary (.getByteWidth arrow-type)])
 
-  ArrowType$Decimal (arrow-type->leg [_] :decimal)
-  ArrowType$FixedSizeList (arrow-type->leg [_] :fixed-size-list)
+  ArrowType$Decimal (<-arrow-type [_] :decimal)
+
+  ArrowType$FixedSizeList (<-arrow-type [arrow-type] [:fixed-size-list (.getListSize arrow-type)])
+
+  ArrowType$Timestamp
+  (<-arrow-type [arrow-type]
+    (let [time-unit (time-unit->kw (.getUnit arrow-type))]
+      (if-let [tz (.getTimezone arrow-type)]
+        [:timestamp-tz time-unit tz]
+        [:timestamp-local time-unit])))
+
+  ArrowType$Date (<-arrow-type [arrow-type] [:date (date-unit->kw (.getUnit arrow-type))])
+  ArrowType$Time (<-arrow-type [arrow-type] [:time-local (time-unit->kw (.getUnit arrow-type))])
+  ArrowType$Duration (<-arrow-type [arrow-type] [:duration (time-unit->kw (.getUnit arrow-type))])
+  ArrowType$Interval (<-arrow-type [arrow-type] [:interval (interval-unit->kw (.getUnit arrow-type))])
+
+  ArrowType$Struct (<-arrow-type [_] :struct)
+  ArrowType$List (<-arrow-type [_] :list)
+  SetType (<-arrow-type [_] :set)
+  ArrowType$Union (<-arrow-type [_] :union)
+
+  KeywordType (<-arrow-type [_] :keyword)
+  UuidType (<-arrow-type [_] :uuid)
+  UriType (<-arrow-type [_] :uri)
+  ClojureFormType (<-arrow-type [_] :clj-form)
+  AbsentType (<-arrow-type [_] :absent))
+
+(extend-protocol ArrowTypeLegs
+  ArrowType (arrow-type->leg [arrow-type] (<-arrow-type arrow-type))
 
   ArrowType$Timestamp
   (arrow-type->leg [arrow-type]
-    (let [time-unit (time-unit->kw (.getUnit arrow-type))]
-      (if-let [tz (.getTimezone arrow-type)]
-        (keyword (str (name :timestamp-tz) "-" (name time-unit) "-" (-> (str/lower-case tz) (str/replace #"[/:]" "_"))))
-        (keyword (str (name :timestamp-local) "-" (name time-unit))))))
+    (let [[ts-type time-unit tz] (<-arrow-type arrow-type)]
+      (keyword (case ts-type
+                 :timestamp-tz (format "timestamp-tz-%s-%s" (name time-unit) (-> (str/lower-case tz) (str/replace #"[/:]" "_")))
+                 :timestamp-local (format "timestamp-local-%s-" (name time-unit))))))
 
-  ArrowType$Date (arrow-type->leg [arrow-type] (keyword (str (name :date) "-" (name (date-unit->kw (.getUnit arrow-type))))))
-  ArrowType$Time (arrow-type->leg [arrow-type] (keyword (str (name :time-local) "-" (name (time-unit->kw (.getUnit arrow-type))))))
-  ArrowType$Duration (arrow-type->leg [arrow-type] (keyword (str (name :duation) "-" (name (time-unit->kw (.getUnit arrow-type))))))
-  ArrowType$Interval (arrow-type->leg [arrow-type] (keyword (str (name :interval) "-" (name (interval-unit->kw (.getUnit arrow-type))))))
+  ArrowType$Date (arrow-type->leg [arrow-type] (keyword (format "date-%s" (name (second (<-arrow-type arrow-type))))))
+  ArrowType$Time (arrow-type->leg [arrow-type] (keyword (format "time-local-%s" (name (second (<-arrow-type arrow-type))))))
+  ArrowType$Duration (arrow-type->leg [arrow-type] (keyword (format "duration-%s" (name (second (<-arrow-type arrow-type))))))
+  ArrowType$Interval (arrow-type->leg [arrow-type] (keyword (format "interval-%s" (name (second (<-arrow-type arrow-type))))))
 
-  ArrowType$Struct (arrow-type->leg [_] :struct)
-  ArrowType$List (arrow-type->leg [_] :list)
-  SetType (arrow-type->leg [_] :set)
+  ArrowType$FixedSizeList (arrow-type->leg [arrow-type] (keyword (format "fixed-size-list-%d" (second (<-arrow-type arrow-type)))))
+  ArrowType$FixedSizeBinary (arrow-type->leg [arrow-type] (keyword (format "fixed-size-binary-%d" (second (<-arrow-type arrow-type))))))
 
-  KeywordType (arrow-type->leg [_] :keyword)
-  UuidType (arrow-type->leg [_] :uuid)
-  UriType (arrow-type->leg [_] :uri)
-  ClojureFormType (arrow-type->leg [_] :clj-form)
-  AbsentType (arrow-type->leg [_] :absent))
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]} ; xt.arrow/type reader macro
+(defn ->arrow-type [col-type]
+  (case col-type
+    :null ArrowType$Null/INSTANCE
+    :bool ArrowType$Bool/INSTANCE
 
-(def ^org.apache.arrow.vector.types.pojo.ArrowType struct-type (.getType Types$MinorType/STRUCT))
-(def ^org.apache.arrow.vector.types.pojo.ArrowType dense-union-type (ArrowType$Union. UnionMode/Dense nil))
-(def ^org.apache.arrow.vector.types.pojo.ArrowType list-type (.getType Types$MinorType/LIST))
-(def ^org.apache.arrow.vector.types.pojo.ArrowType set-type SetType/INSTANCE)
+    :i8 (.getType Types$MinorType/TINYINT)
+    :i16 (.getType Types$MinorType/SMALLINT)
+    :i32 (.getType Types$MinorType/INT)
+    :i64 (.getType Types$MinorType/BIGINT)
+    :f32 (.getType Types$MinorType/FLOAT4)
+    :f64 (.getType Types$MinorType/FLOAT8)
+
+    ;; HACK we should support parameterised decimals here
+    :decimal (ArrowType$Decimal/createDecimal 38 19 (int 128))
+
+    :utf8 (.getType Types$MinorType/VARCHAR)
+    :varbinary (.getType Types$MinorType/VARBINARY)
+
+    :keyword KeywordType/INSTANCE
+    :uuid UuidType/INSTANCE
+    :uri UriType/INSTANCE
+    :clj-form ClojureFormType/INSTANCE
+    :absent AbsentType/INSTANCE
+
+    :struct ArrowType$Struct/INSTANCE
+    :list ArrowType$List/INSTANCE
+    :set SetType/INSTANCE
+    :union (.getType Types$MinorType/DENSEUNION)
+
+    (case (first col-type)
+      :date (let [[_ date-unit] col-type]
+              (ArrowType$Date. (kw->date-unit date-unit)))
+
+      :timestamp-tz (let [[_ time-unit tz] col-type]
+                      (ArrowType$Timestamp. (kw->time-unit time-unit) tz))
+
+      :timestamp-local (let [[_ time-unit] col-type]
+                         (ArrowType$Timestamp. (kw->time-unit time-unit) nil))
+
+      :time-local (let [[_ time-unit] col-type]
+                    (ArrowType$Time. (kw->time-unit time-unit)
+                                     (case time-unit (:second :milli) 32, (:micro :nano) 64)))
+
+      :duration (let [[_ time-unit] col-type]
+                  (ArrowType$Duration. (kw->time-unit time-unit)))
+
+      :interval (let [[_ interval-unit] col-type]
+                  (ArrowType$Interval. (kw->interval-unit interval-unit)))
+
+      :fixed-size-list (let [[_ list-size] col-type]
+                         (ArrowType$FixedSizeList. list-size))
+
+      :fixed-size-binary (let [[_ byte-width] col-type]
+                           (ArrowType$FixedSizeBinary. byte-width)))))
+
+(defmethod print-dup ArrowType [arrow-type, ^Writer w]
+  (.write w "#xt.arrow/type ")
+  (.write w (pr-str (<-arrow-type arrow-type))))
+
+(defmethod print-method ArrowType [arrow-type w]
+  (print-dup arrow-type w))
+
+(defmethod print-method Field [^Field field, ^Writer w]
+  (.write w (format "<Field %s %s %s"
+                    (pr-str (.getName field))
+                    (pr-str (.getType field))
+                    (if (.isNullable (.getFieldType field))
+                      "null" "not-null")))
+
+  (when-let [children (seq (.getChildren field))]
+    (.write w " ")
+    (doseq [^Field child-field children]
+      (print-method child-field w)))
+
+  (.write w ">"))
 
 (def ^:private ^Field absent-field (delay (col-type->field :absent)))
 
@@ -111,9 +241,9 @@
 
           (kv->field [[head opts]]
             (case (if (vector? head) (first head) head)
-              :list (->field-default-name list-type (nullable? opts) [(map->field (dissoc opts :null))])
+              :list (->field-default-name #xt.arrow/type :list (nullable? opts) [(map->field (dissoc opts :null))])
               :fixed-size-list (->field-default-name (ArrowType$FixedSizeList. (second head)) (nullable? opts) [(map->field (dissoc opts :null))])
-              :struct (->field-default-name struct-type (nullable? opts)
+              :struct (->field-default-name #xt.arrow/type :struct (nullable? opts)
                                             (map (fn [[name opts]]
                                                    (let [^Field field (map->field opts)]
                                                      (apply ->field name (.getType field) (.isNullable field)
@@ -128,7 +258,7 @@
                 0 (col-type->field :null)
                 ;; TODO deal with :null in this case
                 1 (kv->field (first without-null))
-                (->field-default-name dense-union-type (contains? col-type-map :null) (map kv->field without-null)))))]
+                (->field-default-name #xt.arrow/type :union (contains? col-type-map :null) (map kv->field without-null)))))]
 
     (-> (transduce (comp (remove nil?) (distinct)) (completing merge-field*) {} fields)
         (map->field))))
@@ -424,20 +554,6 @@
 
 ;;; timestamp
 
-(defn- time-unit->kw [unit]
-  (util/case-enum unit
-    TimeUnit/SECOND :second
-    TimeUnit/MILLISECOND :milli
-    TimeUnit/MICROSECOND :micro
-    TimeUnit/NANOSECOND :nano))
-
-(defn- kw->time-unit [kw]
-  (case kw
-    :second TimeUnit/SECOND
-    :milli TimeUnit/MILLISECOND
-    :micro TimeUnit/MICROSECOND
-    :nano TimeUnit/NANOSECOND))
-
 (defmethod col-type->field-name :timestamp-tz [[type-head time-unit tz]]
   (str (name type-head) "-" (name time-unit) "-" (-> (str/lower-case tz) (str/replace #"[/:]" "_"))))
 
@@ -458,16 +574,6 @@
       [:timestamp-local time-unit])))
 
 ;;; date
-
-(defn- date-unit->kw [unit]
-  (util/case-enum unit
-    DateUnit/DAY :day
-    DateUnit/MILLISECOND :milli))
-
-(defn- kw->date-unit [kw]
-  (case kw
-    :day DateUnit/DAY
-    :milli DateUnit/MILLISECOND))
 
 (defmethod col-type->field-name :date [[type-head date-unit]]
   (str (name type-head) "-" (name date-unit)))
@@ -506,18 +612,6 @@
   [:duration (time-unit->kw (.getUnit arrow-type))])
 
 ;;; interval
-
-(defn- interval-unit->kw [unit]
-  (util/case-enum unit
-    IntervalUnit/DAY_TIME :day-time
-    IntervalUnit/MONTH_DAY_NANO :month-day-nano
-    IntervalUnit/YEAR_MONTH :year-month))
-
-(defn- kw->interval-unit [kw]
-  (case kw
-    :day-time IntervalUnit/DAY_TIME
-    :month-day-nano IntervalUnit/MONTH_DAY_NANO
-    :year-month IntervalUnit/YEAR_MONTH))
 
 (defmethod col-type->field-name :interval [[type-head interval-unit]]
   (str (name type-head) "-" (name interval-unit)))

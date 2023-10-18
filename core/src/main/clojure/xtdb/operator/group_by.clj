@@ -544,7 +544,7 @@
 
       (build [_ al]
         (ArrayAggAggregateSpec. al from-name to-name to-type
-                                (vw/->vec-writer al (types/->field (name to-name) types/dense-union-type false) )
+                                (vw/->vec-writer al (types/->field (name to-name) #xt.arrow/type :union false) )
                                 nil 0 (ArrayList.))))))
 
 (defmethod ->aggregate-factory :array-agg-distinct [{:keys [from-name from-type] :as agg-opts}]

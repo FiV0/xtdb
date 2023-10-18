@@ -10,24 +10,24 @@
 
 (t/deftest adding-legs-to-dense-union
   (with-open [duv (DenseUnionVector/empty "my-duv" tu/*allocator*)]
-    (t/is (= (types/->field "my-duv" types/dense-union-type false
+    (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
                             (types/col-type->field 'i64 :i64))
 
              (-> (vw/->writer duv)
-                 (doto (.legWriter (.getType (types/col-type->field :i64))))
+                 (doto (.legWriter #xt.arrow/type :i64))
                  (.getField)))))
 
   (with-open [duv (DenseUnionVector/empty "my-duv" tu/*allocator*)]
     (let [duv-wtr (vw/->writer duv)
-          my-list-wtr (.legWriter duv-wtr types/list-type)
-          my-set-wtr (.legWriter duv-wtr types/set-type)]
+          my-list-wtr (.legWriter duv-wtr #xt.arrow/type :list)
+          my-set-wtr (.legWriter duv-wtr #xt.arrow/type :set)]
 
-      (t/is (= (types/->field "my-duv" types/dense-union-type false
-                              (types/->field "list" types/list-type false
-                                             (types/->field "$data$" types/dense-union-type false))
+      (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
+                              (types/->field "list" #xt.arrow/type :list false
+                                             (types/->field "$data$" #xt.arrow/type :union false))
 
-                              (types/->field "set" types/set-type false
-                                             (types/->field "$data$" types/dense-union-type false)))
+                              (types/->field "set" #xt.arrow/type :set false
+                                             (types/->field "$data$" #xt.arrow/type :union false)))
 
                (.getField duv-wtr))
 
@@ -39,42 +39,42 @@
       (doto (.listElementWriter my-set-wtr)
         (.legWriter (.getType (types/col-type->field :f64))))
 
-      (t/is (= (types/->field "my-duv" types/dense-union-type false
-                              (types/->field "list" types/list-type false
-                                             (types/->field "$data$" types/dense-union-type false
+      (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
+                              (types/->field "list" #xt.arrow/type :list false
+                                             (types/->field "$data$" #xt.arrow/type :union false
                                                             (types/col-type->field :i64)))
 
-                              (types/->field "set" types/set-type false
-                                             (types/->field "$data$" types/dense-union-type false
+                              (types/->field "set" #xt.arrow/type :set false
+                                             (types/->field "$data$" #xt.arrow/type :union false
                                                             (types/col-type->field :f64))))
                (.getField duv-wtr)))
 
       (doto (.listElementWriter my-list-wtr)
         (.legWriter (.getType (types/col-type->field :f64))))
 
-      (t/is (= (types/->field "my-duv" types/dense-union-type false
-                              (types/->field "list" types/list-type false
-                                             (types/->field "$data$" types/dense-union-type false
+      (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
+                              (types/->field "list" #xt.arrow/type :list false
+                                             (types/->field "$data$" #xt.arrow/type :union false
                                                             (types/col-type->field :i64)
                                                             (types/col-type->field :f64)))
 
-                              (types/->field "set" types/set-type false
-                                             (types/->field "$data$" types/dense-union-type false
+                              (types/->field "set" #xt.arrow/type :set false
+                                             (types/->field "$data$" #xt.arrow/type :union false
                                                             (types/col-type->field :f64))))
                (.getField duv-wtr)))))
 
   (with-open [duv (DenseUnionVector/empty "my-duv" tu/*allocator*)]
     (let [duv-wtr (vw/->writer duv)
-          my-struct-wtr (.legWriter duv-wtr types/struct-type)]
-      (t/is (= (types/->field "my-duv" types/dense-union-type false
-                              (types/->field "struct" types/struct-type false))
+          my-struct-wtr (.legWriter duv-wtr #xt.arrow/type :struct)]
+      (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
+                              (types/->field "struct" #xt.arrow/type :struct false))
 
                (.getField duv-wtr)))
 
       (let [a-wtr (.structKeyWriter my-struct-wtr "a")]
-        (t/is (= (types/->field "my-duv" types/dense-union-type false
-                                (types/->field "struct" types/struct-type false
-                                               (types/->field "a" types/dense-union-type false)))
+        (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
+                                (types/->field "struct" #xt.arrow/type :struct false
+                                               (types/->field "a" #xt.arrow/type :union false)))
 
                  (.getField duv-wtr))
 
@@ -82,9 +82,9 @@
 
         (.legWriter a-wtr (.getType Types$MinorType/BIGINT))
 
-        (t/is (= (types/->field "my-duv" types/dense-union-type false
-                                (types/->field "struct" types/struct-type false
-                                               (types/->field "a" types/dense-union-type false
+        (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
+                                (types/->field "struct" #xt.arrow/type :struct false
+                                               (types/->field "a" #xt.arrow/type :union false
                                                               (types/->field "i64" (.getType Types$MinorType/BIGINT) false))))
 
                  (.getField duv-wtr)))
@@ -92,12 +92,12 @@
         (-> (.structKeyWriter my-struct-wtr "b") (.legWriter (.getType Types$MinorType/FLOAT8)))
         (-> a-wtr (.legWriter (.getType Types$MinorType/VARCHAR)))
 
-        (t/is (= (types/->field "my-duv" types/dense-union-type false
-                                (types/->field "struct" types/struct-type false
-                                               (types/->field "a" types/dense-union-type false
+        (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
+                                (types/->field "struct" #xt.arrow/type :struct false
+                                               (types/->field "a" #xt.arrow/type :union false
                                                               (types/col-type->field :i64)
                                                               (types/col-type->field :utf8))
-                                               (types/->field "b" types/dense-union-type false
+                                               (types/->field "b" #xt.arrow/type :union false
                                                               (types/col-type->field :f64))))
 
                  (.getField duv-wtr)))))))

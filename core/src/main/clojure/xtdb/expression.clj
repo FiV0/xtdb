@@ -358,7 +358,7 @@
      (PeriodDuration. (.-period imdn#) (.-duration imdn#))))
 
 (defmethod codegen-expr :literal [{:keys [literal]} _]
-  (let [return-type (types/field->col-type  (vw/value->field literal))
+  (let [return-type (types/field->col-type (vw/value->field literal))
         literal-type (class literal)]
     {:return-type return-type
      :continue (fn [f]
