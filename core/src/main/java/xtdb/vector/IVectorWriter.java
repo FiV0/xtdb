@@ -2,6 +2,7 @@ package xtdb.vector;
 
 import clojure.lang.Keyword;
 import org.apache.arrow.vector.ValueVector;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 
 public interface IVectorWriter extends IValueWriter, AutoCloseable {
@@ -17,6 +18,7 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
 
     @Deprecated
     Object getColType();
+
     Field getField();
 
     /**
@@ -40,33 +42,22 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     @Deprecated
     IVectorWriter structKeyWriter(String key, Object colType);
 
-    /**
-     * will create
-     */
     @Override
-    IVectorWriter structKeyWriter(Field field);
+    IVectorWriter listElementWriter();
 
     @Override
     @Deprecated
     IVectorWriter writerForType(Object colType);
 
-    /**
-     * will not create a leg if it doesn't exist
-     */
-    IVectorWriter writerForLeg(Keyword leg);
+    @Override
+    IVectorWriter legWriter(Keyword leg);
+
+    @Override
+    IVectorWriter legWriter(ArrowType leg);
 
     @Override
     @Deprecated
     IVectorWriter writerForTypeId(byte typeId);
-
-    /**
-     * will create a leg if it doesn't exist
-     */
-    @Override
-    IVectorWriter writerForField(Field field);
-
-    @Override
-    IVectorWriter listElementWriter();
 
     void clear();
 

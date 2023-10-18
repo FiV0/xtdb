@@ -1,5 +1,7 @@
 package xtdb.vector;
 
+import clojure.lang.Keyword;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 
 import java.nio.ByteBuffer;
@@ -63,12 +65,11 @@ abstract class BoxWriter implements IValueWriter {
     }
 
     @Override
+    @Deprecated
     public IValueWriter structKeyWriter(String key, Object colType) {
         return box().structKeyWriter(key, colType);
     }
-    public IValueWriter structKeyWriter(Field field) {
-        throw new UnsupportedOperationException();
-    }
+
     @Override
     public void startStruct() {
         box().startStruct();
@@ -95,22 +96,30 @@ abstract class BoxWriter implements IValueWriter {
     }
 
     @Override
+    @Deprecated
     public IValueWriter writerForType(Object colType) {
         return box().writerForType(colType);
     }
 
     @Override
+    @Deprecated
     public byte registerNewType(Field field) {
         return box().registerNewType(field);
     }
 
     @Override
+    @Deprecated
     public IValueWriter writerForTypeId(byte typeId) {
         return box().writerForTypeId(typeId);
     }
 
     @Override
-    public IValueWriter writerForField(Field field) {
-        throw new UnsupportedOperationException();
+    public IValueWriter legWriter(ArrowType arrowType) {
+        return box().legWriter(arrowType);
+    }
+
+    @Override
+    public IValueWriter legWriter(Keyword leg) {
+        return box().legWriter(leg);
     }
 }

@@ -23,51 +23,59 @@
 (declare date-unit->kw)
 (declare interval-unit->kw)
 
-(defmulti ^String arrow-type->field-name (fn [arrow-type] arrow-type), :default ::default)
+(defprotocol ArrowTypeLeg
+  (^String arrow-type->leg [arrow-type]))
 
-(defmethod arrow-type->field-name ::default [^ArrowType arrow-type]
-  (cond
-    (instance? ArrowType$Decimal arrow-type) (name :decimal)
-    (instance? ArrowType$FixedSizeList arrow-type) (name :fixed-size-list)
+(extend-protocol ArrowTypeLeg
+  ArrowType$Null (arrow-type->leg [_] :null)
+  ArrowType$Bool (arrow-type->leg [_] :bool)
 
-    (instance? ArrowType$Timestamp arrow-type)
-    (let [^ArrowType$Timestamp arrow-type arrow-type
-          time-unit (time-unit->kw (.getUnit arrow-type))]
+  ArrowType$FloatingPoint
+  (arrow-type->leg [arrow-type]
+    (condp = (.getPrecision arrow-type)
+      FloatingPointPrecision/SINGLE :f32
+      FloatingPointPrecision/DOUBLE :f64))
+
+  ArrowType$Int
+  (arrow-type->leg [arrow-type]
+    (if (.getIsSigned arrow-type)
+      (case (.getBitWidth arrow-type)
+        8 :i8, 16 :i16, 32 :i32, 64 :i64)
+
+      (throw (UnsupportedOperationException.))))
+
+  ArrowType$Utf8 (arrow-type->leg [_] :utf8)
+  ArrowType$Binary (arrow-type->leg [_] :varbinary)
+
+  ArrowType$Decimal (arrow-type->leg [_] :decimal)
+  ArrowType$FixedSizeList (arrow-type->leg [_] :fixed-size-list)
+
+  ArrowType$Timestamp
+  (arrow-type->leg [arrow-type]
+    (let [time-unit (time-unit->kw (.getUnit arrow-type))]
       (if-let [tz (.getTimezone arrow-type)]
-        (str (name :timestamp-tz) "-" (name time-unit) "-" (-> (str/lower-case tz) (str/replace #"[/:]" "_")))
-        (str (name :timestamp-local) "-" (name time-unit))))
+        (keyword (str (name :timestamp-tz) "-" (name time-unit) "-" (-> (str/lower-case tz) (str/replace #"[/:]" "_"))))
+        (keyword (str (name :timestamp-local) "-" (name time-unit))))))
 
-    (instance? ArrowType$Date arrow-type) (str (name :date) "-" (name (date-unit->kw (.getUnit ^ArrowType$Date arrow-type))))
-    (instance? ArrowType$Time arrow-type) (str (name :time-local) "-" (name (time-unit->kw (.getUnit ^ArrowType$Time arrow-type))))
-    (instance? ArrowType$Duration arrow-type) (str (name :duation) "-" (name (time-unit->kw (.getUnit ^ArrowType$Duration arrow-type))))
-    (instance? ArrowType$Interval arrow-type) (str (name :interval) "-" (name (interval-unit->kw (.getUnit ^ArrowType$Interval arrow-type))))
-    :else (.toString arrow-type)))
+  ArrowType$Date (arrow-type->leg [arrow-type] (keyword (str (name :date) "-" (name (date-unit->kw (.getUnit arrow-type))))))
+  ArrowType$Time (arrow-type->leg [arrow-type] (keyword (str (name :time-local) "-" (name (time-unit->kw (.getUnit arrow-type))))))
+  ArrowType$Duration (arrow-type->leg [arrow-type] (keyword (str (name :duation) "-" (name (time-unit->kw (.getUnit arrow-type))))))
+  ArrowType$Interval (arrow-type->leg [arrow-type] (keyword (str (name :interval) "-" (name (interval-unit->kw (.getUnit arrow-type))))))
 
-(let [keyword->arrow-type
-      (update-vals {:null Types$MinorType/NULL, :bool Types$MinorType/BIT
-                    :f32 Types$MinorType/FLOAT4, :f64 Types$MinorType/FLOAT8
-                    :i8 Types$MinorType/TINYINT, :i16 Types$MinorType/SMALLINT, :i32 Types$MinorType/INT, :i64 Types$MinorType/BIGINT
-                    :utf8 Types$MinorType/VARCHAR, :varbinary Types$MinorType/VARBINARY}
-                   #(.getType ^Types$MinorType %))]
-  (doseq [[k type] keyword->arrow-type]
-    (defmethod arrow-type->field-name type [_arrow-type] (name k))))
+  ArrowType$Struct (arrow-type->leg [_] :struct)
+  ArrowType$List (arrow-type->leg [_] :list)
+  SetType (arrow-type->leg [_] :set)
 
-(defmethod arrow-type->field-name KeywordType/INSTANCE [_] (name :keyword))
-(defmethod arrow-type->field-name UuidType/INSTANCE [_] (name :uuid))
-(defmethod arrow-type->field-name UriType/INSTANCE [_] (name :uri))
-(defmethod arrow-type->field-name ClojureFormType/INSTANCE  [_] (name :clj-form))
-(defmethod arrow-type->field-name AbsentType/INSTANCE [_] (name :absent))
+  KeywordType (arrow-type->leg [_] :keyword)
+  UuidType (arrow-type->leg [_] :uuid)
+  UriType (arrow-type->leg [_] :uri)
+  ClojureFormType (arrow-type->leg [_] :clj-form)
+  AbsentType (arrow-type->leg [_] :absent))
 
-(def struct-type (.getType Types$MinorType/STRUCT))
-(def dense-union-type (ArrowType$Union. UnionMode/Dense nil))
-(def list-type (.getType Types$MinorType/LIST))
-
-(defmethod arrow-type->field-name struct-type [_arrow-type] (name :struct))
-(defmethod arrow-type->field-name dense-union-type [_arrow-type] (name :union))
-(defmethod arrow-type->field-name list-type [_arrow-type] (name :list))
-(defmethod arrow-type->field-name SetType/INSTANCE [_arrow-type] (name :set))
-
-(defn ->arrow-type ^ArrowType [^Field field] (.getType (.getFieldType field)))
+(def ^org.apache.arrow.vector.types.pojo.ArrowType struct-type (.getType Types$MinorType/STRUCT))
+(def ^org.apache.arrow.vector.types.pojo.ArrowType dense-union-type (ArrowType$Union. UnionMode/Dense nil))
+(def ^org.apache.arrow.vector.types.pojo.ArrowType list-type (.getType Types$MinorType/LIST))
+(def ^org.apache.arrow.vector.types.pojo.ArrowType set-type SetType/INSTANCE)
 
 (def ^:private ^Field absent-field (delay (col-type->field :absent)))
 
@@ -78,7 +86,7 @@
             (let [nullable? (.isNullable field)
                   acc (cond-> acc
                         nullable? (assoc :null nil))
-                  ^ArrowType arrow-type (->arrow-type field)]
+                  arrow-type (.getType field)]
               (condp = (.getTypeID arrow-type)
                 ArrowType$ArrowTypeID/Union (reduce merge-field* acc (.getChildren field))
                 ArrowType$ArrowTypeID/List (update acc :list merge-field* (first (.getChildren field)))
@@ -140,13 +148,13 @@
   (Field. field-name (FieldType. nullable arrow-type nil nil) children))
 
 (defn ->field-default-name [^ArrowType arrow-type nullable children]
-  (apply ->field (arrow-type->field-name arrow-type) arrow-type nullable children))
+  (apply ->field (arrow-type->leg arrow-type) arrow-type nullable children))
 
 (defn ->canonical-field [^Field field]
-  (->field-default-name (->arrow-type field) (.isNullable field) (.getChildren field)))
+  (->field-default-name (.getType field) (.isNullable field) (.getChildren field)))
 
 (defn field-with-name ^Field [^Field field name]
-  (apply ->field name (->arrow-type field) (.isNullable field) (.getChildren field)))
+  (apply ->field name (.getType field) (.isNullable field) (.getChildren field)))
 
 ;;;; col-types
 
@@ -293,7 +301,7 @@
 ;; HACK to test things more easily
 (defn col-type->field-default-name
   (^org.apache.arrow.vector.types.pojo.Field [col-type] (let [field (col-type->field col-type)]
-                                                          (col-type->field (.toString (->arrow-type field)) col-type))))
+                                                          (col-type->field (.toString (.getType field)) col-type))))
 
 (defn without-null [col-type]
   (let [without-null (-> (flatten-union-types col-type)

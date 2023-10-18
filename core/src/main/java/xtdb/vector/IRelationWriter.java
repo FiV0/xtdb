@@ -29,7 +29,7 @@ public interface IRelationWriter extends AutoCloseable, Iterable<Map.Entry<Strin
         }
     }
 
-    IVectorWriter writerForLeg (Keyword leg);
+    IVectorWriter writerForLeg(Keyword leg);
 
     @Deprecated
     IVectorWriter writerForName(String name);
