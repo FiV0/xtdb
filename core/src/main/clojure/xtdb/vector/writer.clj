@@ -402,7 +402,7 @@
 (defn populate-with-absents [^IVectorWriter w, ^long pos]
   (let [absents (- pos (.getPosition (.writerPosition w)))]
     (when (pos? absents)
-      (let [absent-writer (.legWriter w AbsentType/INSTANCE)]
+      (let [absent-writer (.legWriter w #xt.arrow/type :absent)]
         (dotimes [_ absents]
           (.writeNull absent-writer nil))))))
 
@@ -950,10 +950,11 @@
 (alter-meta! #'open-vec assoc :tag ValueVector)
 
 (defmethod open-vec :col-name [allocator col-name vs]
-  (throw (UnsupportedOperationException.))
-  #_
-  (util/with-close-on-catch [res (-> (apply types/merge-fields (map value->field vs))
-                                     (types/field-with-name (str col-name))
+  (util/with-close-on-catch [res (-> ^Field (apply types/->field (name col-name) #xt.arrow/type :union false
+                                                   (for [type (into #{} (map value->arrow-type) vs)]
+                                                     (types/->field (name (types/arrow-type->leg type))
+                                                                    type
+                                                                    (= type #xt.arrow/type :null))))
                                      (.createVector allocator))]
     (doto res (write-vec! vs))))
 
