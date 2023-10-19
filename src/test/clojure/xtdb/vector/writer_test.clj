@@ -278,18 +278,6 @@
                                 (.colWriter "my-i64" (FieldType/notNullable #xt.arrow/type :f64))
                                 (.getField))))))
 
-
-#_(deftest naming-not-honoured
-    (let [field (types/->field "my-list" #xt.arrow/type :list false
-                               (types/->field "my-nested-struct" #xt.arrow/type :struct false
-                                              (types/col-type->field "my-int" :i64)))
-          schema (Schema. [field])]
-      (with-open [root (VectorSchemaRoot/create schema tu/*allocator*)]
-        (prn field)
-        (prn (first (.getFields schema)))
-        (prn (.getField (first (.getFieldVectors root)))))))
-
-
 (deftest rel-writer-fixed-schema-testing
   (let [schema (Schema. [(types/->field "my-list" #xt.arrow/type :list false
                                         (types/->field "$data$" #xt.arrow/type :struct true

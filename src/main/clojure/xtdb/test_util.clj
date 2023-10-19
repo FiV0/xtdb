@@ -314,7 +314,8 @@
           branch-wtr (.legWriter nodes-wtr :branch)
           branch-el-wtr (.listElementWriter branch-wtr)
           data-wtr (.legWriter nodes-wtr :leaf)
-          data-page-idx-wtr (.structKeyWriter data-wtr "data-page-idx")]
+          data-page-idx-wtr (.structKeyWriter data-wtr "data-page-idx")
+          metadata-wtr (.structKeyWriter data-wtr "columns")]
       (letfn [(write-paths [paths]
                 (cond
                   (nil? paths) (.writeNull nil-wtr nil)
@@ -322,6 +323,8 @@
                   (number? paths) (do
                                     (.startStruct data-wtr)
                                     (.writeInt data-page-idx-wtr paths)
+                                    (.startList metadata-wtr)
+                                    (.endList metadata-wtr)
                                     (.endStruct data-wtr))
 
                   (vector? paths) (let [!page-idxs (IntStream/builder)]

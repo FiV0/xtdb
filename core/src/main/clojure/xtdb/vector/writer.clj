@@ -8,20 +8,18 @@
            (java.lang AutoCloseable)
            (java.math BigDecimal)
            java.net.URI
-           java.lang.reflect.Method
            (java.nio ByteBuffer CharBuffer)
            java.nio.charset.StandardCharsets
            (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime ZoneOffset ZonedDateTime)
            (java.util Date HashMap LinkedHashMap List Map Set UUID)
            (java.util.function Function)
            (org.apache.arrow.memory BufferAllocator)
-           (org.apache.arrow.vector BigIntVector BitVector DateDayVector DateMilliVector DecimalVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot FieldVector)
-           (org.apache.arrow.vector.complex AbstractStructVector DenseUnionVector ListVector StructVector)
-           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Map ArrowType$Null ArrowType$Struct ArrowType$Union Field FieldType)
+           (org.apache.arrow.vector BigIntVector BitVector DateDayVector DateMilliVector DecimalVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot)
+           (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
+           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Map ArrowType$Union Field FieldType)
            (xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth)
            xtdb.types.ClojureForm
-           (xtdb.vector IRelationWriter IRowCopier IVectorPosition IVectorReader IVectorWriter RelationReader)
-           (xtdb.vector.extensions SetType)))
+           (xtdb.vector IRelationWriter IRowCopier IVectorPosition IVectorReader IVectorWriter RelationReader)))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -68,6 +66,13 @@
             (.copyFromSafe dest-vec src-idx pos src-vec)
             pos))))))
 
+(defn- scalar-leg-writer [^IVectorWriter w, ^ArrowType arrow-type]
+  (let [field (.getField w)]
+    (if (or (and (= arrow-type #xt.arrow/type :null) (.isNullable field))
+            (= arrow-type (.getType field)))
+      w
+      (throw (IllegalArgumentException. (format "arrow-type mismatch: got <%s>, requested <%s>" (.getType field) arrow-type))))))
+
 (extend-protocol WriterFactory
   NullVector
   (->writer* [arrow-vec _notify!]
@@ -88,9 +93,8 @@
 
         (writerPosition [_] wp)
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
-        #_#_
-        (^IVectorWriter legWriter [this ^Keyword _leg] this)
-        (^IVectorWriter legWriter [this ^ArrowType _arrow-type] this))))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type)))))
 
   BitVector
   (->writer* [arrow-vec _notify!]
@@ -102,7 +106,9 @@
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
-        (writeBoolean [_ v] (.setSafe arrow-vec (.getPositionAndIncrement wp) (if v 1 0)))))))
+        (writeBoolean [_ v] (.setSafe arrow-vec (.getPositionAndIncrement wp) (if v 1 0)))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type))))))
 
 (defmacro def-writer-factory [clazz write-method]
   `(extend-protocol WriterFactory
@@ -118,9 +124,9 @@
           (~'writerPosition [_#] wp#)
 
           (~'writeNull [_# _#] (.setNull arrow-vec# (.getPositionAndIncrement wp#)))
+          (~write-method [_# v#] (.setSafe arrow-vec# (.getPositionAndIncrement wp#) v#))
 
-          (~write-method [_# v#]
-           (.setSafe arrow-vec# (.getPositionAndIncrement wp#) v#)))))))
+          (~(vary-meta 'legWriter assoc :tag 'IVectorWriter) [this# ^ArrowType arrow-type#] (scalar-leg-writer this# arrow-type#)))))))
 
 #_{:clj-kondo/ignore [:unresolved-symbol]}
 (do
@@ -149,7 +155,9 @@
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
-        (writeLong [_ days] (.setSafe arrow-vec (.getPositionAndIncrement wp) (* days 86400000)))))))
+        (writeLong [_ days] (.setSafe arrow-vec (.getPositionAndIncrement wp) (* days 86400000)))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type))))))
 
 (extend-protocol WriterFactory
   DecimalVector
@@ -164,7 +172,9 @@
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
         (writeObject [_  decimal]
           (let [new-decimal (.setScale ^BigDecimal decimal (.getScale arrow-vec))]
-            (.setSafe arrow-vec (.getPositionAndIncrement wp) new-decimal)))))))
+            (.setSafe arrow-vec (.getPositionAndIncrement wp) new-decimal)))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type))))))
 
 
 (extend-protocol ArrowWriteable
@@ -225,7 +235,9 @@
         (rowCopier [this src-vec] (scalar-copier this src-vec))
         (writerPosition [_] wp)
         (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
-        (writeLong [_ v] (.setSafe arrow-vec (.getPositionAndIncrement wp) v)))))
+        (writeLong [_ v] (.setSafe arrow-vec (.getPositionAndIncrement wp) v))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type)))))
 
   IntervalYearVector
   (->writer* [arrow-vec _notify!]
@@ -240,7 +252,9 @@
         (writeInt [_ total-months] (.setSafe arrow-vec (.getPositionAndIncrement wp) total-months))
         (writeObject [this v]
           (let [^PeriodDuration period-duration v]
-            (.writeInt this (.toTotalMonths (.getPeriod period-duration))))))))
+            (.writeInt this (.toTotalMonths (.getPeriod period-duration)))))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type)))))
 
   IntervalDayVector
   (->writer* [arrow-vec _notify!]
@@ -262,7 +276,9 @@
               (throw (err/illegal-arg "Period of PeriodDuration can not contain years or months!")))
             (.setSafe arrow-vec (.getPositionAndIncrement wp)
                       (.getDays (.getPeriod period-duration))
-                      (Math/addExact (Math/multiplyExact (long dsecs) (long 1000)) (long dmillis))))))))
+                      (Math/addExact (Math/multiplyExact (long dsecs) (long 1000)) (long dmillis)))))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type)))))
 
   IntervalMonthDayNanoVector
   (->writer* [arrow-vec _notify!]
@@ -283,7 +299,9 @@
             (.setSafe arrow-vec (.getPositionAndIncrement wp)
                       (.toTotalMonths period)
                       (.getDays period)
-                      (Math/addExact (Math/multiplyExact dsecs (long 1000000000)) (long dnanos)))))))))
+                      (Math/addExact (Math/multiplyExact dsecs (long 1000000000)) (long dnanos)))))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type))))))
 
 (extend-protocol ArrowWriteable
   Date
@@ -366,7 +384,9 @@
             (.position v pos)))
 
         (writeObject [this v]
-          (.writeBytes this (.encode (.newEncoder StandardCharsets/UTF_8) (CharBuffer/wrap ^CharSequence v)))))))
+          (.writeBytes this (.encode (.newEncoder StandardCharsets/UTF_8) (CharBuffer/wrap ^CharSequence v))))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type)))))
 
   VarBinaryVector
   (->writer* [arrow-vec _notify!]
@@ -385,7 +405,9 @@
                       v (.position v) (.remaining v))
             (.position v pos)))
 
-        (writeObject [this v] (.writeBytes this (ByteBuffer/wrap ^bytes v))))))
+        (writeObject [this v] (.writeBytes this (ByteBuffer/wrap ^bytes v)))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type)))))
 
   FixedSizeBinaryVector
   (->writer* [arrow-vec _notify!]
@@ -406,7 +428,9 @@
             (.setBytes (.getDataBuffer arrow-vec) (* byte-width idx) buf)
             (.position buf pos)))
 
-        (writeObject [this bytes] (.writeBytes this (ByteBuffer/wrap bytes)))))))
+        (writeObject [this bytes] (.writeBytes this (ByteBuffer/wrap bytes)))
+
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type))))))
 
 (extend-protocol ArrowWriteable
   (Class/forName "[B")
@@ -464,7 +488,9 @@
                 (instance? DenseUnionVector src-vec) (duv->vec-copier this-wtr src-vec)
                 :else (let [^ListVector src-vec src-vec
                             data-vec (.getDataVector src-vec)
-                            inner-copier (.rowCopier ^IVectorWriter @!el-writer data-vec)]
+                            inner-copier (.rowCopier (-> (.listElementWriter this-wtr)
+                                                         (.legWriter (.getType (.getField data-vec))))
+                                                     data-vec)]
                         (reify IRowCopier
                           (copyRow [_ src-idx]
                             (let [pos (.getPosition wp)]
@@ -501,7 +527,9 @@
             (endList [_]
               (let [pos (.getPositionAndIncrement wp)
                     end-pos (.getPosition (.writerPosition ^IVectorWriter @!el-writer))]
-                (.endValue arrow-vec pos (- end-pos (.getElementStartIndex arrow-vec pos))))))))))
+                (.endValue arrow-vec pos (- end-pos (.getElementStartIndex arrow-vec pos)))))
+
+            (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type)))))))
 
   StructVector
   (->writer* [arrow-vec notify!]
@@ -568,6 +596,7 @@
            (when-let [^IVectorWriter wrt (.get writers col-name)]
              (when-not (= (.getFieldType (.getField wrt)) field-type)
                (throw (IllegalStateException. "Field type mismatch"))))
+
            (.computeIfAbsent writers col-name
                              (reify Function
                                (apply [_ col-name]
@@ -584,12 +613,15 @@
               (doseq [^IVectorWriter w (.values writers)]
                 (populate-with-absents w (inc pos)))))
 
+          (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type))
+
           Iterable
           (iterator [_] (.iterator (.entrySet writers))))))))
 
 (extend-protocol ArrowWriteable
   List
   (value->arrow-type [_] #xt.arrow/type :list)
+  (value->col-type [v] [:list (apply types/merge-col-types (into #{} (map value->col-type) v))])
   (write-value! [v ^IVectorWriter writer]
     (let [el-writer (.listElementWriter writer)]
       (.startList writer)
@@ -599,6 +631,7 @@
 
   Set
   (value->arrow-type [_] #xt.arrow/type :set)
+  (value->col-type [v] [:set (apply types/merge-col-types (into #{} (map value->col-type) v))])
   (write-value! [v ^IVectorWriter writer] (write-value! (vec v) writer))
 
   Map
@@ -606,6 +639,15 @@
     (if (every? keyword? (keys v))
       #xt.arrow/type :struct
       (ArrowType$Map. false)))
+
+  (value->col-type [v]
+    (if (every? keyword? (keys v))
+      [:struct (->> v
+                    (into {} (map (juxt (comp symbol key)
+                                        (comp value->col-type val)))))]
+      [:map
+       (apply types/merge-col-types (into #{} (map (comp value->col-type key)) v))
+       (apply types/merge-col-types (into #{} (map (comp value->col-type val)) v))]))
 
   (write-value! [m ^IVectorWriter writer]
     (if (every? keyword? (keys m))
@@ -836,8 +878,7 @@
         (startList [_] (.startList inner))
         (endList [_] (.endList inner))
 
-        (^IVectorWriter legWriter [_ ^Keyword leg] (.legWriter inner leg))
-        (^IVectorWriter legWriter [_ ^ArrowType arrow-type] (.legWriter inner arrow-type))
+        (^IVectorWriter legWriter [this ^ArrowType arrow-type] (scalar-leg-writer this arrow-type))
         (writerForTypeId [_ type-id] (.writerForTypeId inner type-id))))))
 
 (extend-protocol ArrowWriteable
@@ -877,8 +918,6 @@
     v))
 
 (defn rows->col-types [rows]
-  (throw (UnsupportedOperationException.))
-  #_
   (->> (for [col-name (into #{} (mapcat keys) rows)]
          [(symbol col-name) (->> rows
                                  (into #{} (map (fn [row]
@@ -886,9 +925,8 @@
                                  (apply types/merge-col-types))])
        (into {})))
 
-(defn ->vec-writer
-  (^xtdb.vector.IVectorWriter [^BufferAllocator allocator, ^Field field]
-   (->writer (.createVector field allocator))))
+(defn ->vec-writer ^xtdb.vector.IVectorWriter [^BufferAllocator allocator, ^String col-name, ^FieldType field-type]
+   (->writer (.createNewSingleVector field-type col-name allocator nil)))
 
 (defn ->rel-copier ^xtdb.vector.IRowCopier [^IRelationWriter rel-wtr, ^RelationReader in-rel]
   (let [wp (.writerPosition rel-wtr)
@@ -933,7 +971,7 @@
         (.computeIfAbsent writers col-name
                           (reify Function
                             (apply [_ _col-name]
-                              (doto (->vec-writer allocator (Field. col-name field-type nil))
+                              (doto (->vec-writer allocator col-name field-type)
                                 (populate-with-absents (.getPosition wp)))))))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
@@ -1007,13 +1045,9 @@
 
 (alter-meta! #'open-vec assoc :tag ValueVector)
 
-(defmethod open-vec :col-name [allocator col-name vs]
-  (util/with-close-on-catch [res (-> ^Field (apply types/->field (name col-name) #xt.arrow/type :union false
-                                                   (for [type (into #{} (map value->arrow-type) vs)]
-                                                     (types/->field (name (types/arrow-type->leg type))
-                                                                    type
-                                                                    (= type #xt.arrow/type :null))))
-                                     (.createVector allocator))]
+(defmethod open-vec :col-name [^BufferAllocator allocator, ^String col-name, vs]
+  (util/with-close-on-catch [res (-> (FieldType/notNullable #xt.arrow/type :union)
+                                     (.createNewSingleVector (str col-name) allocator nil))]
     (doto res (write-vec! vs))))
 
 (defmethod open-vec :field [allocator ^Field field vs]

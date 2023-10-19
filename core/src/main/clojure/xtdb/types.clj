@@ -161,6 +161,11 @@
     :union (.getType Types$MinorType/DENSEUNION)
 
     (case (first col-type)
+      :struct ArrowType$Struct/INSTANCE
+      :list ArrowType$List/INSTANCE
+      :set SetType/INSTANCE
+      :union (.getType Types$MinorType/DENSEUNION)
+
       :date (let [[_ date-unit] col-type]
               (ArrowType$Date. (kw->date-unit date-unit)))
 

@@ -15,6 +15,7 @@ import org.apache.arrow.vector.types.pojo.Field;
 import xtdb.types.IntervalDayTime;
 import xtdb.types.IntervalMonthDayNano;
 import xtdb.types.IntervalYearMonth;
+import xtdb.util.NormalForm;
 import xtdb.vector.extensions.AbsentVector;
 import xtdb.vector.extensions.SetVector;
 
@@ -22,10 +23,13 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.*;
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static java.time.temporal.ChronoUnit.MICROS;
+import static java.util.function.Function.identity;
+import static xtdb.util.NormalForm.datalogForm;
 
 public class ValueVectorReader implements IVectorReader {
     private static final IFn MONO_READER = Clojure.var("xtdb.vector", "->mono-reader");
@@ -600,6 +604,7 @@ public class ValueVectorReader implements IVectorReader {
     public static IVectorReader structVector(StructVector v) {
         var childVecs = v.getChildrenFromFields();
         var rdrs = childVecs.stream().collect(Collectors.toMap(ValueVector::getName, ValueVectorReader::from));
+        var ks = rdrs.keySet().stream().collect(Collectors.toMap(identity(), name -> datalogForm(Keyword.intern(name))));
 
         return new ValueVectorReader(v) {
             @Override
@@ -618,7 +623,7 @@ public class ValueVectorReader implements IVectorReader {
 
                 rdrs.forEach((k, v) -> {
                     Object val = v.getObject(idx);
-                    if (!ABSENT_KEYWORD.equals(val)) res.put(Keyword.intern(k), val);
+                    if (!ABSENT_KEYWORD.equals(val)) res.put(ks.get(k), val);
                 });
 
                 return PersistentArrayMap.create(res);
