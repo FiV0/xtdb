@@ -39,6 +39,7 @@
            (xtdb.operator.scan IScanEmitter)
            xtdb.types.ClojureForm
            xtdb.util.RowCounter
+           (org.apache.arrow.vector.types.pojo FieldType)
            (xtdb.vector IRowCopier IVectorReader RelationReader)
            (xtdb.watermark IWatermark IWatermarkSource)))
 
@@ -419,24 +420,19 @@
     (.logPut live-table (trie/->iid tx-id) system-time-µs Long/MAX_VALUE
              (fn write-doc! []
                (.startStruct doc-writer)
-               (doto (-> (.structKeyWriter doc-writer "xt$id")
-                         (.legWriter #xt.arrow/type :i64))
+               (doto (.structKeyWriter doc-writer "xt$id" (FieldType/notNullable #xt.arrow/type :i64))
                  (.writeLong tx-id))
 
-               (doto (-> (.structKeyWriter doc-writer "xt$tx_time")
-                         (.legWriter (types/->arrow-type types/temporal-col-type)))
+               (doto (.structKeyWriter doc-writer "xt$tx_time" (FieldType/notNullable (types/->arrow-type types/temporal-col-type)))
                  (.writeLong system-time-µs))
 
-               (doto (-> (.structKeyWriter doc-writer "xt$committed?")
-                         (.legWriter #xt.arrow/type :bool))
+               (doto (.structKeyWriter doc-writer "xt$committed?" (FieldType/notNullable  #xt.arrow/type :bool))
                  (.writeBoolean (nil? t)))
 
-               (let [e-wtr (.structKeyWriter doc-writer "xt$error")]
+               (let [e-wtr (.structKeyWriter doc-writer "xt$error" (FieldType/nullable #xt.arrow/type :clj-form))]
                  (if (or (nil? t) (= t abort-exn))
-                   (doto (.legWriter e-wtr #xt.arrow/type :null)
-                     (.writeNull nil))
-                   (doto (.legWriter e-wtr #xt.arrow/type :clj-form)
-                     (.writeObject (pr-str t)))))
+                   (.writeNull e-wtr nil)
+                   (.writeObject e-wtr (pr-str t))))
                (.endStruct doc-writer)))
 
     (.addRows row-counter 1)))

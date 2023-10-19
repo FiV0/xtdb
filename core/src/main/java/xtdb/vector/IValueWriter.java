@@ -69,4 +69,9 @@ public interface IValueWriter {
     IValueWriter legWriter(ArrowType arrowType);
 
     IValueWriter legWriter(Keyword leg);
+
+    IValueWriter legWriter(Keyword leg, FieldType fieldType);
+
+
+
 }

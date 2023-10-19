@@ -133,4 +133,8 @@ abstract class BoxWriter implements IValueWriter {
     public IValueWriter legWriter(Keyword leg) {
         return box().legWriter(leg);
     }
+    @Override
+    public IValueWriter legWriter(Keyword leg, FieldType fieldType) {
+        return box().legWriter(leg, fieldType);
+    }
 }

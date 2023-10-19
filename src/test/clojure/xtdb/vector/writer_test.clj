@@ -26,14 +26,14 @@
 
       (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
                               (types/->field "list" #xt.arrow/type :list false
-                                             (types/->field "$data$" #xt.arrow/type :union false))
+                                             (types/->field "$data$" #xt.arrow/type :null true))
 
                               (types/->field "set" #xt.arrow/type :set false
-                                             (types/->field "$data$" #xt.arrow/type :union false)))
+                                             (types/->field "$data$" #xt.arrow/type :null true)))
 
                (.getField duv-wtr))
 
-            "legWriter pessimistically adds lists/sets as unions")
+            "legWriter creates lists/sets with uninitialized data vectors")
 
       (doto (.listElementWriter my-list-wtr)
         (.legWriter (.getType (types/col-type->field :i64))))
@@ -277,6 +277,18 @@
                             (-> rel-wtr
                                 (.colWriter "my-i64" (FieldType/notNullable #xt.arrow/type :f64))
                                 (.getField))))))
+
+
+#_(deftest naming-not-honoured
+    (let [field (types/->field "my-list" #xt.arrow/type :list false
+                               (types/->field "my-nested-struct" #xt.arrow/type :struct false
+                                              (types/col-type->field "my-int" :i64)))
+          schema (Schema. [field])]
+      (with-open [root (VectorSchemaRoot/create schema tu/*allocator*)]
+        (prn field)
+        (prn (first (.getFields schema)))
+        (prn (.getField (first (.getFieldVectors root)))))))
+
 
 (deftest rel-writer-fixed-schema-testing
   (let [schema (Schema. [(types/->field "my-list" #xt.arrow/type :list false

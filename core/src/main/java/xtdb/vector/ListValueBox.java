@@ -272,6 +272,11 @@ class ListValueBox implements IValueWriter, IMonoVectorReader, IPolyVectorReader
     }
 
     @Override
+    public IValueWriter legWriter(Keyword leg, FieldType fieldType) {
+        return writeBox.legWriter(leg, fieldType);
+    }
+
+    @Override
     @Deprecated
     public IValueWriter writerForType(Object colType) {
         return writeBox.writerForType(colType);

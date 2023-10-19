@@ -18,7 +18,7 @@
            (java.util.stream IntStream)
            (org.apache.arrow.memory ArrowBuf)
            (org.apache.arrow.vector FieldVector)
-           (org.apache.arrow.vector.types.pojo ArrowType$Union)
+           (org.apache.arrow.vector.types.pojo ArrowType$Union FieldType)
            xtdb.IBufferPool
            (xtdb.vector IVectorReader IVectorWriter)))
 
@@ -94,7 +94,7 @@
   :hierarchy #'types/col-type-hierarchy)
 
 (defn- ->bool-type-handler [^IVectorWriter types-wtr, col-type]
-  (let [bit-wtr (.structKeyWriter types-wtr (types/col-type->field col-type [:union #{:null :bool}]))]
+  (let [bit-wtr (.structKeyWriter types-wtr (types/col-type->field-name col-type) (FieldType/nullable #xt.arrow/type :bool))]
     (reify NestedMetadataWriter
       (appendNestedMetadata [_ _content-col]
         (reify ContentMetadataWriter
@@ -105,17 +105,23 @@
   ;; we get vectors out here because this code was largely written pre writers.
   (let [types-wp (.writerPosition types-wtr)
 
-        struct-wtr (.structKeyWriter types-wtr
-                                     (types/col-type->field col-type
-                                                            [:union #{:null
-                                                                      [:struct {'min [:union #{:null col-type}]
-                                                                                'max [:union #{:null col-type}]}]}]))
+        struct-wtr (.structKeyWriter types-wtr (types/col-type->field-name col-type) (FieldType/nullable #xt.arrow/type :struct)
+                                     #_(types/col-type->field (types/col-type->field-name col-type)
+                                                              [:union #{:null
+                                                                        [:struct {'min [:union #{:null col-type}]
+                                                                                  'max [:union #{:null col-type}]}]}]))
 
-        min-wtr (.structKeyWriter struct-wtr "min")
+        #_(.getType (.getFieldType (types/col-type->field "foo"
+                                                          [:union #{:null
+                                                                    [:struct {'min [:union #{:null :i64}]
+                                                                              'max [:union #{:null :i64}]}]}])))
+
+
+        min-wtr (.structKeyWriter struct-wtr "min" (FieldType/nullable (types/->arrow-type col-type)))
         ^FieldVector min-vec (.getVector min-wtr)
         min-wp (.writerPosition min-wtr)
 
-        max-wtr (.structKeyWriter struct-wtr "max")
+        max-wtr (.structKeyWriter struct-wtr "max" (FieldType/nullable (types/->arrow-type col-type)))
         ^FieldVector max-vec (.getVector max-wtr)
         max-wp (.writerPosition max-wtr)]
 
@@ -160,7 +166,9 @@
 
 (defmethod type->metadata-writer :list [write-col-meta! ^IVectorWriter types-wtr col-type]
   (let [types-wp (.writerPosition types-wtr)
-        list-type-wtr (.structKeyWriter types-wtr (types/col-type->field-name col-type) [:union #{:null :i32}])]
+        list-type-wtr (.structKeyWriter types-wtr (types/col-type->field-name col-type)
+                                        (FieldType/nullable #xt.arrow/type :i32)
+                                        #_(types/col-type->field  [:union #{:null :i32}]))]
     (reify NestedMetadataWriter
       (appendNestedMetadata [_ content-col]
         (write-col-meta! (.listElementReader ^IVectorReader content-col))
@@ -173,9 +181,11 @@
 (defmethod type->metadata-writer :struct [write-col-meta! ^IVectorWriter types-wtr, col-type]
   (let [types-wp (.writerPosition types-wtr)
         struct-type-wtr (.structKeyWriter types-wtr
-                                          (types/col-type->field (str (types/col-type->field-name col-type) "-" (count (seq types-wtr)))
-                                                                 [:union #{:null [:list [:union #{:null :i32}]]}]))
-        struct-type-el-wtr (.listElementWriter struct-type-wtr)]
+                                          (str (types/col-type->field-name col-type) "-" (count (seq types-wtr)))
+                                          (FieldType/nullable #xt.arrow/type :list)
+                                          #_(types/col-type->field
+                                             [:union #{:null [:list [:union #{:null :i32}]]}]))
+        struct-type-el-wtr (.listElementWriter struct-type-wtr (FieldType/notNullable :i32))]
     (reify NestedMetadataWriter
       (appendNestedMetadata [_ content-col]
         (let [struct-keys (.structKeys content-col)

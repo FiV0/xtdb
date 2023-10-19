@@ -8,6 +8,7 @@
            (java.lang AutoCloseable)
            (java.math BigDecimal)
            java.net.URI
+           java.lang.reflect.Method
            (java.nio ByteBuffer CharBuffer)
            java.nio.charset.StandardCharsets
            (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime ZoneOffset ZonedDateTime)
@@ -426,7 +427,10 @@
 (defn populate-with-absents [^IVectorWriter w, ^long pos]
   (let [absents (- pos (.getPosition (.writerPosition w)))]
     (when (pos? absents)
-      (let [absent-writer (.legWriter w #xt.arrow/type :absent)]
+      ;; HACK
+      (let [absent-writer (cond-> w
+                            (not (.isNullable (.getField w)))
+                            (.legWriter #xt.arrow/type :absent))]
         (dotimes [_ absents]
           (.writeNull absent-writer nil))))))
 
@@ -435,7 +439,7 @@
   (->writer* [arrow-vec notify!]
     (let [col-name (.getName arrow-vec)
           field (.getField arrow-vec)
-          nullable? (.isNullable (.getField arrow-vec))
+          nullable? (.isNullable field)
           wp (IVectorPosition/build (.getValueCount arrow-vec))
           !field (atom field)]
 
@@ -643,7 +647,7 @@
     (writeBytes [_ v] (write-value!) (.writeBytes w v))
     (writeObject [_ v] (write-value!) (.writeObject w v))
 
-    (^IVectorWriter structKeyWriter [_ ^String k] (.structKeyWriter w k))
+    ( structKeyWriter [_ k] (.structKeyWriter w k))
     (startStruct [_] (.startStruct w))
     (endStruct [_] (write-value!) (.endStruct w))
 
@@ -651,6 +655,8 @@
     (startList [_] (.startList w))
     (endList [_] (write-value!) (.endList w))
 
+    (^IVectorWriter legWriter [_ ^Keyword leg] (.legWriter w leg))
+    (^IVectorWriter legWriter [_ ^ArrowType arrow-type] (.legWriter w arrow-type))
     (writerForTypeId [_ type-id] (.writerForTypeId w type-id))))
 
 (defn- duv->duv-copier ^xtdb.vector.IRowCopier [^IVectorWriter dest-col, ^DenseUnionVector src-vec]
@@ -664,9 +670,10 @@
     (dotimes [n child-count]
       (let [src-type-id (or (when type-ids (aget type-ids n))
                             n)
-            ^ValueVector child-vec (.getVectorByType src-vec src-type-id)]
+            child-vec (.getVectorByType src-vec src-type-id)
+            child-field (.getField child-vec)]
         (aset copier-mapping src-type-id
-              (.rowCopier (.legWriter dest-col (.getType (.getField child-vec)))
+              (.rowCopier (.legWriter dest-col (keyword (.getName child-field)) (.getFieldType child-field))
                           child-vec))))
 
     (reify IRowCopier
@@ -725,23 +732,11 @@
                                                           (.setOffset duv pos (.getPosition child-wp))))))]
                   child-wtr))
 
-              (->new-child-writer [leg ^ArrowType arrow-type]
+              (->new-child-writer [leg ^FieldType field-type]
                 (let [field-name (name leg)
-                      field (condp = arrow-type
-                              #xt.arrow/type :list
-                              (types/->field field-name #xt.arrow/type :list false
-                                             (types/->field "$data$" #xt.arrow/type :union false))
-
-                              SetType/INSTANCE
-                              (types/->field field-name SetType/INSTANCE false
-                                             (types/->field "$data$" #xt.arrow/type :union false))
-
-                              #xt.arrow/type :struct (types/->field field-name ArrowType$Struct/INSTANCE false)
-
-                              (types/->field field-name arrow-type (= arrow-type ArrowType$Null/INSTANCE)))
-
+                      field (Field. field-name field-type [])
                       type-id (.registerNewTypeId duv field)
-                      new-vec (.createVector field (.getAllocator duv))]
+                      new-vec (.createNewSingleVector field-type field-name (.getAllocator duv) nil)]
                   (.addVector duv type-id new-vec)
                   (->child-writer type-id)))]
 
@@ -770,19 +765,32 @@
            (or (.get writers-by-leg leg)
                (throw (NullPointerException. (pr-str {:legs (set (keys writers-by-leg))
                                                       :leg leg})))))
+          (legWriter [_ leg field-type]
+            (let [new-field? (not (.containsKey writers-by-leg leg))
+                  ^IVectorWriter w (.computeIfAbsent writers-by-leg leg
+                                                     (reify Function
+                                                       (apply [_ leg]
+                                                         (->new-child-writer leg field-type))))]
 
-          (^IVectorWriter legWriter [_ ^ArrowType leg-type]
-           (let [leg (types/arrow-type->leg leg-type)
-                 new-field? (not (.containsKey writers-by-leg leg))
-                 ^IVectorWriter w (.computeIfAbsent writers-by-leg leg
-                                                    (reify Function
-                                                      (apply [_ leg]
-                                                        (->new-child-writer leg leg-type))))]
+              (when new-field?
+                (notify! (reset! !field (->field))))
 
-             (when new-field?
-               (notify! (reset! !field (->field))))
+              w))
 
-             w)))))))
+
+          (^IVectorWriter legWriter [this ^ArrowType leg-type]
+           (.legWriter this (types/arrow-type->leg leg-type) (FieldType/notNullable leg-type))
+           #_(let [leg (types/arrow-type->leg leg-type)
+                   new-field? (not (.containsKey writers-by-leg leg))
+                   ^IVectorWriter w (.computeIfAbsent writers-by-leg leg
+                                                      (reify Function
+                                                        (apply [_ leg]
+                                                          (->new-child-writer leg leg-type))))]
+
+               (when new-field?
+                 (notify! (reset! !field (->field))))
+
+               w)))))))
 
 (extend-protocol WriterFactory
   ExtensionTypeVector
@@ -820,7 +828,7 @@
         (writeBytes [_ v] (.writeBytes inner v))
         (writeObject [_ v] (.writeObject inner v))
 
-        (^IVectorWriter structKeyWriter [_ ^String k] (.structKeyWriter inner k))
+        (structKeyWriter [_ k] (.structKeyWriter inner k))
         (startStruct [_] (.startStruct inner))
         (endStruct [_] (.endStruct inner))
 
@@ -828,8 +836,8 @@
         (startList [_] (.startList inner))
         (endList [_] (.endList inner))
 
-        #_
-        (writerForField [_ field] (.writerForField inner field))
+        (^IVectorWriter legWriter [_ ^Keyword leg] (.legWriter inner leg))
+        (^IVectorWriter legWriter [_ ^ArrowType arrow-type] (.legWriter inner arrow-type))
         (writerForTypeId [_ type-id] (.writerForTypeId inner type-id))))))
 
 (extend-protocol ArrowWriteable
@@ -913,8 +921,10 @@
           (dotimes [i (alength arr)]
             (populate-with-absents (aget arr i) (inc pos)))))
 
+      ;; TODO get rid of or
       (^IVectorWriter colWriter [this ^String col-name]
-       (.colWriter this col-name (FieldType/notNullable #xt.arrow/type :union)))
+       (or (.get writers col-name)
+           (.colWriter this col-name (FieldType/notNullable #xt.arrow/type :union))))
 
       (colWriter [_  col-name field-type]
         (when-let [^IVectorWriter wrt (.get writers col-name)]

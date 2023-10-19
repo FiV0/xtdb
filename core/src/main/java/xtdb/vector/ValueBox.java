@@ -201,6 +201,16 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
     }
 
     @Override
+    public IValueWriter legWriter(Keyword leg, FieldType fieldType) {
+        return new BoxWriter() {
+            @Override
+            IValueWriter box() {
+                throw new UnsupportedOperationException();
+            }
+        };
+    }
+
+    @Override
     @Deprecated
     public IValueWriter writerForType(Object colType) {
         throw new UnsupportedOperationException();

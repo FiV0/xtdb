@@ -48,7 +48,9 @@
                 :let [col-kw (keyword col-name)
                       out-vec (-> (types/col-type->field col-name col-type)
                                   (.createVector allocator))
-                      out-writer (vw/->writer out-vec)]]
+                      out-writer (vw/->writer out-vec)
+                      ;; HACK for now
+                      union? (= #xt.arrow/type :union (.getType (.getField out-writer)))]]
 
           (.setInitialCapacity out-vec row-count)
           (.allocateNew out-vec)
@@ -57,7 +59,8 @@
           (dotimes [idx row-count]
             (let [row (nth rows idx)
                   v (-> (get row col-kw) (->v opts))]
-              (vw/write-value! v (.legWriter out-writer (vw/value->arrow-type v)))))
+              (vw/write-value! v (cond-> out-writer
+                                   union? (.legWriter (vw/value->arrow-type v))))))
 
           (.setValueCount out-vec row-count))
 

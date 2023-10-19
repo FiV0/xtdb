@@ -63,6 +63,9 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     IVectorWriter legWriter(ArrowType leg);
 
     @Override
+    IVectorWriter legWriter(Keyword leg, FieldType fieldType);
+
+    @Override
     @Deprecated
     IVectorWriter writerForTypeId(byte typeId);
 
