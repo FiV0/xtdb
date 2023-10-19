@@ -3,6 +3,7 @@ package xtdb.vector;
 import clojure.lang.Keyword;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 
 import java.nio.ByteBuffer;
 
@@ -42,7 +43,7 @@ public interface IValueWriter {
     @Deprecated
     IValueWriter structKeyWriter(String key, Object colType);
 
-    IValueWriter structKeyWriter(Field field);
+    IValueWriter structKeyWriter(String key, FieldType fieldType);
 
     void startStruct();
 

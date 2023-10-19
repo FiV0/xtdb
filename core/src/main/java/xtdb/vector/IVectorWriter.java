@@ -4,6 +4,7 @@ import clojure.lang.Keyword;
 import org.apache.arrow.vector.ValueVector;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 
 public interface IVectorWriter extends IValueWriter, AutoCloseable {
 
@@ -43,7 +44,7 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     IVectorWriter structKeyWriter(String key, Object colType);
 
     @Override
-    IVectorWriter structKeyWriter(Field field);
+    IVectorWriter structKeyWriter(String key, FieldType fieldType);
 
     @Override
     IVectorWriter listElementWriter();

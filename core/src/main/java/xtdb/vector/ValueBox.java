@@ -3,6 +3,7 @@ package xtdb.vector;
 import clojure.lang.Keyword;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 
 import java.nio.ByteBuffer;
 
@@ -132,11 +133,11 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
     }
 
     @Override
-    public IValueWriter structKeyWriter(Field field) {
+    public IValueWriter structKeyWriter(String key, FieldType fieldType) {
         return new BoxWriter() {
             @Override
             IValueWriter box() {
-                return ((StructValueBox) obj).fieldWriter(field.getName());
+                return ((StructValueBox) obj).fieldWriter(key);
             }
         };
     }
