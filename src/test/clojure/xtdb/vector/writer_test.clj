@@ -1,14 +1,15 @@
 (ns xtdb.vector.writer-test
-  (:require [clojure.test :as t]
+  (:require [clojure.test :as t :refer [deftest]]
             [xtdb.test-util :as tu]
             [xtdb.vector.writer :as vw]
             [xtdb.types :as types])
-  (:import [org.apache.arrow.vector.complex DenseUnionVector]
+  (:import [org.apache.arrow.vector.complex DenseUnionVector StructVector ListVector]
+           (org.apache.arrow.vector.types.pojo FieldType)
            (org.apache.arrow.vector.types Types$MinorType)))
 
 (t/use-fixtures :each tu/with-allocator)
 
-(t/deftest adding-legs-to-dense-union
+(deftest adding-legs-to-dense-union
   (with-open [duv (DenseUnionVector/empty "my-duv" tu/*allocator*)]
     (t/is (= (types/->field "my-duv" #xt.arrow/type :union false
                             (types/col-type->field 'i64 :i64))
@@ -101,3 +102,76 @@
                                                               (types/col-type->field :f64))))
 
                  (.getField duv-wtr)))))))
+
+(deftest list-writer-data-vec-transition
+  (with-open [list-vec (ListVector/empty "my-list" tu/*allocator*)]
+    (t/testing "null vector initially"
+      (let [list-wrt (vw/->writer list-vec)]
+
+        (t/is (= (types/->field "my-list" #xt.arrow/type :list true
+                                (types/col-type->field "$data$" :null))
+                 (.getField list-wrt)))
+
+        (t/is (= (types/->field "my-list" #xt.arrow/type :list true
+                                (types/->field "$data$" #xt.arrow/type :union false))
+                 (-> list-wrt
+                     (doto (.listElementWriter))
+                     (.getField)))
+              "call listElementWriter initializes it with a dense union")
+        (t/is (thrown-with-msg? RuntimeException #"Inner vector type mismatch"
+                                (-> list-wrt
+                                    (doto (.listElementWriter (FieldType/notNullable #xt.arrow/type :i64)))
+                                    (.getField)))
+              "can't now ask for a :i64"))))
+
+
+  (with-open [list-vec (ListVector/empty "my-list" tu/*allocator*)]
+
+    (let [list-wrt (vw/->writer list-vec)]
+
+      (t/is (= (types/->field "my-list" #xt.arrow/type :list true
+                              (types/->field "$data$" #xt.arrow/type :i64 false))
+               (-> list-wrt
+                   (doto (.listElementWriter (FieldType/notNullable #xt.arrow/type :i64)))
+                   (doto (.listElementWriter (FieldType/notNullable #xt.arrow/type :i64)))
+                   (.getField)))
+            "explicit monomorphic :i64 requested")
+
+      (t/is (= (types/->field "$data$" #xt.arrow/type :i64 false)
+               (-> list-wrt
+                   (.listElementWriter)
+                   (.getField)))
+            "nested field correct")
+
+      (t/is (thrown-with-msg? RuntimeException #"Inner vector type mismatch"
+                              (-> list-wrt
+                                  (doto (.listElementWriter (FieldType/notNullable #xt.arrow/type :f64)))
+                                  (.getField)))
+            "can't now ask for a :f64")))
+
+  (with-open [list-vec (.createVector (types/col-type->field "my-list" [:list :i64]) tu/*allocator*)]
+    (t/testing "already initialized arrow vector"
+      (let [list-wrt (vw/->writer list-vec)]
+
+        (t/is (= (types/->field "my-list" #xt.arrow/type :list false
+                                (types/->field "$data$" #xt.arrow/type :i64 false))
+                 (-> list-wrt
+                     (.getField))))
+
+        (t/is (= (types/->field "$data$" #xt.arrow/type :i64 false)
+                 (-> list-wrt
+                     (.listElementWriter)
+                     (.getField)))
+              "call listElementWriter honours the underlying vector")
+
+        (t/is (= (types/->field "$data$" #xt.arrow/type :i64 false)
+                 (-> list-wrt
+                     (.listElementWriter (FieldType/notNullable #xt.arrow/type :i64))
+                     (.getField)))
+              "can ask for :i64")
+
+        (t/is (thrown-with-msg? RuntimeException #"Inner vector type mismatch"
+                                (-> list-wrt
+                                    (doto (.listElementWriter (FieldType/notNullable #xt.arrow/type :f64)))
+                                    (.getField)))
+              "can't ask for :f64")))))

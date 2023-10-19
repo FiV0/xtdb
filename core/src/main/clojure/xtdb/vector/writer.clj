@@ -14,8 +14,8 @@
            (java.util Date HashMap LinkedHashMap List Map Set UUID)
            (java.util.function Function)
            (org.apache.arrow.memory BufferAllocator)
-           (org.apache.arrow.vector BigIntVector BitVector DateDayVector DateMilliVector DecimalVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot)
-           (org.apache.arrow.vector.complex DenseUnionVector ListVector StructVector)
+           (org.apache.arrow.vector BigIntVector BitVector DateDayVector DateMilliVector DecimalVector DurationVector ExtensionTypeVector FixedSizeBinaryVector Float4Vector Float8Vector IntVector IntervalDayVector IntervalMonthDayNanoVector IntervalYearVector NullVector PeriodDuration SmallIntVector TimeMicroVector TimeMilliVector TimeNanoVector TimeSecVector TimeStampVector TinyIntVector ValueVector VarBinaryVector VarCharVector VectorSchemaRoot FieldVector)
+           (org.apache.arrow.vector.complex AbstractStructVector DenseUnionVector ListVector StructVector)
            (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Map ArrowType$Null ArrowType$Struct ArrowType$Union Field FieldType)
            (xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth)
            xtdb.types.ClojureForm
@@ -434,52 +434,70 @@
   ListVector
   (->writer* [arrow-vec notify!]
     (let [col-name (.getName arrow-vec)
+          field (.getField arrow-vec)
+          nullable? (.isNullable (.getField arrow-vec))
           wp (IVectorPosition/build (.getValueCount arrow-vec))
-          data-vec (.getDataVector arrow-vec)
-          !field (atom nil)
-          el-writer (->writer* data-vec (fn notify-list-writer! [el-field]
-                                          (notify! (reset! !field (types/->field col-name #xt.arrow/type :list false el-field)))))
-          el-wp (.writerPosition el-writer)]
+          !field (atom field)]
 
-      (reset! !field (types/->field col-name #xt.arrow/type :list false (.getField el-writer)))
+      (letfn [(set-field! [el-field]
+                (reset! !field (types/->field col-name #xt.arrow/type :list nullable? el-field)))
 
-      (reify IVectorWriter
-        (getVector [_] arrow-vec)
-        (getField [_] @!field)
-        (clear [_] (.clear arrow-vec) (.setPosition wp 0) (.clear el-writer))
+              (->el-writer [data-vec]
+                (->writer* data-vec
+                           (fn notify-list-writer! [el-field]
+                             (notify! (set-field! el-field)))))]
 
-        (rowCopier [this-wtr src-vec]
-          (cond
-            (instance? NullVector src-vec) (null->vec-copier this-wtr)
-            (instance? DenseUnionVector src-vec) (duv->vec-copier this-wtr src-vec)
-            :else (let [^ListVector src-vec src-vec
-                        data-vec (.getDataVector src-vec)
-                        inner-copier (.rowCopier el-writer data-vec)]
-                    (reify IRowCopier
-                      (copyRow [_ src-idx]
-                        (let [pos (.getPosition wp)]
-                          (if (.isNull src-vec src-idx)
-                            (.writeNull this-wtr nil)
-                            (do
-                              (.startList this-wtr)
-                              (let [start-idx (.getElementStartIndex src-vec src-idx)
-                                    end-idx (.getElementEndIndex src-vec src-idx)]
-                                (dotimes [n (- end-idx start-idx)]
-                                  (.copyRow inner-copier (+ start-idx n))))
-                              (.endList this-wtr)))
-                          pos))))))
+        (let [!el-writer (atom (->el-writer (.getDataVector arrow-vec)))]
 
-        (writerPosition [_] wp)
-        (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
+          (reify IVectorWriter
+            (getVector [_] arrow-vec)
+            (getField [_] @!field)
+            (clear [_] (.clear arrow-vec) (.setPosition wp 0) (.clear ^IVectorWriter @!el-writer))
 
-        (listElementWriter [_] el-writer)
-        (startList [_]
-          (.startNewValue arrow-vec (.getPosition wp)))
+            (rowCopier [this-wtr src-vec]
+              (cond
+                (instance? NullVector src-vec) (null->vec-copier this-wtr)
+                (instance? DenseUnionVector src-vec) (duv->vec-copier this-wtr src-vec)
+                :else (let [^ListVector src-vec src-vec
+                            data-vec (.getDataVector src-vec)
+                            inner-copier (.rowCopier ^IVectorWriter @!el-writer data-vec)]
+                        (reify IRowCopier
+                          (copyRow [_ src-idx]
+                            (let [pos (.getPosition wp)]
+                              (if (.isNull src-vec src-idx)
+                                (.writeNull this-wtr nil)
+                                (do
+                                  (.startList this-wtr)
+                                  (let [start-idx (.getElementStartIndex src-vec src-idx)
+                                        end-idx (.getElementEndIndex src-vec src-idx)]
+                                    (dotimes [n (- end-idx start-idx)]
+                                      (.copyRow inner-copier (+ start-idx n))))
+                                  (.endList this-wtr)))
+                              pos))))))
 
-        (endList [_]
-          (let [pos (.getPositionAndIncrement wp)
-                end-pos (.getPosition el-wp)]
-            (.endValue arrow-vec pos (- end-pos (.getElementStartIndex arrow-vec pos))))))))
+            (writerPosition [_] wp)
+            (writeNull [_ _] (.setNull arrow-vec (.getPositionAndIncrement wp)))
+
+            (listElementWriter [this]
+              (if (instance? NullVector (.getDataVector arrow-vec))
+                (.listElementWriter this (FieldType/notNullable #xt.arrow/type :union))
+                @!el-writer))
+
+            (listElementWriter [_ field-type]
+              (let [create-vec-res (.addOrGetVector arrow-vec field-type)]
+                (if (.isCreated create-vec-res)
+                  (let [new-data-vec (.getVector create-vec-res)]
+                    (notify! (set-field! (.getField new-data-vec)))
+                    (reset! !el-writer (->el-writer new-data-vec)))
+                  @!el-writer)))
+
+            (startList [_]
+              (.startNewValue arrow-vec (.getPosition wp)))
+
+            (endList [_]
+              (let [pos (.getPositionAndIncrement wp)
+                    end-pos (.getPosition (.writerPosition ^IVectorWriter @!el-writer))]
+                (.endValue arrow-vec pos (- end-pos (.getElementStartIndex arrow-vec pos))))))))))
 
   StructVector
   (->writer* [arrow-vec notify!]
