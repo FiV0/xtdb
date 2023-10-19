@@ -175,3 +175,76 @@
                                     (doto (.listElementWriter (FieldType/notNullable #xt.arrow/type :f64)))
                                     (.getField)))
               "can't ask for :f64")))))
+
+(deftest adding-nested-struct-fields-dynamically
+  (with-open [struct-vec (StructVector/empty "my-struct" tu/*allocator*)]
+    (let [struct-wtr (vw/->writer struct-vec)]
+
+      (t/is (= (types/->field "my-struct" #xt.arrow/type :struct true)
+               (.getField struct-wtr)))
+
+      (t/is (= (types/->field "my-struct" #xt.arrow/type :struct true
+                              (types/->field "foo" #xt.arrow/type :union false))
+               (-> struct-wtr
+                   (doto (.structKeyWriter "foo"))
+                   (.getField)))
+            "structKeyWriter should create a dense union")
+
+      (t/is (= (types/->field "foo" #xt.arrow/type :union false)
+               (-> struct-wtr
+                   (.structKeyWriter "foo" (FieldType/notNullable #xt.arrow/type :union))
+                   (.getField)))
+            "call to structKeyWriter with correct field should not throw")
+
+      (t/is (thrown-with-msg? RuntimeException #"Field type mismatch"
+                              (-> struct-wtr
+                                  (doto (.structKeyWriter "foo" (FieldType/notNullable #xt.arrow/type :f64)))
+                                  (.getField)))
+            "can't now get a different type")
+
+      (t/is (= (types/->field "my-struct" #xt.arrow/type :struct true
+                              (types/->field "foo" #xt.arrow/type :union false)
+                              (types/->field "bar" #xt.arrow/type :i64 false))
+               (-> struct-wtr
+                   (doto (.structKeyWriter "bar" (FieldType/notNullable #xt.arrow/type :i64)))
+                   (doto (.structKeyWriter "bar" (FieldType/notNullable #xt.arrow/type :i64)))
+                   (.getField))))
+
+      (t/is (= (types/->field "bar" #xt.arrow/type :i64 false)
+               (-> struct-wtr
+                   (.structKeyWriter "bar" (FieldType/notNullable #xt.arrow/type :i64))
+                   (.getField))))
+
+      (t/is (= (types/->field "bar" #xt.arrow/type :i64 false)
+               (-> struct-wtr
+                   (.structKeyWriter "bar")
+                   (.getField))))
+
+      (t/is (thrown-with-msg? RuntimeException #"Field type mismatch"
+                              (-> struct-wtr
+                                  (doto (.structKeyWriter "bar" (FieldType/notNullable #xt.arrow/type :f64)))
+                                  (.getField))))))
+
+  (with-open [struct-vec (.createVector (types/col-type->field "my-struct" '[:struct {baz :i64}]) tu/*allocator*)]
+    (let [struct-wtr (vw/->writer struct-vec)]
+      (t/is (= (types/->field "my-struct" #xt.arrow/type :struct false
+                              (types/->field "baz" #xt.arrow/type :i64 false))
+               (.getField struct-wtr)))
+
+      (t/is (= (types/->field "baz" #xt.arrow/type :i64 false)
+               (-> struct-wtr
+                   (.structKeyWriter "baz")
+                   (.getField)))
+            "structKeyWriter should return the writer for the existing field")
+
+      (t/is (= (types/->field "baz" #xt.arrow/type :i64 false)
+               (-> struct-wtr
+                   (.structKeyWriter "baz" (FieldType/notNullable #xt.arrow/type :i64))
+                   (.getField)))
+            "call to structKeyWriter with correct field should not throw")
+
+      (t/is (thrown-with-msg? RuntimeException #"Field type mismatch"
+                              (-> struct-wtr
+                                  (doto (.structKeyWriter "baz" (FieldType/notNullable #xt.arrow/type :f64)))
+                                  (.getField)))
+            "structKeyWriter can't promote non preexising union type"))))

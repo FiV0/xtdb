@@ -502,12 +502,13 @@
   StructVector
   (->writer* [arrow-vec notify!]
     (let [col-name (.getName arrow-vec)
+          nullable? (.isNullable (.getField arrow-vec))
           wp (IVectorPosition/build (.getValueCount arrow-vec))
           writers (HashMap.)
           !fields (atom {})]
 
       (letfn [(update-child-field! [^Field field]
-                (apply types/->field col-name #xt.arrow/type :struct false
+                (apply types/->field col-name #xt.arrow/type :struct nullable?
                        (vals (swap! !fields assoc (.getName field) field))))
 
               (->key-writer [^ValueVector child-vec]
@@ -522,7 +523,7 @@
           (getVector [_] arrow-vec)
 
           (getField [_]
-            (apply types/->field col-name #xt.arrow/type :struct false (vals @!fields)))
+            (apply types/->field col-name #xt.arrow/type :struct nullable? (vals @!fields)))
 
           (clear [_] (.clear arrow-vec) (.setPosition wp 0) (run! #(.clear ^IVectorWriter %) (.values writers)))
 
@@ -555,11 +556,18 @@
             (doseq [^IVectorWriter w (.values writers)]
               (.writeNull w nil)))
 
-          (^IVectorWriter structKeyWriter [this-wtr ^String col-name]
+          (structKeyWriter [this-wtr col-name]
+            (or (.get writers col-name)
+                (.structKeyWriter this-wtr col-name (FieldType/notNullable #xt.arrow/type :union))))
+
+          (^IVectorWriter structKeyWriter [this-wtr ^String col-name ^FieldType field-type]
+           (when-let [^IVectorWriter wrt (.get writers col-name)]
+             (when-not (= (.getFieldType (.getField wrt)) field-type)
+               (throw (IllegalStateException. "Field type mismatch"))))
            (.computeIfAbsent writers col-name
                              (reify Function
                                (apply [_ col-name]
-                                 (let [w (doto (->key-writer (.addOrGet arrow-vec col-name (FieldType/notNullable #xt.arrow/type :union) ValueVector))
+                                 (let [w (doto (->key-writer (.addOrGet arrow-vec col-name field-type ValueVector))
                                            (populate-with-absents (.getPosition wp)))]
                                    (notify! (.getField this-wtr))
                                    w)))))
