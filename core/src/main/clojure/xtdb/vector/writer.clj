@@ -914,14 +914,17 @@
             (populate-with-absents (aget arr i) (inc pos)))))
 
       (^IVectorWriter colWriter [this ^String col-name]
-       (.colWriter this (types/->field col-name #xt.arrow/type :union false)))
+       (.colWriter this col-name (FieldType/notNullable #xt.arrow/type :union)))
 
-      (^IVectorWriter colWriter [_ ^Field field]
-       (.computeIfAbsent writers (.getName field)
-                         (reify Function
-                           (apply [_ _col-name]
-                             (doto (->vec-writer allocator field)
-                               (populate-with-absents (.getPosition wp)))))))
+      (colWriter [_  col-name field-type]
+        (when-let [^IVectorWriter wrt (.get writers col-name)]
+          (when-not (= (.getFieldType (.getField wrt)) field-type)
+            (throw (IllegalStateException. "Field type mismatch"))))
+        (.computeIfAbsent writers col-name
+                          (reify Function
+                            (apply [_ _col-name]
+                              (doto (->vec-writer allocator (Field. col-name field-type nil))
+                                (populate-with-absents (.getPosition wp)))))))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
 
@@ -952,19 +955,19 @@
             (populate-with-absents (aget arr i) (inc pos)))))
 
       (^IVectorWriter colWriter [_ ^String col-name]
-        (or (.get writers col-name)
-            (throw (NullPointerException. (pr-str {:cols (keys writers), :col col-name})))))
+       (or (.get writers col-name)
+           ;; TODO could we add things here dynamically ?
+           (throw (NullPointerException. (pr-str {:cols (keys writers), :col col-name})))))
 
-      (^IVectorWriter colWriter [_ ^Field field]
-       (let [col-name (.getName field)]
-         (or (.get writers col-name)
-             (throw (NullPointerException. (pr-str {:cols (keys writers), :col col-name}))))))
+      (colWriter [_ _col-name _field-type]
+        (throw (UnsupportedOperationException. "Dynamic column creation unsupported for this RelationWriter!")))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
 
       (iterator [_] (.iterator (.entrySet writers)))
 
       (syncRowCount [_]
+        (.syncSchema root)
         (.setRowCount root (.getPosition wp))
 
         (doseq [^IVectorWriter w (vals writers)]

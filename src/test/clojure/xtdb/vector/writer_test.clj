@@ -3,8 +3,9 @@
             [xtdb.test-util :as tu]
             [xtdb.vector.writer :as vw]
             [xtdb.types :as types])
-  (:import [org.apache.arrow.vector.complex DenseUnionVector StructVector ListVector]
-           (org.apache.arrow.vector.types.pojo FieldType)
+  (:import (org.apache.arrow.vector VectorSchemaRoot)
+           [org.apache.arrow.vector.complex DenseUnionVector StructVector ListVector]
+           (org.apache.arrow.vector.types.pojo FieldType Schema)
            (org.apache.arrow.vector.types Types$MinorType)))
 
 (t/use-fixtures :each tu/with-allocator)
@@ -248,3 +249,72 @@
                                   (doto (.structKeyWriter "baz" (FieldType/notNullable #xt.arrow/type :f64)))
                                   (.getField)))
             "structKeyWriter can't promote non preexising union type"))))
+
+(deftest rel-writer-dynamic-testing
+  (with-open [rel-wtr (vw/->rel-writer tu/*allocator*)]
+    (t/is (= (types/->field "my-union" #xt.arrow/type :union false)
+             (-> rel-wtr
+                 (.colWriter "my-union")
+                 (.getField))))
+
+    (t/is (= (types/->field "my-union" #xt.arrow/type :union false)
+             (-> rel-wtr
+                 (.colWriter "my-union" (FieldType/notNullable #xt.arrow/type :union))
+                 (.getField))))
+
+    (t/is (thrown-with-msg? RuntimeException #"Field type mismatch"
+                            (-> rel-wtr
+                                (.colWriter "my-union" (FieldType/notNullable #xt.arrow/type :i64))
+                                (.getField))))
+
+    (t/is (= (types/->field "my-i64" #xt.arrow/type :i64 false)
+             (-> rel-wtr
+                 (doto (.colWriter "my-i64" (FieldType/notNullable #xt.arrow/type :i64)))
+                 (.colWriter "my-i64" (FieldType/notNullable #xt.arrow/type :i64))
+                 (.getField))))
+
+    (t/is (thrown-with-msg? RuntimeException #"Field type mismatch"
+                            (-> rel-wtr
+                                (.colWriter "my-i64" (FieldType/notNullable #xt.arrow/type :f64))
+                                (.getField))))))
+
+(deftest rel-writer-fixed-schema-testing
+  (let [schema (Schema. [(types/->field "my-list" #xt.arrow/type :list false
+                                        (types/->field "$data$" #xt.arrow/type :struct true
+                                                       (types/col-type->field "my-int" :i64)
+                                                       (types/col-type->field "my-string" :utf8)))
+                         (types/->field "my-union" #xt.arrow/type :union false
+                                        (types/col-type->field "my-double" :f64)
+                                        (types/col-type->field "my-temporal-type" types/nullable-temporal-type))])]
+    (with-open [root (VectorSchemaRoot/create schema tu/*allocator*)
+                rel-wtr (vw/root->writer root)]
+
+      (t/is (= (types/->field "my-list" #xt.arrow/type :list false
+                              (types/->field "$data$" #xt.arrow/type :struct true
+                                             (types/col-type->field "my-int" :i64)
+                                             (types/col-type->field "my-string" :utf8)))
+               (-> rel-wtr (.colWriter "my-list") (.getField))))
+
+      (t/is (= (types/col-type->field "my-int" :i64)
+               (-> rel-wtr
+                   (.colWriter "my-list")
+                   (.listElementWriter)
+                   (.structKeyWriter "my-int")
+                   (.getField))))
+
+      (t/is (thrown-with-msg? RuntimeException #"Dynamic column creation unsupported for this RelationWriter!"
+                              (-> rel-wtr
+                                  (.colWriter "my-list" (FieldType/notNullable #xt.arrow/type :i64))
+                                  (.getField))))
+
+      (t/is (= (types/->field "my-union" #xt.arrow/type :union false
+                              (types/col-type->field "my-double" :f64)
+                              (types/col-type->field "my-temporal-type" types/nullable-temporal-type))
+
+               (-> rel-wtr (.colWriter "my-union") (.getField))))
+
+      (t/is (= (types/col-type->field "my-double" :f64)
+               (-> rel-wtr
+                   (.colWriter "my-union")
+                   (.legWriter :my-double)
+                   (.getField)))))))
