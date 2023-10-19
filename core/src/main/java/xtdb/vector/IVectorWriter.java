@@ -50,6 +50,9 @@ public interface IVectorWriter extends IValueWriter, AutoCloseable {
     IVectorWriter listElementWriter();
 
     @Override
+    IVectorWriter listElementWriter(FieldType fieldType);
+
+    @Override
     @Deprecated
     IVectorWriter writerForType(Object colType);
 

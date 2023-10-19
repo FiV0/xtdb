@@ -193,6 +193,16 @@ class ListValueBox implements IValueWriter, IMonoVectorReader, IPolyVectorReader
     }
 
     @Override
+    public IValueWriter listElementWriter(FieldType fieldType) {
+        return new BoxWriter() {
+            @Override
+            IValueWriter box() {
+                return writeBox.listElementWriter(fieldType);
+            }
+        };
+    }
+
+    @Override
     public void startList() {
         writeBox = new ValueBox();
         els.add(wp.getPosition(), writeBox);

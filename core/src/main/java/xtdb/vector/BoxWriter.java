@@ -92,6 +92,11 @@ abstract class BoxWriter implements IValueWriter {
     }
 
     @Override
+    public IValueWriter listElementWriter(FieldType fieldType) {
+        return box().listElementWriter(fieldType);
+    }
+
+    @Override
     public void startList() {
         box().startList();
     }

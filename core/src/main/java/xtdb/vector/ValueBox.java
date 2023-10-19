@@ -162,6 +162,16 @@ public class ValueBox implements IValueWriter, IPolyValueReader {
     }
 
     @Override
+    public IValueWriter listElementWriter(FieldType fieldType) {
+        return new BoxWriter() {
+            @Override
+            IValueWriter box() {
+                return ((ListValueBox) obj);
+            }
+        };
+    }
+
+    @Override
     public void startList() {
         obj = new ListValueBox();
     }

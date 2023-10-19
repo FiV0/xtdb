@@ -51,6 +51,8 @@ public interface IValueWriter {
 
     IValueWriter listElementWriter();
 
+    IValueWriter listElementWriter(FieldType fieldType);
+
     void startList();
 
     void endList();
