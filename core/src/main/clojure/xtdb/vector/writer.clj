@@ -452,11 +452,18 @@
   (let [absents (- pos (.getPosition (.writerPosition w)))]
     (when (pos? absents)
       ;; HACK
-      (let [absent-writer (cond-> w
-                            (not (.isNullable (.getField w)))
-                            (.legWriter #xt.arrow/type :absent))]
+      (if-let [absent-writer (let [field (.getField w)]
+                               (cond (= #xt.arrow/type :union (.getType field))
+                                     (.legWriter w #xt.arrow/type :absent)
+                                     (.isNullable field)
+                                     w
+                                     :else nil))
+               #_(cond-> w
+                   (not (.isNullable (.getField w)))
+                   (.legWriter #xt.arrow/type :absent))]
         (dotimes [_ absents]
-          (.writeNull absent-writer nil))))))
+          (.writeNull absent-writer nil))
+        (throw (UnsupportedOperationException. "populate-with-absents needs a nullable or union underneath"))))))
 
 (extend-protocol WriterFactory
   ListVector

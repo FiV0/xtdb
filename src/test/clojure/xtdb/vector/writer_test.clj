@@ -276,7 +276,15 @@
     (t/is (thrown-with-msg? RuntimeException #"Field type mismatch"
                             (-> rel-wtr
                                 (.colWriter "my-i64" (FieldType/notNullable #xt.arrow/type :f64))
-                                (.getField))))))
+                                (.getField)))))
+
+  (t/testing "populate-with-absents for non union columns"
+    (with-open [rel-wtr (vw/->rel-writer tu/*allocator*)]
+      (let [int-wtr (.colWriter rel-wtr "my-int" (FieldType/notNullable #xt.arrow/type :i64))
+            _str-wtr (.colWriter rel-wtr "my-str" (FieldType/notNullable #xt.arrow/type :utf8))]
+        (.startRow rel-wtr)
+        (vw/write-value! 42 int-wtr)
+        (.endRow rel-wtr)))))
 
 (deftest rel-writer-fixed-schema-testing
   (let [schema (Schema. [(types/->field "my-list" #xt.arrow/type :list false
