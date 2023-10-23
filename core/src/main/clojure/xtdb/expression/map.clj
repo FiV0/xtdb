@@ -183,7 +183,7 @@
                                                                                    with-nil-row? (types/merge-col-types :null)))
                                                                                val))))))]
       ;; HACK otherwise populate-with-absents complains
-      (.colWriter rel-writer (name col-name) (FieldType/nullable (types/->arrow-type col-type))))
+      (.colWriter rel-writer (name col-name) (.getFieldType (types/col-type->field (types/col-type->nullable-col-type col-type)))))
 
     (when with-nil-row?
       (doto (.rowCopier rel-writer (->nil-rel (keys build-col-types)))
