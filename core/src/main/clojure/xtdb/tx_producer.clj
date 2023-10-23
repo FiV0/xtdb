@@ -1,6 +1,7 @@
 (ns xtdb.tx-producer
   (:require [clojure.spec.alpha :as s]
             [juxt.clojars-mirrors.integrant.core :as ig]
+            [xtdb.api.protocols :as xtp]
             [xtdb.error :as err]
             xtdb.log
             [xtdb.sql :as sql]
@@ -9,13 +10,13 @@
             [xtdb.vector :as vec]
             [xtdb.vector.writer :as vw])
   (:import clojure.lang.Keyword
-           (java.time Instant ZoneId)
            (java.lang AutoCloseable)
+           (java.time Instant ZoneId)
            (java.util ArrayList HashMap List)
            org.apache.arrow.memory.BufferAllocator
            (org.apache.arrow.vector VectorSchemaRoot)
-           (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            org.apache.arrow.vector.types.UnionMode
+           (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            (xtdb.log Log LogRecord)
            (xtdb.tx Ops Ops$Abort Ops$Call Ops$Delete Ops$Evict Ops$Put Ops$Sql)
            xtdb.vector.IVectorWriter))
@@ -222,8 +223,7 @@
 
                  (types/->field "call" #xt.arrow/type :struct false
                                 (types/->field "fn-id" #xt.arrow/type :union false)
-                                (types/->field "args" #xt.arrow/type :list false
-                                               (types/->field "arg" #xt.arrow/type :union false)))
+                                (types/->field "args" #xt.arrow/type :clj-form false))
 
                  ;; C1 importer
                  (types/col-type->field 'abort :null)))
@@ -342,7 +342,8 @@
       (let [fn-id (.fnId op)]
         (vw/write-value! fn-id (.legWriter fn-id-writer (vw/value->arrow-type fn-id))))
 
-      (vw/write-value! (vec (.args op)) args-list-writer)
+      (let [clj-form (xtp/->ClojureForm (vec (.args op)))]
+        (vw/write-value! clj-form (.legWriter args-list-writer (vw/value->arrow-type clj-form))))
 
       (.endStruct call-writer))))
 

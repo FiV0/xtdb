@@ -137,12 +137,12 @@
       "name" : "xt$iid",
       "count" : 6,
       "VALIDITY" : [1,1,1,1,1,1],
-      "DATA" : ["1607e129bb7874e1e7ca76714746c4cd","32dd9a776943e7d7544a745d31939895","64726dac44d06abe3fc237f31e38f876","756c7e012df6934e65d8d188aed55dd6","a4e167a76a05add8a8654c169b07b044","ab30100f78d131e68b1af8cced2420b2"]
+      "DATA" : ["0fb443bc703813e423b2493701df100f","85aac26dc1be3d8bd765b503fd2f5cc6","93b41e755afcf5a35bf0a92880578d55","a4e167a76a05add8a8654c169b07b044","b839f6763e22fc8c5288dc68abe71b91","f8d8b293290989f83e9497331771d053"]
     },{
       "name" : "xt$system_from",
       "count" : 6,
       "VALIDITY" : [1,1,1,1,1,1],
-      "DATA" : [1578096000000000,1578009600000000,1577923200000000,1578268800000000,1577836800000000,1578182400000000]
+      "DATA" : [1578009600000000,1578268800000000,1578096000000000,1577836800000000,1578182400000000,1577923200000000]
     },{
       "name" : "op",
       "count" : 6,
@@ -156,7 +156,7 @@
           "name" : "xt$valid_from",
           "count" : 6,
           "VALIDITY" : [1,1,1,1,1,1],
-          "DATA" : [1578096000000000,1578009600000000,1577923200000000,1578268800000000,1577836800000000,1578182400000000]
+          "DATA" : [1578009600000000,1578268800000000,1578096000000000,1577836800000000,1578182400000000,1577923200000000]
         },{
           "name" : "xt$valid_to",
           "count" : 6,
@@ -170,23 +170,23 @@
             "name" : "xt$id",
             "count" : 6,
             "VALIDITY" : [1,1,1,1,1,1],
-            "DATA" : ["12695","9114","4749","19593","0","16228"]
+            "DATA" : ["9162","19713","12767","0","16324","4773"]
           },{
             "name" : "xt$tx_time",
             "count" : 6,
             "VALIDITY" : [1,1,1,1,1,1],
-            "DATA" : [1578096000000000,1578009600000000,1577923200000000,1578268800000000,1577836800000000,1578182400000000]
+            "DATA" : [1578009600000000,1578268800000000,1578096000000000,1577836800000000,1578182400000000,1577923200000000]
           },{
             "name" : "xt$committed?",
             "count" : 6,
             "VALIDITY" : [1,1,1,1,1,1],
-            "DATA" : [1,1,1,0,1,1]
+            "DATA" : [1,0,1,1,1,1]
           },{
             "name" : "xt$error",
             "count" : 6,
-            "VALIDITY" : [0,0,0,1,0,0],
-            "OFFSET" : [0,0,0,0,284,284,284],
-            "DATA" : ["","","","#xt/runtime-err {:xtdb.error/error-type :runtime-error, :xtdb.error/error-key :xtdb.indexer/invalid-valid-times, :xtdb.error/message \"Runtime error: ':xtdb.indexer/invalid-valid-times'\", :valid-from #time/instant \"2020-01-01T00:00:00Z\", :valid-to #time/instant \"2019-01-01T00:00:00Z\"}","",""]
+            "VALIDITY" : [0,1,0,0,0,0],
+            "OFFSET" : [0,0,284,284,284,284,284],
+            "DATA" : ["","#xt/runtime-err {:xtdb.error/error-type :runtime-error, :xtdb.error/error-key :xtdb.indexer/invalid-valid-times, :xtdb.error/message \"Runtime error: ':xtdb.indexer/invalid-valid-times'\", :valid-from #time/instant \"2020-01-01T00:00:00Z\", :valid-to #time/instant \"2019-01-01T00:00:00Z\"}","","","",""]
           }]
         }]
       },{
