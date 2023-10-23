@@ -173,6 +173,7 @@
         hash->bitmap (IntObjectHashMap.)
         rel-writer (vw/->rel-writer allocator)]
 
+    (prn build-col-types)
 
     (doseq [[col-name col-type] (cond-> build-col-types
                                   (not store-full-build-rel?) (select-keys build-key-col-names)
@@ -182,14 +183,15 @@
                                                                                  (cond-> col-type
                                                                                    with-nil-row? (types/merge-col-types :null)))
                                                                                val))))))]
-      ;; HACK otherwise populate-with-absents complains
-      (.colWriter rel-writer (name col-name) (.getFieldType (types/col-type->field (types/col-type->nullable-col-type col-type)))))
+      (.colWriter rel-writer (str col-name) (.getFieldType (types/col-type->field col-type))))
 
     (when with-nil-row?
       (doto (.rowCopier rel-writer (->nil-rel (keys build-col-types)))
         (.copyRow 0)))
 
-    (let [build-key-cols (mapv #(vw/vec-wtr->rdr (.colWriter rel-writer (name %))) build-key-col-names)]
+    (prn (mapv #(.getField %) (vals rel-writer)))
+
+    (let [build-key-cols (mapv #(vw/vec-wtr->rdr (.colWriter rel-writer (str %))) build-key-col-names)]
       (letfn [(compute-hash-bitmap [^long row-hash]
                 (or (.get hash->bitmap row-hash)
                     (let [bitmap (RoaringBitmap.)]
@@ -203,6 +205,8 @@
           (probeKeyColumnNames [_] probe-key-col-names)
 
           (buildFromRelation [_ in-rel]
+            (prn "------special-------")
+            (prn (mapv #(.getField %) (seq in-rel)))
             (let [in-rel (if store-full-build-rel?
                            in-rel
                            (->> (set build-key-col-names)
@@ -224,7 +228,14 @@
 
                   hasher (->hasher in-key-cols)
 
+                  _ (prn "----------before------------")
+                  _ (prn (mapv #(.getField %) (vals rel-writer)))
+                  _ (prn (mapv #(.getField %) (seq in-rel)))
                   row-copier (.rowCopier rel-writer in-rel)]
+
+              (prn "----------after------------")
+              (prn (mapv #(.getField %) (vals rel-writer)))
+
 
               (letfn [(add ^long [^RoaringBitmap hash-bitmap, ^long idx]
                         (let [out-idx (.copyRow row-copier idx)]
@@ -233,6 +244,7 @@
 
                 (reify IRelationMapBuilder
                   (add [_ idx]
+
                     (add (compute-hash-bitmap (.hashCode hasher idx)) idx))
 
                   (addIfNotPresent [_ idx]

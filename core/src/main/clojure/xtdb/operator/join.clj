@@ -209,8 +209,11 @@
    ^IRelationMap rel-map
    [probe-sel build-sel :as _selection-pair]]
   (let [built-rel (.getBuiltRelation rel-map)]
-    (vr/rel-reader (concat (.select built-rel build-sel)
-                           (.select probe-rel probe-sel)))))
+    #_(prn "join-rels" {:prope-sel (seq probe-sel) :build-sel (seq build-sel)
+                      :probe-rel (.rowCount probe-rel) :build-rel (.rowCount built-rel)})
+    (let [res (vr/rel-reader (concat (.select built-rel build-sel)
+                                     (.select probe-rel probe-sel)))]
+      res)))
 
 (defn- probe-semi-join-select
   "Returns a single selection of the probe relation, that represents matches for a semi-join."
@@ -311,7 +314,7 @@
                                (aset !matched 0 true)
                                (.add matching-build-idxs build-idx)
                                (.add matching-probe-idxs probe-idx))
-                             (throw (err/runtime-err :xtdb.single-join/cardinality-violation
+                             (throw (err/runtime-err :xtdb.singlejoin/cardinality-violation
                                                      {::err/message "cardinality violation"}))))))
         (when-not (aget !matched 0)
           (.add matching-probe-idxs probe-idx)
@@ -331,6 +334,10 @@
   (tryAdvance [this c]
     (build-phase build-cursor rel-map pushdown-blooms)
 
+    #_(let [rel (.getBuiltRelation rel-map)]
+      (doseq [vec (seq rel)]
+        (prn (.getField vec))))
+
     (boolean
      (or (let [advanced? (boolean-array 1)]
            (binding [scan/*column->pushdown-bloom* (cond-> scan/*column->pushdown-bloom*
@@ -343,9 +350,24 @@
                          (.tryAdvance ^ICursor (.probe-cursor this)
                                       (reify Consumer
                                         (accept [_ probe-rel]
+                                          ;; (prn {:probe-row-count (.rowCount ^RelationReader probe-rel)})
                                           (when (pos? (.rowCount ^RelationReader probe-rel))
-                                            (with-open [out-rel (-> (probe-phase join-type probe-rel rel-map matched-build-idxs)
-                                                                    (.copy allocator))]
+                                            ;; (prn :bar)
+                                            (with-open [out-rel
+                                                        (try
+                                                          #_(-> (probe-phase join-type probe-rel rel-map matched-build-idxs)
+                                                                (doto prn)
+                                                                (.copy allocator))
+                                                          (let [probe-phase  (probe-phase join-type probe-rel rel-map matched-build-idxs)]
+                                                            #_(prn probe-phase)
+                                                            #_(doseq [vec-rdr probe-phase]
+                                                              (prn (.getField vec-rdr)))
+                                                            (.copy probe-phase allocator)
+                                                            #_(doto prn))
+                                                          (catch Throwable t
+                                                            (prn t)
+                                                            (throw t)))]
+                                              ;; (prn {:out-rel-count (.rowCount out-rel)})
                                               (when (pos? (.rowCount out-rel))
                                                 (aset advanced? 0 true)
                                                 (.accept c out-rel))))))))))
@@ -466,20 +488,23 @@
 (defmethod lp/emit-expr :left-outer-join [join-expr {:keys [param-types] :as args}]
   (emit-join-expr-and-children join-expr args
     (fn [{:keys [left-col-types right-col-types left-key-col-names right-key-col-names theta-expr]}]
-      {:col-types (merge-with types/merge-col-types left-col-types (-> right-col-types types/with-nullable-cols))
+      (prn left-col-types right-col-types)
+      {:col-types (doto (merge-with types/merge-col-types left-col-types (-> right-col-types types/with-nullable-cols))
+                    prn)
        :->cursor (fn [{:keys [allocator params]}, ->left-cursor ->right-cursor]
                    (util/with-close-on-catch [right-cursor (->right-cursor)]
+                     (prn :foo)
                      (JoinCursor. allocator right-cursor nil ->left-cursor
-                                    (emap/->relation-map allocator {:build-col-types right-col-types
-                                                                    :build-key-col-names right-key-col-names
-                                                                    :probe-col-types left-col-types
-                                                                    :probe-key-col-names left-key-col-names
-                                                                    :store-full-build-rel? true
-                                                                    :with-nil-row? true
-                                                                    :theta-expr theta-expr
-                                                                    :param-types param-types
-                                                                    :params params})
-                                    nil nil ::left-outer-join)))})))
+                                  (emap/->relation-map allocator {:build-col-types right-col-types
+                                                                  :build-key-col-names right-key-col-names
+                                                                  :probe-col-types left-col-types
+                                                                  :probe-key-col-names left-key-col-names
+                                                                  :store-full-build-rel? true
+                                                                  :with-nil-row? true
+                                                                  :theta-expr theta-expr
+                                                                  :param-types param-types
+                                                                  :params params})
+                                  nil nil ::left-outer-join)))})))
 
 (defmethod lp/emit-expr :full-outer-join [join-expr {:keys [param-types] :as args}]
   (emit-join-expr-and-children join-expr args

@@ -452,18 +452,20 @@
   (let [absents (- pos (.getPosition (.writerPosition w)))]
     (when (pos? absents)
       ;; HACK
-      (if-let [absent-writer (let [field (.getField w)]
-                               (cond (= #xt.arrow/type :union (.getType field))
-                                     (.legWriter w #xt.arrow/type :absent)
-                                     (.isNullable field)
-                                     w
-                                     :else nil))
-               #_(cond-> w
-                   (not (.isNullable (.getField w)))
-                   (.legWriter #xt.arrow/type :absent))]
+      (if-let [absent-writer #_(let [field (.getField w)]
+                                 (cond (= #xt.arrow/type :union (.getType field))
+                                       (.legWriter w #xt.arrow/type :absent)
+                                       (.isNullable field)
+                                       w
+                                       :else nil))
+               (cond-> w
+                 (not (.isNullable (.getField w)))
+                 (.legWriter #xt.arrow/type :absent))]
         (dotimes [_ absents]
           (.writeNull absent-writer nil))
-        (throw (UnsupportedOperationException. "populate-with-absents needs a nullable or union underneath"))))))
+        (do
+          (prn (.getField w))
+          (throw (UnsupportedOperationException. "populate-with-absents needs a nullable or union underneath")))))))
 
 (extend-protocol WriterFactory
   ListVector
@@ -579,7 +581,12 @@
                         (copyRow [_ src-idx]
                           (let [pos (.getPosition wp)]
                             (if (.isNull src-vec src-idx)
-                              (.writeNull this-wtr nil)
+                              (try
+                                (.writeNull this-wtr nil)
+                                (catch Throwable t
+                                  (prn t)
+                                  (prn "!" (.getField this-wtr))
+                                  (throw t)))
                               (do
                                 (.startStruct this-wtr)
                                 (doseq [^IRowCopier inner inner-copiers]
@@ -593,7 +600,11 @@
             (.setNull arrow-vec (.getPositionAndIncrement wp))
 
             (doseq [^IVectorWriter w (.values writers)]
-              (.writeNull w nil)))
+              (try
+                (.writeNull w nil)
+                (catch Throwable t
+                  (prn "!" (.getField w))
+                  (throw t)))))
 
           (structKeyWriter [this-wtr col-name]
             (or (.get writers col-name)
@@ -975,11 +986,14 @@
         (when-let [^IVectorWriter wrt (.get writers col-name)]
           (when-not (= (.getFieldType (.getField wrt)) field-type)
             (throw (IllegalStateException. "Field type mismatch"))))
-        (.computeIfAbsent writers col-name
-                          (reify Function
-                            (apply [_ _col-name]
-                              (doto (->vec-writer allocator col-name field-type)
-                                (populate-with-absents (.getPosition wp)))))))
+        (let [res (.computeIfAbsent writers col-name
+                                    (reify Function
+                                      (apply [_ _col-name]
+                                        (doto (->vec-writer allocator col-name field-type)
+                                          (populate-with-absents (.getPosition wp))))))]
+          (when-not (= (count @writer-array) (count writers))
+            (vreset! writer-array (object-array (.values writers))))
+          res))
 
       (rowCopier [this in-rel] (->rel-copier this in-rel))
 
@@ -995,12 +1009,14 @@
         writers (LinkedHashMap.)
         wp (IVectorPosition/build)]
     (doseq [^ValueVector vec (.getFieldVectors root)]
+      ;; (prn (.getName vec) (.getField vec))
       (.put writers (.getName vec) (->writer vec)))
 
     (reify IRelationWriter
       (writerPosition [_] wp)
 
       (startRow [_])
+
       (endRow [_]
         (when (nil? @writer-array)
           (vreset! writer-array (object-array (.values writers))))

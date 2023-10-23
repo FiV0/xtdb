@@ -278,6 +278,9 @@
                                 (.colWriter "my-i64" (FieldType/notNullable #xt.arrow/type :f64))
                                 (.getField)))))
 
+
+  ;; TODO
+  #_
   (t/testing "populate-with-absents for non union columns"
     (with-open [rel-wtr (vw/->rel-writer tu/*allocator*)]
       (let [int-wtr (.colWriter rel-wtr "my-int" (FieldType/notNullable #xt.arrow/type :i64))
@@ -326,3 +329,22 @@
                    (.colWriter "my-union")
                    (.legWriter :my-double)
                    (.getField)))))))
+
+;; TODO can we seperate normalization from reading and writing?
+(deftest normalize-on-writing-unnormalize-on-reading
+  (with-open [rel-wtr (vw/->rel-writer tu/*allocator*)]
+    (let [struct-wtr (.colWriter rel-wtr "my-structs" (FieldType/notNullable #xt.arrow/type :struct))]
+      (vw/write-value! {:foo_bar 1 :bar-foo 2} struct-wtr))
+    (t/is (= (types/->field "my-structs" #xt.arrow/type :struct false
+                            (types/->field "foo_bar" #xt.arrow/type :union false
+                                           (types/col-type->field :i64))
+                            (types/->field "bar_foo" #xt.arrow/type :union false
+                                           (types/col-type->field :i64)))
+             (-> rel-wtr
+                 (.colWriter "my-structs")
+                 (.getField))))
+
+    (let [rel-rdr (vw/rel-wtr->rdr rel-wtr)
+          struct-rdr (.readerForName rel-rdr "my-structs")]
+      (t/is (= {:bar-foo 2, :foo-bar 1}
+               (.getObject struct-rdr 0))))))

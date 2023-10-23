@@ -174,6 +174,96 @@
        (close [_]
          (.close root))))))
 
+
+(comment
+  (require '[xtdb.expression.map :as ex-map])
+
+  ;; (.isNullable (.getFieldType (types/->field "a" #xt.arrow/type :struct true)))
+  (with-open [allocator (RootAllocator.)
+              v1-wrt (vw/->vec-writer allocator "a" (.getFieldType (types/->field "a" #xt.arrow/type :struct true)))
+              v2-wrt (vw/->vec-writer allocator "b" (.getFieldType (types/->field "b" #xt.arrow/type :i64 true)))
+              v3-wrt (vw/->vec-writer allocator "c" (.getFieldType (types/->field "b" #xt.arrow/type :i64 true)))]
+    (let [foo-wrt (.structKeyWriter v1-wrt "foo" (.getFieldType (types/->field "foo" #xt.arrow/type :i64 true)))]
+      (.startStruct v1-wrt)
+      (.writeNull v1-wrt nil)
+      ;; (.endStruct v1-wrt)
+      (.startStruct v1-wrt)
+      (vw/write-value! 41 foo-wrt)
+      (.endStruct v1-wrt))
+    (vw/write-value! nil v2-wrt)
+    (vw/write-value! 42 v2-wrt)
+    (vw/write-value! 42 v3-wrt)
+    (with-open [rel-rdr (.copy (doto (vr/rel-reader [(.select (vw/vec-wtr->rdr v1-wrt) (int-array '(0)))
+                                                     (.select (vw/vec-wtr->rdr v2-wrt) (int-array '(0)))
+                                                     (.select (vw/vec-wtr->rdr v3-wrt) (int-array '(0)))])
+                                 prn)
+                               allocator)]))
+
+
+  #_(with-open [allocator (RootAllocator.)]
+      (let [schema (Schema. [(types/->field "a" )])])
+      a-wrt (.colWriter "a")
+
+      (vw/->vec-writer allocator "a" (.getFieldType (types/->field "a" #xt.arrow/type :struct true)))
+      v2-wrt (vw/->vec-writer allocator "b" (.getFieldType (types/->field "b" #xt.arrow/type :i64 true)))
+      v3-wrt (vw/->vec-writer allocator "c" (.getFieldType (types/->field "b" #xt.arrow/type :i64 true)))
+
+
+      (let [foo-wrt (.structKeyWriter v1-wrt "foo" (.getFieldType (types/->field "foo" #xt.arrow/type :i64 true)))]
+        (.startStruct v1-wrt)
+        (.writeNull v1-wrt nil)
+        ;; (.endStruct v1-wrt)
+        (.startStruct v1-wrt)
+        (vw/write-value! 41 foo-wrt)
+        (.endStruct v1-wrt))
+      (vw/write-value! nil v2-wrt)
+      (vw/write-value! 42 v2-wrt)
+      (vw/write-value! 42 v3-wrt)
+      (with-open [rel-rdr (.copy (doto (vr/rel-reader [(.select (vw/vec-wtr->rdr v1-wrt) (int-array '(0)))
+                                                       (.select (vw/vec-wtr->rdr v2-wrt) (int-array '(0)))
+                                                       (.select (vw/vec-wtr->rdr v3-wrt) (int-array '(0)))])
+                                   prn)
+                                 allocator)]))
+
+
+  (with-open [allocator (RootAllocator.)]
+    (let [blocks [[{:b 12, :c {:foo 42}}]]
+          block (first blocks)
+          col-types (vw/rows->col-types (into [] cat blocks))
+          ^Schema schema (Schema. (for [[col-name col-type] col-types]
+                                    (types/col-type->field col-name col-type)))
+          ^Schema schema2 (Schema. [(types/col-type->field "a" :i64)])]
+
+
+
+
+      (with-open [root (VectorSchemaRoot/create schema allocator)
+                  root2 (VectorSchemaRoot/create schema2 allocator)]
+        (let [rel-rdr (-> (populate-root root block)
+                          vr/<-root)
+              rel-rdr2 (-> (populate-root root2 [{:a 17}])
+                           vr/<-root)]
+          (with-open [rel-wtr (vw/->rel-writer allocator)]
+            (doto (.rowCopier rel-wtr (ex-map/->nil-rel ["b" "c"]))
+              (.copyRow 0))
+            (doto (.rowCopier rel-wtr rel-rdr)
+              (.copyRow 0))
+            (doto (.rowCopier rel-wtr rel-rdr2)
+              (.copyRow 0))
+            #_(with-open [rel-rdr (-> (vw/rel-wtr->rdr rel-wtr)
+                                      (.copy allocator)
+                                      (.select (int-array '(0))))]
+                (with-open [rel-wtr (vw/->rel-writer allocator)]
+                  (doto (.rowCopier rel-wtr rel-rdr)
+                    (.copyRow 0))
+
+                  )
+                ;; (prn rel-rdr)
+                )))
+        )
+      ))
+  )
+
 (defmethod lp/ra-expr ::blocks [_]
   (s/cat :op #{::blocks}
          :col-types (s/? (s/map-of simple-symbol? some?))
@@ -182,8 +272,10 @@
 (defmethod lp/emit-expr ::blocks [{:keys [col-types blocks stats]} _args]
   (let [col-types (or col-types
                       (vw/rows->col-types (into [] cat blocks)))
-        ^Schema schema (Schema. (for [[col-name col-type] col-types]
+        ^Schema schema (Schema. (for [[col-name col-type] col-types
+                                      :let [col-type col-type #_(types/merge-col-types :absent col-type)]]
                                   (types/col-type->field col-name col-type)))]
+    (prn [col-types blocks])
     {:col-types col-types
      :stats stats
      :->cursor (fn [{:keys [allocator]}]
