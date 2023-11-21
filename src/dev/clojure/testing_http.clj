@@ -82,7 +82,7 @@
       "SELECT ar.name AS artist_name, AVG(t.milliseconds / 1000) AS avg_length FROM track AS t, album AS a, artist AS ar
        WHERE t.album = a.xt$id AND a.artist = ar.xt$id
        GROUP BY ar.name
-       ORDEr BY avg_length"
+       ORDER BY avg_length"
       {:key-fn :datalog})
 
 ;; pull the album for every track
@@ -91,8 +91,24 @@
            (with {:album (pull (from :album [{:xt/id $album} title])
                                {:args [album]})})))
 
-;; pull the tracks for every album
 (xt/q node
-      '(-> (from :album [{:xt/id album :title album-name}])
-           (with {:tracks (pull* (from :track [name milliseconds {:album $album}])
-                                 {:args [album]})})))
+      "SELECT t.name, OBJECT('title': a.title) AS album FROM track AS t, album AS a
+       WHERE t.album = a.xt$id ")
+
+
+;; pull the tracks for every album
+
+(time
+ (xt/q node
+       '(-> (from :album [{:xt/id album :title album-name}])
+            (with {:tracks (pull* (from :track [name milliseconds {:album $album}])
+                                  {:args [album]})})
+            (return :album-name :tracks))))
+;; "Elapsed time: 1341.306197 msecs"
+
+(time
+ (xt/q node
+       "SELECT a.title AS album_name, ARRAY_AGG(OBJECT('name': t.name, 'milliseconds': t.milliseconds)) AS tracks FROM track AS t, album AS a
+       WHERE t.album = a.xt$id
+       GROUP BY a.title"))
+;; "Elapsed time: 89.022434 msecs"
