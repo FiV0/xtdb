@@ -23,14 +23,15 @@
        (partition-all 1024)
        (mapv #(xt/submit-tx node (vec %)))))
 
-;; (def node (client/start-client "http://localhost:3000"))
-(def node dev/node)
+(def node (client/start-client "http://localhost:3000"))
+;; (def node dev/node)
 
 (comment
   (def entities (read-entities))
   (first entities)
 
-  (filter #(= :artist/id-1 (:xt/id %)) entities)
+  (filter #(= :track/id-1 (:xt/id %)) entities)
+
   (filter #(contains? % :artist-id) entities)
 
   (ingest node entities)
@@ -65,3 +66,21 @@
       ["SELECT ar.name FROM track AS t, album AS a, artist AS ar
         WHERE t.name = ? AND t.album = a.xt$id AND a.artist = ar.xt$id AND ar.name IS NOT NULL"
        "For Those About To Rock (We Salute You)"])
+
+;; average track length by artist
+
+(xt/q node '(-> (unify (from :track [milliseconds album])
+                       (from :album [{:xt/id album} artist])
+                       (from :artist [{:xt/id artist :name artist-name}]))
+                (with {:seconds (/ milliseconds 1000)})
+                (return :seconds :artist-name)
+                (aggregate :artist-name {:avg-length (avg seconds)})
+                (order-by avg-length))
+      {:key-fn :sql})
+
+(xt/q node
+      "SELECT ar.name AS artist_name, AVG(t.milliseconds / 1000) AS avg_length FROM track AS t, album AS a, artist AS ar
+       WHERE t.album = a.xt$id AND a.artist = ar.xt$id
+       GROUP BY ar.name
+       ORDEr BY avg_length"
+      {:key-fn :datalog})
