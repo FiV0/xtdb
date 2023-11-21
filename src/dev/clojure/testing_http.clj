@@ -84,3 +84,15 @@
        GROUP BY ar.name
        ORDEr BY avg_length"
       {:key-fn :datalog})
+
+;; pull the album for every track
+(xt/q node
+      '(-> (from :track [name album])
+           (with {:album (pull (from :album [{:xt/id $album} title])
+                               {:args [album]})})))
+
+;; pull the tracks for every album
+(xt/q node
+      '(-> (from :album [{:xt/id album :title album-name}])
+           (with {:tracks (pull* (from :track [name milliseconds {:album $album}])
+                                 {:args [album]})})))
