@@ -1,7 +1,9 @@
 (ns xtdb.xtql.json
-  (:require [xtdb.xtql.edn :as xtql.edn]
+  (:require [clojure.walk :as walk]
+            [xtdb.api :as xt]
+            [xtdb.xtql.edn :as xtql.edn]
             [xtdb.error :as err])
-  (:import [java.time Duration LocalDate LocalDateTime ZonedDateTime Instant]
+  (:import [java.time Duration LocalDate LocalDateTime ZonedDateTime Instant ZoneId]
            (java.util Date List)
            (xtdb.query Expr Expr$Bool Expr$Call Expr$Double Expr$Exists Expr$LogicVar Expr$Long Expr$Obj Expr$Subquery
                        Query Query$Aggregate Query$From Query$LeftJoin Query$Limit Query$Join Query$Limit
@@ -9,7 +11,8 @@
                        Query$Return Query$Unify Query$UnionAll Query$Where Query$With Query$Without
                        OutSpec ArgSpec ColSpec VarSpec Query$WithCols Query$DocsRelation Query$ParamRelation
                        Query$UnnestVar Query$UnnestCol
-                       TemporalFilter TemporalFilter$AllTime TemporalFilter$At TemporalFilter$In)))
+                       TemporalFilter TemporalFilter$AllTime TemporalFilter$At TemporalFilter$In)
+           #_(xtdb.tx Ops Ops$Call Ops$Delete Ops$Erase Ops$Put Ops$Sql)))
 
 (defn- query-type [query]
   (cond
@@ -42,41 +45,74 @@
 
 (declare parse-expr parse-arg-specs)
 
+(defn- bad-literal [l]
+  (throw (err/illegal-arg :xtql/malformed-literal {:literal l})))
+
+(defn- try-parse [v f l]
+  (try
+    (f v)
+    (catch Exception e
+      (throw (err/illegal-arg :xtql/malformed-literal {:literal l, :error (.getMessage e)})))))
+
+(defn json-value->object [{v "@value", t "@type" :as l}]
+  (cond (or (nil? v) (nil? t)) l
+        (= "xt:set" t) (if-not (vector? v)
+                         (bad-literal l)
+                         (into #{} (map json-value->object) v))
+
+        (not (string? v)) (bad-literal l)
+
+        :else (case t
+                "xt:keyword" (keyword v)
+                "xt:date" (try-parse v #(LocalDate/parse %) l)
+                "xt:duration" (try-parse v #(Duration/parse %) l)
+                "xt:timestamp" (try-parse v #(LocalDateTime/parse %) l)
+                "xt:timestamptz" (try-parse v #(ZonedDateTime/parse %) l)
+                "xt:instant" (try-parse v #(Instant/parse %) l)
+                "xt:timezone" (try-parse v #(ZoneId/of %) l)
+                (throw (err/illegal-arg :xtql/unknown-type {:value v, :type t})))))
+
+(defn object->json-value [obj]
+  (cond
+    (keyword? obj) {"@value" (str (symbol obj)), "@type" "xt:keyword"}
+    (set? obj) {"@value" (mapv object->json-value obj), "@type" "xt:set"}
+    (instance? Date obj) {"@value" (str (.toInstant ^Date obj),) "@type" "xt:timestamp"}
+    (instance? LocalDate obj) {"@value" (str obj), "@type" "xt:date"}
+    (instance? Duration obj) {"@value" (str obj), "@type" "xt:duration"}
+    (instance? LocalDateTime obj) {"@value" (str obj), "@type" "xt:timestamp"}
+    (instance? ZonedDateTime obj) {"@value" (str obj), "@type" "xt:timestamptz"}
+    (instance? Instant obj) {"@value" (str obj), "@type" "xt:instant"}
+    (instance? ZoneId obj) {"@value" (str obj), "@type" "xt:timezone"}
+    :else obj))
+
 (defn- parse-literal [{v "@value", t "@type" :as l}]
-  (letfn [(bad-literal [l]
-            (throw (err/illegal-arg :xtql/malformed-literal {:literal l})))
+  (cond
+    (nil? v) (Expr/val nil)
 
-          (try-parse [v f]
-            (try
-              (f v)
-              (catch Exception e
-                (throw (err/illegal-arg :xtql/malformed-literal {:literal l, :error (.getMessage e)})))))]
-    (cond
-      (nil? v) (Expr/val nil)
+    (nil? t) (cond
+               (map? v) (Expr/val (into {} (map (juxt key (comp parse-expr val))) v))
+               (vector? v) (Expr/val (mapv parse-expr v))
+               (string? v) (Expr/val v)
+               :else (bad-literal l))
 
-      (nil? t) (cond
-                 (map? v) (Expr/val (into {} (map (juxt key (comp parse-expr val))) v))
-                 (vector? v) (Expr/val (mapv parse-expr v))
-                 (string? v) (Expr/val v)
-                 :else (bad-literal l))
+    :else (if (= "xt:set" t)
+            (if-not (vector? v)
+              (bad-literal l)
 
-      :else (if (= "xt:set" t)
-              (if-not (vector? v)
-                (bad-literal l)
+              (Expr/val (into #{} (map parse-expr) v)))
 
-                (Expr/val (into #{} (map parse-expr) v)))
+            (if-not (string? v)
+              (bad-literal l)
 
-              (if-not (string? v)
-                (bad-literal l)
-
-                (case t
-                  "xt:keyword" (Expr/val (keyword v))
-                  "xt:date" (Expr/val (try-parse v #(LocalDate/parse %)))
-                  "xt:duration" (Expr/val (try-parse v #(Duration/parse %)))
-                  "xt:timestamp" (Expr/val (try-parse v #(LocalDateTime/parse %)))
-                  "xt:timestamptz" (Expr/val (try-parse v #(ZonedDateTime/parse %)))
-                  "xt:instant" (Expr/val (try-parse v #(Instant/parse %)))
-                  (throw (err/illegal-arg :xtql/unknown-type {:value v, :type t}))))))))
+              (case t
+                "xt:keyword" (Expr/val (keyword v))
+                "xt:date" (Expr/val (try-parse v #(LocalDate/parse %) l))
+                "xt:duration" (Expr/val (try-parse v #(Duration/parse %) l))
+                "xt:timestamp" (Expr/val (try-parse v #(LocalDateTime/parse %) l))
+                "xt:timestamptz" (Expr/val (try-parse v #(ZonedDateTime/parse %) l))
+                "xt:instant" (Expr/val (try-parse v #(Instant/parse %) l))
+                "xt:timezone" (Expr/val (try-parse v #(ZoneId/of %) l))
+                (throw (err/illegal-arg :xtql/unknown-type {:value v, :type t})))))))
 
 (defn parse-expr [expr]
   (letfn [(bad-expr [expr]
@@ -132,6 +168,7 @@
         (instance? LocalDateTime obj) {"@value" (str obj), "@type" "xt:timestamp"}
         (instance? ZonedDateTime obj) {"@value" (str obj), "@type" "xt:timestamptz"}
         (instance? Instant obj) {"@value" (str obj), "@type" "xt:instant"}
+        (instance? ZoneId obj) {"@value" (str obj), "@type" "xt:timezone"}
         :else (throw (UnsupportedOperationException. (format "obj: %s" (pr-str obj)))))))
 
   Expr$Exists
@@ -444,3 +481,216 @@
 
   Query$Limit (unparse [q] {"limit" (.length q)})
   Query$Offset (unparse [q] {"offset" (.length q)}))
+
+;;;;;;;;;;;;;;;;;;;;;;;
+;;; tx ops
+;;;;;;;;;;;;;;;;;;;;;;;
+
+;; (defn- tx-op-type [tx-op]
+;;   (cond
+;;     (map? tx-op) (let [tx-op (dissoc tx-op "doc" "id" "opts" "args")]
+;;                    (if-not (= 1 (count tx-op))
+;;                      (throw (err/illegal-arg :xtdb.tx/invalid-tx-op {:tx-op tx-op}))
+;;                      (keyword (key (first tx-op)))))
+
+;;     :else (throw (err/illegal-arg :xtdb.tx/invalid-tx-op {:tx-op tx-op}))))
+
+;; (defmulti parse-tx-op tx-op-type)
+
+
+;; (defn- expect-sql ^String [sql tx-op]
+;;   (if-not (string? sql)
+;;     (throw (err/illegal-arg :xtdb.tx/expected-sql
+;;                             {::err/message "Expected SQL query",
+;;                              :tx-op tx-op
+;;                              :sql sql}))
+
+;;     sql))
+
+;; ;; TODO extend for sql + params and sql-batch
+;; (defmethod parse-tx-op :sql [{:strs [sql] :as tx-op}]
+;;   (expect-sql sql tx-op)
+;;   (Ops/sql sql))
+
+;; (def table? string?)
+
+;; (defn parse-table-name [table-name tx-op]
+;;   (when-not (table? table-name)
+;;     (throw (err/illegal-arg :xtdb.tx/invalid-table
+;;                             {::err/message "expected table name", :tx-op tx-op :table table-name})))
+
+;;   (keyword table-name))
+
+;; ;; TODO eid parsing for uuid and keyword
+;; (defn- eid? [eid]
+;;   (some-fn string? integer?))
+
+;; (defn expect-eid [eid tx-op]
+;;   (when-not (eid? eid)
+;;     (throw (err/illegal-arg :xtdb.tx/invalid-eid
+;;                             {::err/message "expected entity id", :tx-op tx-op :eid eid})))
+
+;;   eid)
+
+;; (defn expect-fn-id [fn-id tx-op]
+;;   (when-not (eid? fn-id)
+;;     (throw (err/illegal-arg :xtdb.tx/invalid-fn-id {::err/message "expected fn-id", :tx-op tx-op :fn-id fn-id}))))
+
+;; ;; TODO parse values
+;; (defn parse-doc [doc tx-op]
+;;   (when-not (map? doc)
+;;     (throw (err/illegal-arg :xtdb.tx/expected-doc
+;;                             {::err/message "expected doc map", :doc doc, :tx-op tx-op})))
+;;   (let [eid (get doc "xt/id")]
+;;     (when-not (eid? eid)
+;;       (throw (err/illegal-arg :xtdb.tx/invalid-eid
+;;                               {::err/message "expected xt/id", :tx-op tx-op :doc doc, :xt/id eid}))))
+;;   (-> doc
+;;       (update-keys keyword)))
+
+;; (defn parse-instant [instant temporal-opts tx-op]
+;;   (let [parsed-instant (parse-literal instant)]
+;;     (when-not (and (instance? Expr$Obj parsed-instant)
+;;                    (instance? Instant (.obj ^Expr$Obj parsed-instant)))
+;;       (throw (err/illegal-arg :xtdb.tx/invalid-instant
+;;                               {::err/message "expected instant"
+;;                                :tx-op tx-op
+;;                                :temporal-opts temporal-opts})))
+;;     (.obj ^Expr$Obj parsed-instant)))
+
+;; (defn parse-temporal-opts [temporal-opts tx-op]
+;;   (when-not (map? temporal-opts)
+;;     (throw (err/illegal-arg :xtdb.tx/invalid-temporal-opts
+;;                             {::err/message "expected map of temporal opts"
+;;                              :tx-op tx-op
+;;                              :temporal-opts temporal-opts})))
+
+;;   (when-let [for-valid-time (get temporal-opts "for-valid-time")]
+;;     (when-not (vector? for-valid-time)
+;;       (throw (err/illegal-arg :xtdb.tx/invalid-temporal-opts
+;;                               {::err/message "expected vector for `\"for-valid-time\"`"
+;;                                :tx-op tx-op
+;;                                :for-valid-time for-valid-time})))
+
+;;     (let [[tag & args] for-valid-time]
+;;       (case tag
+;;         "in" {:valid-from (some-> (first args) (parse-instant temporal-opts tx-op))
+;;               :valid-to (some-> (second args) (parse-instant temporal-opts tx-op))}
+;;         "from" {:valid-from (some-> (first args) (parse-instant temporal-opts tx-op))}
+;;         "to" {:valid-to (some-> (first args) (parse-instant temporal-opts tx-op))}
+;;         (throw (err/illegal-arg :xtdb.tx/invalid-temporal-opts
+;;                                 {::err/message "invalid tag for `:for-valid-time`, expected one of `#{\"in\" \"from\" \"to\"}`"
+;;                                  :tx-op tx-op
+;;                                  :for-valid-time for-valid-time
+;;                                  :tag tag}))))))
+
+
+;; (defmethod parse-tx-op :put [{:strs [doc opts] table-name "put" :as tx-op}]
+;;   (let [table-name (parse-table-name table-name tx-op)
+;;         doc (parse-doc doc tx-op)
+;;         {:keys [^Instant valid-from, ^Instant valid-to]} (some-> opts (parse-temporal-opts tx-op))]
+;;     (-> (Ops/put table-name doc)
+;;         (.startingFrom valid-from)
+;;         (.until valid-to))))
+
+;; (defmethod parse-tx-op :delete [{:strs [id opts] table-name "delete" :as tx-op}]
+;;   (let [table-name (parse-table-name table-name tx-op)
+;;         {:keys [^Instant valid-from, ^Instant valid-to]} (some-> opts (parse-temporal-opts tx-op))]
+;;     (-> (Ops/delete table-name id)
+;;         (.startingFrom valid-from)
+;;         (.until valid-to))))
+
+;; (defmethod parse-tx-op :erase [{:strs [id] table-name "erase" :as tx-op} ]
+;;   (expect-eid id tx-op)
+
+;;   (let [table-name (parse-table-name table-name tx-op)]
+;;     (Ops/erase table-name id)))
+
+;; ;; TODO
+;; (defmethod parse-tx-op :put-fn [{:as _tx-op}]
+;;   (throw (UnsupportedOperationException.)))
+
+;; (defn- fn-argument? [arg]
+;;   ((some-fn string? integer?) arg)
+;;   #_(or (instance? Expr$Bool arg)
+;;         (instance? Expr$Long arg)
+;;         (instance? Expr$Double arg)
+;;         (instance? Expr$Obj arg)))
+
+;; (defn- unpack-arg [arg]
+;;   arg
+;;   #_(cond (instance? Expr$Bool arg) (.bool ^Expr$Bool arg)
+;;           (instance? Expr$Long arg) (.lng ^Expr$Long arg)
+;;           (instance? Expr$Double arg) (.dbl ^Expr$Double arg)
+;;           (instance? Expr$Obj arg) (.obj ^Expr$Obj arg)))
+
+;; ;; TODO parse-literals
+;; (defn- parse-args [args tx-op]
+;;   (let [exprs (mapv identity args) #_(mapv parse-literal args)]
+;;     (when-not (every? fn-argument? exprs)
+;;       (throw (err/illegal-arg :xtdb.tx/invalid-fn-args
+;;                               {:tx-op tx-op
+;;                                :args args})))
+;;     (mapv unpack-arg exprs)))
+
+;; (defmethod parse-tx-op :call [{:strs [args] fn-id "call" :as tx-op}]
+;;   (expect-fn-id fn-id tx-op)
+;;   (Ops/call fn-id (parse-args args tx-op)))
+
+;; (defn- unparse-instant [instant]
+;;   {"@value" (str instant), "@type" "xt:instant"})
+
+;; (defn unparse-opts [valid-from valid-to]
+;;   (cond (and valid-to valid-from)
+;;         {"for-valid-time" ["in" (unparse-instant valid-from) (unparse-instant valid-to)]}
+;;         valid-to
+;;         {"for-valid-time" ["to" (unparse-instant valid-to)]}
+;;         valid-from
+;;         {"for-valid-time" ["from" (unparse-instant valid-from)]}))
+
+;; (extend-protocol Unparse
+;;   Ops$Put
+;;   (unparse [put]
+;;     (let [^Ops$Put put put
+;;           opts (unparse-opts (.validFrom put) (.validTo put))]
+;;       (cond-> {"put" (subs (str (.tableName put)) 1)
+;;                "doc" (-> (.doc put) (update-keys #(subs (str %) 1)))}
+;;         opts (assoc "opts" opts))))
+
+;;   Ops$Delete
+;;   (unparse [delete]
+;;     (let [^Ops$Delete delete delete
+;;           opts (unparse-opts (.validFrom delete) (.validTo delete))]
+;;       (cond-> {"delete" (subs (str (.tableName delete)) 1)
+;;                "id" (.entityId delete)}
+;;         opts (assoc "opts" opts))))
+
+;;   Ops$Erase
+;;   (unparse [delete]
+;;     (let [^Ops$Erase delete delete]
+;;       {"erase" (subs (str (.tableName delete)) 1)
+;;        "id" (.entityId delete)}))
+
+;;   Ops$Sql
+;;   (unparse [sql]
+;;     (let [^Ops$Sql sql sql]
+;;       {"sql" (.sql sql)}))
+
+;;   ;; TODO proper unparsing of args
+;;   Ops$Call
+;;   (unparse [call]
+;;     (let [^Ops$Call call call]
+;;       {"call" (.fnId call)
+;;        "args" (into [] (.args call))})))
+
+;; (defn parse-query-opts [query-opts]
+;;   (->
+;;    ;; TODO this should probably done at JSON parse time
+;;    (clojure.walk/postwalk (fn [v] (if (map? v)
+;;                                     (let [res (json-value->object v)]
+;;                                       (cond-> res
+;;                                         (map? res) (update-keys keyword)))
+;;                                     v))
+;;                           query-opts)
+;;    (update-in [:basis :tx] #(some-> % xt/map->TransactionKey))
+;;    (update-in [:basis :after-tx] #(some-> % xt/map->TransactionKey))))

@@ -1,11 +1,12 @@
 (ns xtdb.xtql.json-test
   (:require [clojure.test :as t :refer [deftest]]
+            [clojure.data.json :as json]
             [xtdb.xtql.edn :as edn]
-            [xtdb.xtql.json :as json]))
+            [xtdb.xtql.json :as xjson]))
 
 (defn- roundtrip-expr [expr]
-  (let [parsed (json/parse-expr expr)]
-    [(edn/unparse parsed) (json/unparse parsed)]))
+  (let [parsed (xjson/parse-expr expr)]
+    [(edn/unparse parsed) (xjson/unparse parsed)]))
 
 (defn- roundtrip-value [v t]
   (let [[edn {v "@value", t "@type"}] (roundtrip-expr {"@value" v, "@type" (when t (str "xt:" (name t)))})]
@@ -38,6 +39,9 @@
   (t/is (= [#time/instant "2023-12-06T09:31:27.570827956Z" "2023-12-06T09:31:27.570827956Z" :instant]
            (roundtrip-value "2023-12-06T09:31:27.570827956Z" :instant)))
 
+  (t/is (= [#time/zone "America/Los_Angeles" "America/Los_Angeles"  :timezone]
+           (roundtrip-value "America/Los_Angeles" :timezone)))
+
   (t/is (= [[1 2 3] [1 2 3]]
            (roundtrip-expr [1 2 3]))
         "vectors")
@@ -62,6 +66,27 @@
   ;; TODO Implement Expr$Get
   )
 
+(defn- roundtrip-json [data]
+  (letfn [(value-wrt-fn [_ v] (xjson/object->json-value v))
+          (value-rdr-fn [_ v] (if (map? v) (xjson/json-value->object v) v))]
+    (-> (json/write-str data :value-fn value-wrt-fn)
+        (json/read-str :value-fn value-rdr-fn))))
+
+(deftest test-json-conversion
+  (t/is (= {"foo" "foo"
+            "bar" :bar
+            "nested-map" {"toto" :toto}
+            "set" #{1 2 "foo" :bar}
+            "date" #time/date "1998-09-02"
+            "duration "#time/duration "PT1H"}
+
+           (roundtrip-json {"foo" "foo"
+                            "bar" :bar
+                            "nested-map" {"toto" :toto}
+                            "set" #{1 2 "foo" :bar}
+                            "date" #time/date "1998-09-02"
+                            "duration "#time/duration "PT1H"}))))
+
 (t/deftest test-expr-subquery
   (t/is (= ['(exists? (from :foo [a])) {"exists" {"from" "foo", "bind" ["a"]}}]
            (roundtrip-expr {"exists" {"from" "foo", "bind" ["a"]}})))
@@ -74,12 +99,12 @@
            (roundtrip-expr {"q" {"from" "foo", "bind" ["a"]}}))))
 
 (defn- roundtrip-q [query]
-  (let [parsed (json/parse-query query)]
-    [(edn/unparse parsed) (json/unparse parsed)]))
+  (let [parsed (xjson/parse-query query)]
+    [(edn/unparse parsed) (xjson/unparse parsed)]))
 
 (defn- roundtrip-q-tail [query]
-  (let [parsed (json/parse-query-tail query)]
-    [(edn/unparse parsed) (json/unparse parsed)]))
+  (let [parsed (xjson/parse-query-tail query)]
+    [(edn/unparse parsed) (xjson/unparse parsed)]))
 
 (t/deftest test-parse-from
   (t/is (= ['(from :foo [a]) {"from" "foo", "bind" ["a"]}]
@@ -279,4 +304,64 @@
              {"unnest" [{"y" "x"}]}]]
            (roundtrip-q [{"rel" [{"x" [1 2 3]}]
                           "bind" ["x"]}
-                         {"unnest" [{"y" "x"}]}] ))))
+                         {"unnest" [{"y" "x"}]}]))))
+
+;;;;;;;;;;;;;;;;;;;;;;;
+;;; tx ops
+;;;;;;;;;;;;;;;;;;;;;;;
+
+;; (defn- roundtrip-tx-op [tx-op]
+;;   (let [parsed (xjson/parse-tx-op tx-op)]
+;;     [(edn/unparse parsed) (xjson/unparse parsed)]))
+
+
+;; {"table" "docs"
+;;  "doc" "...."}
+
+;; (deftest test-ops-parsing
+;;   (t/is (= [[:put :docs {:xt/id 1, :foo "bar"}]
+;;             {"put" "docs", "doc" {"xt/id" 1, "foo" "bar"}}]
+;;            (roundtrip-tx-op {"put" "docs"
+;;                              "doc" {"xt/id" 1 "foo" "bar"}}))
+;;         "put")
+
+;;   (t/is (= [[:put
+;;              :docs
+;;              {:xt/id 1, :foo "bar"}
+;;              {:for-valid-time
+;;               [:in
+;;                #time/instant "2020-01-01T12:34:56.789Z"
+;;                #time/instant "2020-01-01T12:34:56.789Z"]}]
+;;             {"put" "docs",
+;;              "doc" {"xt/id" 1, "foo" "bar"},
+;;              "opts"
+;;              {"for-valid-time"
+;;               ["in"
+;;                {"@value" "2020-01-01T12:34:56.789Z", "@type" "xt:instant"}
+;;                {"@value" "2020-01-01T12:34:56.789Z", "@type" "xt:instant"}]}}]
+
+;;            (roundtrip-tx-op {"put" "docs"
+;;                              "doc" {"xt/id" 1 "foo" "bar"}
+;;                              "opts" {"for-valid-time" ["in"
+;;                                                        {"@value" "2020-01-01T12:34:56.789Z" "@type" "xt:instant"}
+;;                                                        {"@value" "2020-01-01T12:34:56.789Z" "@type" "xt:instant"}]}}))
+;;         "put with opts")
+
+;;   (t/is (= [[:delete :docs 1] {"delete" "docs", "id" 1}]
+;;            (roundtrip-tx-op {"delete" "docs"
+;;                              "id" 1})))
+
+;;   (t/is (= [[:erase :docs 1] {"erase" "docs", "id" 1}]
+;;            (roundtrip-tx-op {"erase" "docs"
+;;                              "id" 1})))
+
+;;   ;; the key-fn is a string here
+;;   (t/is (= [[:call "put-fn" 1 "foo"]
+;;             {"call" "put-fn",
+;;              "args" [1, "foo"]}]
+;;            (roundtrip-tx-op {"call" "put-fn"
+;;                              "args" [1, "foo"]})))
+
+;;   (t/is (= [[:sql "SELECT foo.bar FROM foo"]
+;;             {"sql" "SELECT foo.bar FROM foo"}]
+;;            (roundtrip-tx-op {"sql" "SELECT foo.bar FROM foo"}))))
