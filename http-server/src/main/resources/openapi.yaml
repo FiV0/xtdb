@@ -3,12 +3,39 @@ info:
   title: XTDB
 servers:
   - url: /
+components:
+  schemas:
 paths:
   /status:
     get:
       summary: Status
       description: Get status information from the node
       responses:
+        '200':
+          description: OK
+          content:
+            application/transit+json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    latest-completed-tx:
+                      type: object
+                      properties:
+                        tx-id:
+                          type: integer
+                        system-time:
+                          type: string
+                    latest-submitted-tx:
+                      type: object
+                      properties:
+                        tx-id:
+                          type: integer
+                        system-time:
+                          type: string
+                minItems: 1
+                maxItems: 1
         default:
           description: ''
           content: {}
