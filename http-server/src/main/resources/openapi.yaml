@@ -5,6 +5,12 @@ servers:
   - url: /
 components:
   schemas:
+    transit-put:
+      type: array
+      items:
+        oneOf:
+          - type: string
+          - type: Object
 paths:
   /status:
     get:
@@ -16,26 +22,22 @@ paths:
           content:
             application/transit+json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    latest-completed-tx:
-                      type: object
-                      properties:
-                        tx-id:
-                          type: integer
-                        system-time:
-                          type: string
-                    latest-submitted-tx:
-                      type: object
-                      properties:
-                        tx-id:
-                          type: integer
-                        system-time:
-                          type: string
-                minItems: 1
-                maxItems: 1
+                type: object
+                properties:
+                  latest-completed-tx:
+                    type: object
+                    properties:
+                      tx-id:
+                        type: integer
+                      system-time:
+                        type: string
+                  latest-submitted-tx:
+                    type: object
+                    properties:
+                      tx-id:
+                        type: integer
+                      system-time:
+                        type: string
         default:
           description: ''
           content: {}
@@ -53,6 +55,9 @@ paths:
               properties:
                 tx-ops:
                   type: array
+                  items:
+                    oneOf:
+                      - $ref: '#'#/components/schemas/transit-put'
                 opts:
                   title: xtdb.server/opts
                   type: object
