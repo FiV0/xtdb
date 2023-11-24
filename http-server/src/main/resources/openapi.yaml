@@ -131,10 +131,10 @@ paths:
     post:
       summary: Transaction
       description: |
-        Submits a transaction to the cluster. 
-        
-        See [XTQL Transactions](https://docs.xtdb.com/reference/main/xtql/txs) for details about different XT transaction operations. 
-        
+        Submits a transaction to the cluster.
+
+        See [XTQL Transactions](https://docs.xtdb.com/reference/main/xtql/txs) for details about different XT transaction operations.
+
         See [SQL Transactions](https://docs.xtdb.com/reference/main/sql/txs) for details about different SQL transaction operations.
       requestBody:
         content:
@@ -157,9 +157,9 @@ paths:
       summary: Query
       description: |
         Submits a query to the cluster.
-        
+
         See [XTQL queries](https://docs.xtdb.com/reference/main/xtql/queries) for details about how to construct queries.
-        
+
         See [SQL queries](https://docs.xtdb.com/reference/main/sql/queries) for details about SQL queries.
       requestBody:
         content:
