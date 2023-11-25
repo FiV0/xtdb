@@ -202,7 +202,10 @@ dependencies {
     testImplementation("cheshire", "cheshire", "5.11.0")
     testImplementation("org.xerial", "sqlite-jdbc", "3.39.3.0")
     testImplementation("org.clojure", "test.check", "1.1.1")
-    
+
+    // testing the remote client
+    testImplementation("pro.juxt.clojars-mirrors.hato", "hato", "0.8.2")
+
     // For generating clojure docs
     testImplementation("codox", "codox", "0.10.8")
 
@@ -250,7 +253,7 @@ tasks.create("build-codox", JavaExec::class) {
         "-e", "(require 'codox.main)",
         "-e", "(codox.main/generate-docs ${codoxOpts})"
     )
-    
+
     this.args = args
 }
 
