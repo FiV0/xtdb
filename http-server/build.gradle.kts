@@ -25,13 +25,16 @@ dependencies {
 
     api("metosin", "muuntaja", "0.6.8")
     api("metosin", "jsonista", "0.3.3")
-    api("metosin", "reitit-core", "0.5.15")
-    api("metosin", "reitit-interceptors", "0.5.15")
-    api("metosin", "reitit-ring", "0.5.15")
-    api("metosin", "reitit-http", "0.5.15")
-    api("metosin", "reitit-sieppari", "0.5.15")
-    api("metosin", "reitit-swagger", "0.5.15")
-    api("metosin", "reitit-spec", "0.5.15")
+    api("metosin", "reitit-core", "0.7.0-alpha7")
+    api("metosin", "reitit-interceptors", "0.7.0-alpha7")
+    api("metosin", "reitit-ring", "0.7.0-alpha7")
+    api("metosin", "reitit-http", "0.7.0-alpha7")
+    api("metosin", "reitit-sieppari", "0.7.0-alpha7")
+    api("metosin", "reitit-swagger", "0.7.0-alpha7")
+    api("metosin", "reitit-spec", "0.7.0-alpha7")
+    api("metosin", "ring-swagger", "0.26.2")
+    // api("metosin", "ring-swagger-ui", "4.19.1")
+    api("ring-cors", "ring-cors", "0.1.13")
 
     api("com.cognitect", "transit-clj", "1.0.329")
 }
