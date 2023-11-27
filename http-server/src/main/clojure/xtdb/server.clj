@@ -26,8 +26,10 @@
             [xtdb.error :as err]
             [xtdb.protocols :as xtp]
             [xtdb.serde :as serde]
-            [xtdb.util :as util])
-  (:import java.io.OutputStream
+            [xtdb.util :as util]
+            [xtdb.xtql.json :as xtj]
+            [xtdb.xtql.edn :as xte])
+  (:import (java.io OutputStream)
            (java.time Duration ZoneId)
            org.eclipse.jetty.server.Server
            xtdb.IResultSet
@@ -36,6 +38,7 @@
 (def ^:private muuntaja-opts
   (-> m/default-options
       (m/select-formats #{"application/json" "application/transit+json"})
+      (assoc-in [:formats "application/json" :decoder-opts] {:keywords? true})
       (assoc-in [:formats "application/transit+json" :decoder-opts :handlers]
                 serde/tj-read-handlers)
       (assoc-in [:formats "application/transit+json" :encoder-opts :handlers]
@@ -65,8 +68,24 @@
   {:get (fn [{:keys [node] :as _req}]
           {:status 200, :body (xtp/status node)})})
 
+(defn json-tx-ops-decoder []
+  (reify
+    mf/Decode
+    ;; TODO charset
+    (decode [_ data _charset]
+      (with-open [rdr (io/reader data)]
+        ;; TODO should this get its own parsing namespace
+        (->
+         (json/read rdr {:key-fn keyword})
+         (update :tx-ops #(mapv (fn [[op :as tx-op]]
+                                  (cond-> (update tx-op 0 keyword)
+                                    (not= "sql" op) (update 1 keyword))) %)))))))
+
 (defmethod route-handler :tx [_]
-  {:post {:handler (fn [{:keys [node] :as req}]
+  {:muuntaja (m/create (-> muuntaja-opts
+                           (assoc-in [:formats "application/json" :decoder] (json-tx-ops-decoder))))
+
+   :post {:handler (fn [{:keys [node] :as req}]
                      (let [{:keys [tx-ops opts]} (get-in req [:parameters :body])]
                        (-> (xtp/submit-tx& node tx-ops opts)
                            (util/then-apply (fn [tx]
@@ -109,7 +128,6 @@
 (defn- ->jsonl-resultset-encoder [_opts]
   (reify
     mf/EncodeToBytes
-    ;; we're required to be a sub-type of ETB but don't need to implement its fn.
 
     mf/EncodeToOutputStream
     (encode-to-output-stream [_ res _]
@@ -150,6 +168,20 @@
   (s/keys :req-un [::query],
           :opt-un [::basis ::basis-timeout ::args ::default-all-valid-time? ::default-tz ::key-fn]))
 
+(defn json-query-decoder []
+  (reify
+    mf/Decode
+    ;; TODO charset
+    (decode [_ data _charset]
+      (with-open [rdr (io/reader data)]
+        (->
+         (json/read rdr)
+         (update-keys keyword)
+         (update :query (fn [q]
+                          (if (string? q) ;; sql
+                            q
+                            (xte/unparse (xtj/parse-query q))))))))))
+
 (defmethod route-handler :query [_]
   {:muuntaja (m/create (-> muuntaja-opts
                            (assoc :return :output-stream)
@@ -158,7 +190,9 @@
                                      [->tj-resultset-encoder {:handlers serde/tj-write-handlers}])
 
                            (assoc-in [:formats "application/jsonl" :encoder]
-                                     [->jsonl-resultset-encoder {}])))
+                                     [->jsonl-resultset-encoder {}])
+
+                           (assoc-in [:formats "application/json" :decoder] (json-query-decoder))))
 
    :post {:handler (fn [{:keys [node parameters]}]
                      (let [{{:keys [query] :as query-opts} :body} parameters]
