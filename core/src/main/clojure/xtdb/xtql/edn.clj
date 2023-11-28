@@ -12,7 +12,8 @@
                        Query$Return Query$Unify Query$UnionAll Query$Where Query$With Query$WithCols Query$Without
                        Query$DocsTable Query$ParamTable Query$OrderDirection Query$OrderNulls
                        Query$UnnestCol Query$UnnestVar
-                       TemporalFilter TemporalFilter$AllTime TemporalFilter$At TemporalFilter$In VarSpec)))
+                       TemporalFilter TemporalFilter$AllTime TemporalFilter$At TemporalFilter$In VarSpec)
+           (xtdb.tx Ops$Call Ops$Delete Ops$Evict Ops$Put Ops$Sql)))
 
 ;; TODO inline once the type we support is fixed
 (defn- query-type? [q] (seq? q))
@@ -688,3 +689,41 @@
   DmlOps$AssertNotExists
   (unparse [query]
     (list 'assert-not-exists (unparse (.query query)))))
+
+(defn unparse-opts [valid-from valid-to]
+  (cond (and valid-to valid-from)
+        {:for-valid-time [:in valid-from valid-to]}
+        valid-to
+        {:for-valid-time [:to valid-to]}
+        valid-from
+        {:for-valid-time [:from valid-from]}))
+
+(extend-protocol Unparse
+  Ops$Put
+  (unparse [put]
+    (let [^Ops$Put put put
+          opts (unparse-opts (.validFrom put) (.validTo put))]
+      (cond->  [:put (.tableName put) (.doc put) ]
+        opts (conj opts))))
+
+  Ops$Delete
+  (unparse [delete]
+    (let [^Ops$Delete delete delete
+          opts (unparse-opts (.validFrom delete) (.validTo delete))]
+      (cond-> [:delete (.tableName delete) (.entityId delete)]
+        opts (conj opts))))
+
+  Ops$Evict
+  (unparse [delete]
+    (let [^Ops$Evict delete delete]
+      [:evict (.tableName delete) (.entityId delete)]))
+
+  Ops$Sql
+  (unparse [sql]
+    (let [^Ops$Sql sql sql]
+      [:sql (.sql sql)]))
+
+  Ops$Call
+  (unparse [call]
+    (let [^Ops$Call call call]
+      (into [:call (.fnId call)] (.args call)))))

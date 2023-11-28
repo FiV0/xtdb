@@ -36,6 +36,9 @@
   (t/is (= [#time/duration "PT3H1M35.23S" "PT3H1M35.23S" :duration]
            (roundtrip-value "PT3H1M35.23S" :duration)))
 
+  (t/is (= [#time/instant "2020-01-01T12:34:56.789Z" "2020-01-01T12:34:56.789Z" :instant]
+           (roundtrip-value "2020-01-01T12:34:56.789Z" :instant)))
+
   (t/is (= [[1 2 3] [1 2 3]]
            (roundtrip-expr [1 2 3]))
         "vectors")
@@ -292,4 +295,60 @@
              {"unnest" [{"y" "x"}]}]]
            (roundtrip-q [{"table" [{"x" [1 2 3]}]
                           "bind" ["x"]}
-                         {"unnest" [{"y" "x"}]}] ))))
+                         {"unnest" [{"y" "x"}]}]))))
+
+;;;;;;;;;;;;;;;;;;;;;;;
+;;; tx ops
+;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn- roundtrip-tx-op [tx-op]
+  (let [parsed (json/parse-tx-op tx-op)]
+    [(edn/unparse parsed) (json/unparse parsed)]))
+
+(deftest test-ops-parsing
+  (t/is (= [[:put :docs {:xt/id 1, :foo "bar"}]
+            {"put" "docs", "doc" {"xt/id" 1, "foo" "bar"}}]
+           (roundtrip-tx-op {"put" "docs"
+                             "doc" {"xt/id" 1 "foo" "bar"}}))
+        "put")
+
+  (t/is (= [[:put
+             :docs
+             {:xt/id 1, :foo "bar"}
+             {:for-valid-time
+              [:in
+               #time/instant "2020-01-01T12:34:56.789Z"
+               #time/instant "2020-01-01T12:34:56.789Z"]}]
+            {"put" "docs",
+             "doc" {"xt/id" 1, "foo" "bar"},
+             "opts"
+             {"for-valid-time"
+              ["in"
+               {"@value" "2020-01-01T12:34:56.789Z", "@type" "xt:instant"}
+               {"@value" "2020-01-01T12:34:56.789Z", "@type" "xt:instant"}]}}]
+
+           (roundtrip-tx-op {"put" "docs"
+                             "doc" {"xt/id" 1 "foo" "bar"}
+                             "opts" {"for-valid-time" ["in"
+                                                       {"@value" "2020-01-01T12:34:56.789Z" "@type" "xt:instant"}
+                                                       {"@value" "2020-01-01T12:34:56.789Z" "@type" "xt:instant"}]}}))
+        "put with opts")
+
+  (t/is (= [[:delete :docs 1] {"delete" "docs", "id" 1}]
+           (roundtrip-tx-op {"delete" "docs"
+                             "id" 1})))
+
+  (t/is (= [[:evict :docs 1] {"evict" "docs", "id" 1}]
+           (roundtrip-tx-op {"evict" "docs"
+                             "id" 1})))
+
+  ;; the key-fn is a string here
+  (t/is (= [[:call "put-fn" 1 "foo"]
+            {"call" "put-fn",
+             "args" [1, "foo"]}]
+           (roundtrip-tx-op {"call" "put-fn"
+                             "args" [1, "foo"]})))
+
+  (t/is (= [[:sql "SELECT foo.bar FROM foo"]
+            {"sql" "SELECT foo.bar FROM foo"}]
+           (roundtrip-tx-op {"sql" "SELECT foo.bar FROM foo"}))))
