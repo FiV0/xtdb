@@ -2,7 +2,7 @@
   (:require [xtdb.xtql.edn :as xtql.edn]
             [xtdb.tx-producer :as tx-producer]
             [xtdb.error :as err])
-  (:import [java.time Duration LocalDate LocalDateTime ZonedDateTime Instant]
+  (:import [java.time Duration LocalDate LocalDateTime ZonedDateTime Instant ZoneId]
            (java.util Date List)
            (xtdb.query Expr Expr$Bool Expr$Call Expr$Double Expr$Exists Expr$LogicVar Expr$Long Expr$Obj Expr$Subquery
                        Query Query$Aggregate Query$From Query$LeftJoin Query$Limit Query$Join Query$Limit
@@ -68,6 +68,7 @@
                 "xt:timestamp" (try-parse v #(LocalDateTime/parse %) l)
                 "xt:timestamptz" (try-parse v #(ZonedDateTime/parse %) l)
                 "xt:instant" (try-parse v #(Instant/parse %) l)
+                "xt:timezone" (try-parse v #(ZoneId/of %) l)
                 (throw (err/illegal-arg :xtql/unknown-type {:value v, :type t})))))
 
 (defn object->json-value [obj]
@@ -80,6 +81,7 @@
     (instance? LocalDateTime obj) {"@value" (str obj), "@type" "xt:timestamp"}
     (instance? ZonedDateTime obj) {"@value" (str obj), "@type" "xt:timestamptz"}
     (instance? Instant obj) {"@value" (str obj), "@type" "xt:instant"}
+    (instance? ZoneId obj) {"@value" (str obj), "@type" "xt:timezone"}
     :else obj))
 
 (defn- parse-literal [{v "@value", t "@type" :as l}]
@@ -108,6 +110,7 @@
                 "xt:timestamp" (Expr/val (try-parse v #(LocalDateTime/parse %) l))
                 "xt:timestamptz" (Expr/val (try-parse v #(ZonedDateTime/parse %) l))
                 "xt:instant" (Expr/val (try-parse v #(Instant/parse %) l))
+                "xt:timezone" (Expr/val (try-parse v #(ZoneId/of %) l))
                 (throw (err/illegal-arg :xtql/unknown-type {:value v, :type t})))))))
 
 (defn parse-expr [expr]
@@ -164,6 +167,7 @@
         (instance? LocalDateTime obj) {"@value" (str obj), "@type" "xt:timestamp"}
         (instance? ZonedDateTime obj) {"@value" (str obj), "@type" "xt:timestamptz"}
         (instance? Instant obj) {"@value" (str obj), "@type" "xt:instant"}
+        (instance? ZoneId obj) {"@value" (str obj), "@type" "xt:timezone"}
         :else (throw (UnsupportedOperationException. (format "obj: %s" (pr-str obj)))))))
 
   Expr$Exists

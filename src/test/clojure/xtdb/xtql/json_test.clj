@@ -39,6 +39,9 @@
   (t/is (= [#time/instant "2020-01-01T12:34:56.789Z" "2020-01-01T12:34:56.789Z" :instant]
            (roundtrip-value "2020-01-01T12:34:56.789Z" :instant)))
 
+  (t/is (= [#time/zone "America/Los_Angeles" "America/Los_Angeles"  :timezone]
+           (roundtrip-value "America/Los_Angeles" :timezone)))
+
   (t/is (= [[1 2 3] [1 2 3]]
            (roundtrip-expr [1 2 3]))
         "vectors")
