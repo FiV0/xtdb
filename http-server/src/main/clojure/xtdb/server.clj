@@ -170,13 +170,11 @@
     mf/Decode
     (decode [_ data _]
       (with-open [rdr (io/reader data)]
-        (->
-         (json/read rdr)
-         (update-keys keyword)
-         (update :query (fn [q]
-                          (if (string? q) ;; sql
-                            q
-                            (xte/unparse (xtj/parse-query q))))))))))
+        (let [{:strs [query] :as json-query} (json/read rdr)]
+          (-> (xtj/parse-query-opts (dissoc json-query "query"))
+              (assoc :query (if (string? query) ;; sql
+                              query
+                              (xte/unparse (xtj/parse-query query))))))))))
 
 (defmethod route-handler :query [_]
   {:muuntaja (m/create (-> muuntaja-opts

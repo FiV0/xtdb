@@ -670,3 +670,10 @@
     (let [^Ops$Call call call]
       {"call" (.fnId call)
        "args" (into [] (.args call))})))
+
+(defn parse-query-opts [query-opts]
+  (-> query-opts
+      (update-keys keyword)
+      (update :key-fn (comp parse-literal))
+      (update :default-tz parse-literal)
+      (update :args )))
