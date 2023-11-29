@@ -216,6 +216,21 @@
                  (select-keys [:status :body])))
           "unknown error")))
 
+(def json-tx-ops
+  [{"put" "docs"
+    "doc" {"xt/id" 1}}
+   {"put" "docs"
+    "doc" {"xt/id" 2}}
+   #_#_#_#_#_#_#_#_
+   [:delete :docs 2]
+   [:put :docs {:xt/id 3} {:for-valid-time [:in #inst "2023" #inst "2024"]}]
+   [:evict :docs 3]
+   [:sql "INSERT INTO docs (xt$id, bar, toto) VALUES (3, 1, 'toto')"]
+   [:sql "INSERT INTO docs (xt$id, bar, toto) VALUES (4, 1, 'toto')"]
+   [:sql "UPDATE docs SET bar = 2 WHERE docs.xt$id = 3"]
+   [:sql "DELETE FROM docs WHERE docs.bar = 2"]
+   [:sql "ERASE FROM docs WHERE docs.xt$id = 4"]])
+
 (deftest json-request-test
   (xt/submit-tx *node* [[:put :foo {:xt/id 1}]])
 
@@ -225,7 +240,7 @@
                               :request-method :post
                               :content-type :json
                               ;; TODO extend json encoding to instants
-                              :form-params {:tx-ops (take 2 possible-tx-ops)}
+                              :form-params {:tx-ops json-tx-ops}
                               :url (http-url "tx")})
                :body
                decode-transit))

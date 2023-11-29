@@ -71,15 +71,12 @@
 (defn json-tx-ops-decoder []
   (reify
     mf/Decode
-    ;; TODO charset
-    (decode [_ data _charset]
+    (decode [_ data _]
       (with-open [rdr (io/reader data)]
-        ;; TODO should this get its own parsing namespace
         (->
-         (json/read rdr {:key-fn keyword})
-         (update :tx-ops #(mapv (fn [[op :as tx-op]]
-                                  (cond-> (update tx-op 0 keyword)
-                                    (not= "sql" op) (update 1 keyword))) %)))))))
+         (json/read rdr)
+         (update-keys keyword)
+         (update :tx-ops #(mapv (comp xte/unparse xtj/parse-tx-op) %)))))))
 
 (defmethod route-handler :tx [_]
   {:muuntaja (m/create (-> muuntaja-opts
@@ -171,8 +168,7 @@
 (defn json-query-decoder []
   (reify
     mf/Decode
-    ;; TODO charset
-    (decode [_ data _charset]
+    (decode [_ data _]
       (with-open [rdr (io/reader data)]
         (->
          (json/read rdr)
