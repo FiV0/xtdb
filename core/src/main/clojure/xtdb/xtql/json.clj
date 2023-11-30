@@ -486,7 +486,6 @@
 (defn- tx-op-type [tx-op]
   (cond
     (map? tx-op) (let [tx-op (dissoc tx-op "doc" "id" "opts" "args")]
-                   (prn tx-op)
                    (if-not (= 1 (count tx-op))
                      (throw (err/illegal-arg :xtdb.tx/invalid-tx-op {:tx-op tx-op}))
                      (keyword (key (first tx-op)))))
