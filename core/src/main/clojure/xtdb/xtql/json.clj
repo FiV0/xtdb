@@ -683,6 +683,6 @@
 (defn parse-query-opts [query-opts]
   (-> query-opts
       (update-keys keyword)
-      (update :key-fn (comp parse-literal))
-      (update :default-tz parse-literal)
+      #_(update :key-fn (comp parse-literal))
+      #_(update :default-tz parse-literal)
       #_(update :args )))

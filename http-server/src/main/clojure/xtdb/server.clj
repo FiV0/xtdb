@@ -76,7 +76,7 @@
         (->
          (json/read rdr)
          (update-keys keyword)
-         (update :tx-ops #(mapv (comp xte/unparse xtj/parse-tx-op) %)))))))
+         (update :tx-ops #(mapv xtj/parse-tx-op %)))))))
 
 (defmethod route-handler :tx [_]
   {:muuntaja (m/create (-> muuntaja-opts

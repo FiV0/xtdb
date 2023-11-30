@@ -232,14 +232,13 @@
    [:sql "ERASE FROM docs WHERE docs.xt$id = 4"]])
 
 (deftest json-request-test
-  (xt/submit-tx *node* [[:put :foo {:xt/id 1}]])
+  (xt/submit-tx *node* [(xt/put :foo {:xt/id 1})])
 
   (t/is (= #xt/tx-key {:tx-id 1, :system-time #time/instant "2020-01-02T00:00:00Z"}
            (-> (http/request {:accept :transit+json
                               :as :string
                               :request-method :post
                               :content-type :json
-                              ;; TODO extend json encoding to instants
                               :form-params {:tx-ops json-tx-ops}
                               :url (http-url "tx")})
                :body
@@ -251,14 +250,13 @@
   (t/is (= #{{:xt/id 1} {:xt/id 2}}
            (set (xt/q *node* '(from :docs [xt/id])))))
 
-  (let [tx (xt/submit-tx *node* [[:put :docs {:xt/id 2 :name "Claude"}]])]
+  (let [tx (xt/submit-tx *node* [(xt/put :docs {:xt/id 2 :name "Claude"})])]
     (t/is (= #{{:xt/id 1} {:xt/id 2}}
              (-> (http/request {:accept :transit+json
                                 :as :string
                                 :request-method :post
                                 :content-type :json
                                 :form-params {:query {"from" "docs", "bind" ["xt/id"]}}
-                                :transit-opts xtc/transit-opts
                                 :url (http-url "query")})
                  :body
                  decode-transit*
