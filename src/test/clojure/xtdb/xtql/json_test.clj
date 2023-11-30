@@ -305,8 +305,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn- roundtrip-tx-op [tx-op]
-  (let [parsed (json/parse-tx-op tx-op)]
-    [(edn/unparse parsed) (json/unparse parsed)]))
+  (let [parsed (xjson/parse-tx-op tx-op)]
+    [(edn/unparse parsed) (xjson/unparse parsed)]))
 
 (deftest test-ops-parsing
   (t/is (= [[:put :docs {:xt/id 1, :foo "bar"}]

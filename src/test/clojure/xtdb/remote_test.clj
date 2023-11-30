@@ -250,7 +250,7 @@
   (t/is (= #{{:xt/id 1} {:xt/id 2}}
            (set (xt/q *node* '(from :docs [xt/id])))))
 
-  (let [tx (xt/submit-tx *node* [(xt/put :docs {:xt/id 2 :name "Claude"})])]
+  (let [_tx (xt/submit-tx *node* [(xt/put :docs {:xt/id 2 :name "Claude"})])]
     (t/is (= #{{:xt/id 1} {:xt/id 2}}
              (-> (http/request {:accept :transit+json
                                 :as :string
