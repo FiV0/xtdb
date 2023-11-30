@@ -1,13 +1,15 @@
 (ns xtdb.remote-test
-  (:require [clojure.test :as t :refer [deftest]]
+  (:require [clojure.data.json :as json]
             [clojure.string :as str]
-            [clojure.data.json :as json]
+            [clojure.test :as t :refer [deftest]]
+            [clojure.walk :as walk]
             [cognitect.transit :as transit]
             [juxt.clojars-mirrors.hato.v0v8v2.hato.client :as http]
             [xtdb.api :as xt]
             [xtdb.client.impl :as xtc]
+            [xtdb.serde :as serde]
             [xtdb.test-util :as tu :refer [*node*]]
-            [xtdb.serde :as serde])
+            [xtdb.xtql.json :as xtj])
   (:import (java.io ByteArrayInputStream EOFException)))
 
 ;; ONLY put stuff here where remote DIFFERS to in-memory
@@ -231,34 +233,59 @@
    [:sql "DELETE FROM docs WHERE docs.bar = 2"]
    [:sql "ERASE FROM docs WHERE docs.xt$id = 4"]])
 
+(defn- tx-key->json-tx-key [tx-key]
+  (-> (into {} tx-key)
+      (update :system-time xtj/object->json-value)))
+
+(tx-key->json-tx-key
+ #xt/tx-key  {:tx-id 1, :system-time #time/instant "2020-01-02T00:00:00Z"})
+
+
 (deftest json-request-test
-  (xt/submit-tx *node* [(xt/put :foo {:xt/id 1})])
+  (let [tx1 (xt/submit-tx *node* [(xt/put :docs {:xt/id 1})])
+        tx1-json (tx-key->json-tx-key tx1)]
 
-  (t/is (= #xt/tx-key {:tx-id 1, :system-time #time/instant "2020-01-02T00:00:00Z"}
-           (-> (http/request {:accept :transit+json
-                              :as :string
-                              :request-method :post
-                              :content-type :json
-                              :form-params {:tx-ops json-tx-ops}
-                              :url (http-url "tx")})
-               :body
-               decode-transit))
-        "testing tx")
-
-  (Thread/sleep 100)
-
-  (t/is (= #{{:xt/id 1} {:xt/id 2}}
-           (set (xt/q *node* '(from :docs [xt/id])))))
-
-  (let [_tx (xt/submit-tx *node* [(xt/put :docs {:xt/id 2 :name "Claude"})])]
-    (t/is (= #{{:xt/id 1} {:xt/id 2}}
+    (t/is (= #xt/tx-key {:tx-id 1, :system-time #time/instant "2020-01-02T00:00:00Z"}
              (-> (http/request {:accept :transit+json
                                 :as :string
                                 :request-method :post
                                 :content-type :json
-                                :form-params {:query {"from" "docs", "bind" ["xt/id"]}}
-                                :url (http-url "query")})
+                                :form-params {:tx-ops json-tx-ops}
+                                :url (http-url "tx")})
                  :body
-                 decode-transit*
-                 set))
-          "testing query")))
+                 decode-transit))
+          "testing tx")
+
+    (Thread/sleep 100)
+
+    (t/is (= #{{:xt/id 1} {:xt/id 2}}
+             (set (xt/q *node* '(from :docs [xt/id])))))
+
+    (let [tx2 (xt/submit-tx *node* [(xt/put :docs {:xt/id 2 :name "Claude"})])
+          tx2-json (tx-key->json-tx-key tx2)]
+      (t/is (= #{{:xt/id 1} {:xt/id 2}}
+               (-> (http/request {:accept :transit+json
+                                  :as :string
+                                  :request-method :post
+                                  :content-type :json
+                                  :form-params {:query {"from" "docs", "bind" ["xt/id"]}}
+                                  :url (http-url "query")})
+                   :body
+                   decode-transit*
+                   set))
+            "testing query")
+
+      (t/is (= #{{:xt$id 1}}
+               (-> (http/request {:accept :transit+json
+                                  :as :string
+                                  :request-method :post
+                                  :content-type :json
+                                  :form-params {:query {"from" "docs", "bind" ["xt/id"]}
+                                                :basis {:tx tx1-json
+                                                        :after-tx tx2-json}
+                                                :key-fn :sql}
+                                  :url (http-url "query")})
+                   :body
+                   decode-transit*
+                   set))
+            "testing query opts"))))

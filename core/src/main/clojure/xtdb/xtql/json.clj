@@ -1,6 +1,7 @@
 (ns xtdb.xtql.json
-  (:require [xtdb.xtql.edn :as xtql.edn]
-            [xtdb.tx-producer :as tx-producer]
+  (:require [clojure.walk :as walk]
+            [xtdb.api :as xt]
+            [xtdb.xtql.edn :as xtql.edn]
             [xtdb.error :as err])
   (:import [java.time Duration LocalDate LocalDateTime ZonedDateTime Instant ZoneId]
            (java.util Date List)
@@ -11,7 +12,7 @@
                        OutSpec ArgSpec ColSpec VarSpec Query$WithCols Query$DocsTable Query$ParamTable
                        Query$UnnestVar Query$UnnestCol
                        TemporalFilter TemporalFilter$AllTime TemporalFilter$At TemporalFilter$In)
-           (xtdb.tx Ops Ops$Abort Ops$Call Ops$Delete Ops$Erase Ops$Put Ops$Sql Ops$Xtql)))
+           (xtdb.tx Ops Ops$Call Ops$Delete Ops$Erase Ops$Put Ops$Sql)))
 
 (defn- query-type [query]
   (cond
@@ -681,8 +682,13 @@
        "args" (into [] (.args call))})))
 
 (defn parse-query-opts [query-opts]
-  (-> query-opts
-      (update-keys keyword)
-      #_(update :key-fn (comp parse-literal))
-      #_(update :default-tz parse-literal)
-      #_(update :args )))
+  (->
+   ;; TODO this should probably done at JSON parse time
+   (clojure.walk/postwalk (fn [v] (if (map? v)
+                                    (let [res (json-value->object v)]
+                                      (cond-> res
+                                        (map? res) (update-keys keyword)))
+                                    v))
+                          query-opts)
+   (update-in [:basis :tx] #(some-> % xt/map->TransactionKey))
+   (update-in [:basis :after-tx] #(some-> % xt/map->TransactionKey))))
