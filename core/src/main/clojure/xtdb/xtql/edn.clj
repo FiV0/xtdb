@@ -13,7 +13,7 @@
                        Query$DocsTable Query$ParamTable Query$OrderDirection Query$OrderNulls
                        Query$UnnestCol Query$UnnestVar
                        TemporalFilter TemporalFilter$AllTime TemporalFilter$At TemporalFilter$In VarSpec)
-           (xtdb.tx Ops$Call Ops$Delete Ops$Evict Ops$Put Ops$Sql)))
+           (xtdb.tx Ops$Call Ops$Delete Ops$Erase Ops$Put Ops$Sql)))
 
 ;; TODO inline once the type we support is fixed
 (defn- query-type? [q] (seq? q))
@@ -713,10 +713,10 @@
       (cond-> [:delete (.tableName delete) (.entityId delete)]
         opts (conj opts))))
 
-  Ops$Evict
+  Ops$Erase
   (unparse [delete]
-    (let [^Ops$Evict delete delete]
-      [:evict (.tableName delete) (.entityId delete)]))
+    (let [^Ops$Erase delete delete]
+      [:erase (.tableName delete) (.entityId delete)]))
 
   Ops$Sql
   (unparse [sql]

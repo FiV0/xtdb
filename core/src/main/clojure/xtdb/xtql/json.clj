@@ -11,7 +11,7 @@
                        OutSpec ArgSpec ColSpec VarSpec Query$WithCols Query$DocsTable Query$ParamTable
                        Query$UnnestVar Query$UnnestCol
                        TemporalFilter TemporalFilter$AllTime TemporalFilter$At TemporalFilter$In)
-           (xtdb.tx Ops Ops$Abort Ops$Call Ops$Delete Ops$Evict Ops$Put Ops$Sql Ops$Xtql)))
+           (xtdb.tx Ops Ops$Abort Ops$Call Ops$Delete Ops$Erase Ops$Put Ops$Sql Ops$Xtql)))
 
 (defn- query-type [query]
   (cond
@@ -495,9 +495,19 @@
 
 (defmulti parse-tx-op tx-op-type)
 
+
+(defn- expect-sql ^String [sql tx-op]
+  (if-not (string? sql)
+    (throw (err/illegal-arg :xtdb.tx/expected-sql
+                            {::err/message "Expected SQL query",
+                             :tx-op tx-op
+                             :sql sql}))
+
+    sql))
+
 ;; TODO extend for sql + params and sql-batch
 (defmethod parse-tx-op :sql [{:strs [sql] :as tx-op}]
-  (tx-producer/expect-sql sql tx-op)
+  (expect-sql sql tx-op)
   (Ops/sql sql))
 
 (def table? string?)
@@ -578,21 +588,21 @@
         doc (parse-doc doc tx-op)
         {:keys [^Instant valid-from, ^Instant valid-to]} (some-> opts (parse-temporal-opts tx-op))]
     (-> (Ops/put table-name doc)
-        (.validFrom valid-from)
-        (.validTo valid-to))))
+        (.startingFrom valid-from)
+        (.until valid-to))))
 
 (defmethod parse-tx-op :delete [{:strs [id opts] table-name "delete" :as tx-op}]
   (let [table-name (parse-table-name table-name tx-op)
         {:keys [^Instant valid-from, ^Instant valid-to]} (some-> opts (parse-temporal-opts tx-op))]
     (-> (Ops/delete table-name id)
-        (.validFrom valid-from)
-        (.validTo valid-to))))
+        (.startingFrom valid-from)
+        (.until valid-to))))
 
-(defmethod parse-tx-op :evict [{:strs [id] table-name "evict" :as tx-op} ]
+(defmethod parse-tx-op :erase [{:strs [id] table-name "erase" :as tx-op} ]
   (expect-eid id tx-op)
 
   (let [table-name (parse-table-name table-name tx-op)]
-    (Ops/evict table-name id)))
+    (Ops/erase table-name id)))
 
 ;; TODO
 (defmethod parse-tx-op :put-fn [{:as _tx-op}]
@@ -623,7 +633,7 @@
 
 (defmethod parse-tx-op :call [{:strs [args] fn-id "call" :as tx-op}]
   (expect-fn-id fn-id tx-op)
-  (Ops/call fn-id (into-array Object (parse-args args tx-op))))
+  (Ops/call fn-id (parse-args args tx-op)))
 
 (defn- unparse-instant [instant]
   {"@value" (str instant), "@type" "xt:instant"})
@@ -653,10 +663,10 @@
                "id" (.entityId delete)}
         opts (assoc "opts" opts))))
 
-  Ops$Evict
+  Ops$Erase
   (unparse [delete]
-    (let [^Ops$Evict delete delete]
-      {"evict" (subs (str (.tableName delete)) 1)
+    (let [^Ops$Erase delete delete]
+      {"erase" (subs (str (.tableName delete)) 1)
        "id" (.entityId delete)}))
 
   Ops$Sql
@@ -676,4 +686,4 @@
       (update-keys keyword)
       (update :key-fn (comp parse-literal))
       (update :default-tz parse-literal)
-      (update :args )))
+      #_(update :args )))

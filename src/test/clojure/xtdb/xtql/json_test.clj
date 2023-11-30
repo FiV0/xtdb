@@ -341,8 +341,8 @@
            (roundtrip-tx-op {"delete" "docs"
                              "id" 1})))
 
-  (t/is (= [[:evict :docs 1] {"evict" "docs", "id" 1}]
-           (roundtrip-tx-op {"evict" "docs"
+  (t/is (= [[:erase :docs 1] {"erase" "docs", "id" 1}]
+           (roundtrip-tx-op {"erase" "docs"
                              "id" 1})))
 
   ;; the key-fn is a string here
