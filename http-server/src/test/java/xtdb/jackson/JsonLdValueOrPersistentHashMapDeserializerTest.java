@@ -40,8 +40,8 @@ class JsonLdValueOrPersistentHashMapDeserializerTest {
     public void shouldDeserializeKeyword() throws IOException {
         // given
         String json = """
-                    {"@type":"xt:keyword","@value":"foo"}
-                    """;
+            {"@type":"xt:keyword","@value":"foo"}
+            """;
 
         // when
         Object actual = objectMapper.readValue(json, Object.class);
@@ -52,9 +52,9 @@ class JsonLdValueOrPersistentHashMapDeserializerTest {
     @Test
     public void shouldDeserializeSet() throws IOException {
         // given
-        String json = """
-               {"@type":"xt:set","@value":[{"@type":"xt:keyword","@value":"foo"},{"@type":"xt:keyword","@value":"toto"}]}
-               """;
+        String json = """ 
+            {"@type":"xt:set","@value":[{"@type":"xt:keyword","@value":"foo"},{"@type":"xt:keyword","@value":"toto"}]}
+            """;
 
         // when
         Object actual = objectMapper.readValue(json, Object.class);
@@ -66,9 +66,9 @@ class JsonLdValueOrPersistentHashMapDeserializerTest {
     @Test
     public void shouldDeserializeStandardPersistentMap() throws IOException {
         // given
-        String json = """
-                {"foo":"bar"}
-                """;
+        String json = """ 
+            {"foo":"bar"}
+            """;
 
         // when
         Object actual = objectMapper.readValue(json, Object.class);

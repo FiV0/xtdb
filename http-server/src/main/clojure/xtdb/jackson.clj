@@ -42,6 +42,13 @@
     "xtdb.RuntimeException" (err/runtime-err (:xtdb.error/error-key data) data)
     (ex-info message data)))
 
+;; TODO this only works in connection with keyword decoding
+(defn decode-throwable [{:xtdb.error/keys [message class data] :as m}]
+  (case class
+    "xtdb.IllegalArgumentException" (err/illegal-arg (:xtdb.error/error-key data) data)
+    "xtdb.RuntimeException" (err/runtime-err (:xtdb.error/error-key data) data)
+    (ex-info message data)))
+
 (defn json-ld-module
   "See jsonista.tagged/module but for Json-Ld reading/writing."
   ^SimpleModule
