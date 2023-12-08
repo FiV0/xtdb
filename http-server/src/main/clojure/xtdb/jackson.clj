@@ -17,8 +17,8 @@
            (java.time Duration Instant LocalDate LocalDateTime ZoneId ZonedDateTime)
            (java.util Date Map Set)
            (jsonista.jackson FunctionalSerializer)
-           (xtdb.jackson JsonLdValueOrPersistentHashMapDeserializer OpsDeserializer PutDeserializer)
-           (xtdb.tx Ops Put)))
+           (xtdb.jackson JsonLdValueOrPersistentHashMapDeserializer OpsDeserializer PutDeserializer DeleteDeserializer)
+           (xtdb.tx Ops Put Delete)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -88,7 +88,7 @@
     :decode-key-fn true
     :modules [(json-ld-module {:handlers handlers})]}))
 
-(def ^com.fasterxml.jackson.databind.ObjectMapper tx-op-mapper
+(def ^ObjectMapper tx-op-mapper
   (json/object-mapper {:encode-key-fn true
                        :decode-key-fn true
                        :modules [(doto (json-ld-module {:handlers handlers})
