@@ -21,10 +21,11 @@
                          DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer)
            (xtdb.tx Ops Put Delete Erase Tx Call)
            (xtdb.query Query OutSpec Query$From Query$Limit Query$Offset
-                       Query$QueryTail Query$Unify Query$UnifyClause
+                       Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline
                        QueryDeserializer OutSpecDeserializer FromDeserializer
                        LimitDeserializer OffsetDeserializer QueryTailDeserializer
-                       UnifyDeserializer UnifyClauseDeserializer)))
+                       UnifyDeserializer UnifyClauseDeserializer
+                       PipelineDeserializer)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -115,6 +116,7 @@
                 (.addDeserializer Query$QueryTail (QueryTailDeserializer.))
                 (.addDeserializer Query$Unify (UnifyDeserializer.))
                 (.addDeserializer Query$UnifyClause (UnifyClauseDeserializer.))
+                (.addDeserializer Query$Pipeline (PipelineDeserializer.))
                 (.addDeserializer Query$From (FromDeserializer.))
                 (.addDeserializer Query$Limit (LimitDeserializer.))
                 (.addDeserializer Query$Offset (OffsetDeserializer.))
