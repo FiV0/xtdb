@@ -17,8 +17,9 @@
            (java.time Duration Instant LocalDate LocalDateTime ZoneId ZonedDateTime)
            (java.util Date Map Set)
            (jsonista.jackson FunctionalSerializer)
-           (xtdb.jackson JsonLdValueOrPersistentHashMapDeserializer OpsDeserializer PutDeserializer DeleteDeserializer EraseDeserializer)
-           (xtdb.tx Ops Put Delete Erase)))
+           (xtdb.jackson JsonLdValueOrPersistentHashMapDeserializer OpsDeserializer PutDeserializer
+                         DeleteDeserializer EraseDeserializer TxDeserializer)
+           (xtdb.tx Ops Put Delete Erase Tx)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -96,4 +97,5 @@
                           (.addDeserializer Ops (OpsDeserializer.))
                           (.addDeserializer Put (PutDeserializer.))
                           (.addDeserializer Delete (DeleteDeserializer.))
-                          (.addDeserializer Erase (EraseDeserializer.)))]}))
+                          (.addDeserializer Erase (EraseDeserializer.))
+                          (.addDeserializer Tx (TxDeserializer.)))]}))
