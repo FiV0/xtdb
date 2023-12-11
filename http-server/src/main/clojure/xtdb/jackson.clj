@@ -18,8 +18,8 @@
            (java.util Date Map Set)
            (jsonista.jackson FunctionalSerializer)
            (xtdb.jackson JsonLdValueOrPersistentHashMapDeserializer OpsDeserializer PutDeserializer
-                         DeleteDeserializer EraseDeserializer TxDeserializer)
-           (xtdb.tx Ops Put Delete Erase Tx)))
+                         DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer)
+           (xtdb.tx Ops Put Delete Erase Tx Call)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -98,4 +98,5 @@
                           (.addDeserializer Put (PutDeserializer.))
                           (.addDeserializer Delete (DeleteDeserializer.))
                           (.addDeserializer Erase (EraseDeserializer.))
+                          (.addDeserializer Call (CallDeserializer.))
                           (.addDeserializer Tx (TxDeserializer.)))]}))
