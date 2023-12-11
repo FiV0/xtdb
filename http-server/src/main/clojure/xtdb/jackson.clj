@@ -20,8 +20,9 @@
            (xtdb.jackson JsonLdValueOrPersistentHashMapDeserializer OpsDeserializer PutDeserializer
                          DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer)
            (xtdb.tx Ops Put Delete Erase Tx Call)
-           (xtdb.query Query OutSpec Query$From
-                       QueryDeserializer OutSpecDeserializer FromDeserializer)))
+           (xtdb.query Query OutSpec Query$From Query$Limit Query$Offset
+                       QueryDeserializer OutSpecDeserializer FromDeserializer
+                       LimitDeserializer OffsetDeserializer)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -102,6 +103,7 @@
                           (.addDeserializer Erase (EraseDeserializer.))
                           (.addDeserializer Call (CallDeserializer.))
                           (.addDeserializer Tx (TxDeserializer.)))]}))
+
 (def ^ObjectMapper query-mapper
   (json/object-mapper
    {:encode-key-fn true
@@ -109,4 +111,6 @@
     :modules [(doto (json-ld-module {:handlers handlers})
                 (.addDeserializer Query (QueryDeserializer.))
                 (.addDeserializer Query$From (FromDeserializer.))
+                (.addDeserializer Query$Limit (LimitDeserializer.))
+                (.addDeserializer Query$Offset (OffsetDeserializer.))
                 (.addDeserializer OutSpec (OutSpecDeserializer.)))]}))
