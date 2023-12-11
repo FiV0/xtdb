@@ -21,9 +21,10 @@
                          DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer)
            (xtdb.tx Ops Put Delete Erase Tx Call)
            (xtdb.query Query OutSpec Query$From Query$Limit Query$Offset
-                       Query$QueryTail
+                       Query$QueryTail Query$Unify Query$UnifyClause
                        QueryDeserializer OutSpecDeserializer FromDeserializer
-                       LimitDeserializer OffsetDeserializer QueryTailDeserializer)))
+                       LimitDeserializer OffsetDeserializer QueryTailDeserializer
+                       UnifyDeserializer UnifyClauseDeserializer)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -112,6 +113,8 @@
     :modules [(doto (json-ld-module {:handlers handlers})
                 (.addDeserializer Query (QueryDeserializer.))
                 (.addDeserializer Query$QueryTail (QueryTailDeserializer.))
+                (.addDeserializer Query$Unify (UnifyDeserializer.))
+                (.addDeserializer Query$UnifyClause (UnifyClauseDeserializer.))
                 (.addDeserializer Query$From (FromDeserializer.))
                 (.addDeserializer Query$Limit (LimitDeserializer.))
                 (.addDeserializer Query$Offset (OffsetDeserializer.))
