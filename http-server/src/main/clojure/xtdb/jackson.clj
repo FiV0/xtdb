@@ -21,15 +21,15 @@
                          DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer)
            (xtdb.tx Ops Put Delete Erase Tx Call)
            (xtdb.query Query OutSpec Query$From Query$Limit Query$Offset Query$OrderBy
-                       Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return 
-                       Query$UnnestCol Query$UnnestVar
+                       Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return
+                       Query$UnnestCol Query$UnnestVar Expr
                        TransactionKey ArgSpec ColSpec VarSpec Basis QueryMap
                        QueryDeserializer OutSpecDeserializer FromDeserializer
-                       LimitDeserializer OffsetDeserializer OrderByDeserializer 
+                       LimitDeserializer OffsetDeserializer OrderByDeserializer
                        UnnestColDeserializer ReturnDeserializer QueryTailDeserializer
                        VarSpecDeserializer UnnestVarDeserializer UnifyDeserializer UnifyClauseDeserializer
                        PipelineDeserializer TxKeyDeserializer ArgSpecDeserializer ColSpecDeserializer
-                       BasisDeserializer QueryMapDeserializer)))
+                       BasisDeserializer QueryMapDeserializer ExprDeserializer)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -127,11 +127,12 @@
                 (.addDeserializer Query$Offset (OffsetDeserializer.))
                 (.addDeserializer Query$OrderBy (OrderByDeserializer.))
                 (.addDeserializer Query$Return (ReturnDeserializer.))
-                (.addDeserializer Query$UnnestCol (UnnestColDeserializer.)) 
+                (.addDeserializer Query$UnnestCol (UnnestColDeserializer.))
                 (.addDeserializer Query$UnnestVar (UnnestVarDeserializer.))
                 (.addDeserializer OutSpec (OutSpecDeserializer.))
                 (.addDeserializer ColSpec (ColSpecDeserializer.))
                 (.addDeserializer ArgSpec (ArgSpecDeserializer.))
                 (.addDeserializer VarSpec (VarSpecDeserializer.))
                 (.addDeserializer TransactionKey (TxKeyDeserializer.))
-                (.addDeserializer Basis (BasisDeserializer.)))]}))
+                (.addDeserializer Basis (BasisDeserializer.))
+                (.addDeserializer Expr (ExprDeserializer.)))]}))
