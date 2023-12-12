@@ -24,6 +24,7 @@
                        Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return
                        Query$With Query$WithCols Query$Without Query$UnnestCol Query$UnnestVar Expr
                        TransactionKey ArgSpec ColSpec VarSpec Basis QueryMap Query$Join Query$LeftJoin
+                       Query$Aggregate
                        QueryDeserializer OutSpecDeserializer FromDeserializer WhereDeserializer
                        LimitDeserializer OffsetDeserializer OrderByDeserializer
                        UnnestColDeserializer ReturnDeserializer QueryTailDeserializer
@@ -31,7 +32,7 @@
                        VarSpecDeserializer UnnestVarDeserializer UnifyDeserializer UnifyClauseDeserializer
                        PipelineDeserializer TxKeyDeserializer ArgSpecDeserializer ColSpecDeserializer
                        BasisDeserializer QueryMapDeserializer ExprDeserializer
-                       JoinDeserializer LeftJoinDeserializer)))
+                       JoinDeserializer LeftJoinDeserializer AggregateDeserializer)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -137,6 +138,7 @@
                 (.addDeserializer Query$Without (WithoutDeserializer.))
                 (.addDeserializer Query$Join (JoinDeserializer.))
                 (.addDeserializer Query$LeftJoin (LeftJoinDeserializer.))
+                (.addDeserializer Query$Aggregate (AggregateDeserializer.))
                 (.addDeserializer OutSpec (OutSpecDeserializer.))
                 (.addDeserializer ColSpec (ColSpecDeserializer.))
                 (.addDeserializer ArgSpec (ArgSpecDeserializer.))
