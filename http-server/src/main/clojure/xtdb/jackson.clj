@@ -21,12 +21,12 @@
                          DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer)
            (xtdb.tx Ops Put Delete Erase Tx Call)
            (xtdb.query Query OutSpec Query$From Query$Limit Query$Offset Query$OrderBy
-                       Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline
-                       TransactionKey ArgSpec Basis QueryMap
+                       Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return 
+                       TransactionKey ArgSpec ColSpec Basis QueryMap
                        QueryDeserializer OutSpecDeserializer FromDeserializer
-                       LimitDeserializer OffsetDeserializer OrderByDeserializer QueryTailDeserializer
+                       LimitDeserializer OffsetDeserializer OrderByDeserializer ReturnDeserializer QueryTailDeserializer
                        UnifyDeserializer UnifyClauseDeserializer
-                       PipelineDeserializer TxKeyDeserializer ArgSpecDeserializer
+                       PipelineDeserializer TxKeyDeserializer ArgSpecDeserializer ColSpecDeserializer
                        BasisDeserializer QueryMapDeserializer)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
@@ -124,7 +124,9 @@
                 (.addDeserializer Query$Limit (LimitDeserializer.))
                 (.addDeserializer Query$Offset (OffsetDeserializer.))
                 (.addDeserializer Query$OrderBy (OrderByDeserializer.))
+                (.addDeserializer Query$Return (ReturnDeserializer.))
                 (.addDeserializer OutSpec (OutSpecDeserializer.))
+                (.addDeserializer ColSpec (ColSpecDeserializer.))
                 (.addDeserializer ArgSpec (ArgSpecDeserializer.))
                 (.addDeserializer TransactionKey (TxKeyDeserializer.))
                 (.addDeserializer Basis (BasisDeserializer.)))]}))
