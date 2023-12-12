@@ -22,10 +22,12 @@
            (xtdb.tx Ops Put Delete Erase Tx Call)
            (xtdb.query Query OutSpec Query$From Query$Limit Query$Offset Query$OrderBy
                        Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return 
-                       TransactionKey ArgSpec ColSpec Basis QueryMap
+                       Query$UnnestCol Query$UnnestVar
+                       TransactionKey ArgSpec ColSpec VarSpec Basis QueryMap
                        QueryDeserializer OutSpecDeserializer FromDeserializer
-                       LimitDeserializer OffsetDeserializer OrderByDeserializer ReturnDeserializer QueryTailDeserializer
-                       UnifyDeserializer UnifyClauseDeserializer
+                       LimitDeserializer OffsetDeserializer OrderByDeserializer 
+                       UnnestColDeserializer ReturnDeserializer QueryTailDeserializer
+                       VarSpecDeserializer UnnestVarDeserializer UnifyDeserializer UnifyClauseDeserializer
                        PipelineDeserializer TxKeyDeserializer ArgSpecDeserializer ColSpecDeserializer
                        BasisDeserializer QueryMapDeserializer)))
 
@@ -125,8 +127,11 @@
                 (.addDeserializer Query$Offset (OffsetDeserializer.))
                 (.addDeserializer Query$OrderBy (OrderByDeserializer.))
                 (.addDeserializer Query$Return (ReturnDeserializer.))
+                (.addDeserializer Query$UnnestCol (UnnestColDeserializer.)) 
+                (.addDeserializer Query$UnnestVar (UnnestVarDeserializer.))
                 (.addDeserializer OutSpec (OutSpecDeserializer.))
                 (.addDeserializer ColSpec (ColSpecDeserializer.))
                 (.addDeserializer ArgSpec (ArgSpecDeserializer.))
+                (.addDeserializer VarSpec (VarSpecDeserializer.))
                 (.addDeserializer TransactionKey (TxKeyDeserializer.))
                 (.addDeserializer Basis (BasisDeserializer.)))]}))
