@@ -24,14 +24,14 @@
                        Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return
                        Query$With Query$WithCols Query$Without Query$UnnestCol Query$UnnestVar Expr
                        TransactionKey Basis QueryMap
-                       Query$Aggregate Query$Relation Query$AJoin
+                       Query$Aggregate Query$Relation Query$IJoin
                        QueryDeserializer FromDeserializer WhereDeserializer
                        LimitDeserializer OffsetDeserializer OrderByDeserializer
                        UnnestColDeserializer ReturnDeserializer QueryTailDeserializer
-                       WithDeserializer WithColsDeserializer WithoutDeserializer UnnestVarDeserializer 
+                       WithDeserializer WithColsDeserializer WithoutDeserializer UnnestVarDeserializer
                        UnifyDeserializer UnifyClauseDeserializer PipelineDeserializer TxKeyDeserializer
                        BasisDeserializer QueryMapDeserializer ExprDeserializer
-                       AggregateDeserializer RelDeserializer AJoinDeserializer)))
+                       AggregateDeserializer RelDeserializer IJoinDeserializer)))
 
 (defn serializer ^FunctionalSerializer [^String tag encoder]
   (FunctionalSerializer.
@@ -135,7 +135,7 @@
                 (.addDeserializer Query$With (WithDeserializer.))
                 (.addDeserializer Query$WithCols (WithColsDeserializer.))
                 (.addDeserializer Query$Without (WithoutDeserializer.))
-                (.addDeserializer Query$AJoin (AJoinDeserializer.))
+                (.addDeserializer Query$IJoin (IJoinDeserializer.))
                 (.addDeserializer Query$Aggregate (AggregateDeserializer.))
                 (.addDeserializer Query$Relation (RelDeserializer.))
                 (.addDeserializer TransactionKey (TxKeyDeserializer.))
