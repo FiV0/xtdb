@@ -394,7 +394,7 @@
   (let [tx-key (TransactionKey. 1 #time/instant "2023-12-06T09:31:27.570827956Z")]
     (t/is (= (QueryMap. (-> (Query/from "docs")
                             (.binding [(OutSpec/of "xt/id" (Expr/lVar "xt/id"))]))
-                        {:id :foo}
+                        {"id" :foo}
                         (Basis. tx-key Instant/EPOCH)
                         tx-key
                         #time/duration "PT3H"
