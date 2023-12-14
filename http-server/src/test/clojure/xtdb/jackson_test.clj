@@ -133,14 +133,14 @@
 
 (deftest deserialize-tx-test
   (t/is (= (Tx. [#xt.tx/put {:table-name :docs,
-                             :doc {:xt/id "my-id"},
+                             :doc {"xt/id" "my-id"},
                              :valid-from nil,
                              :valid-to nil}], nil, nil)
            (roundtrip-tx {"tx_ops" [{"put" "docs"
                                      "doc" {"xt/id" "my-id"}}]})))
 
   (t/is (= (Tx. [#xt.tx/put {:table-name :docs,
-                             :doc {:xt/id "my-id"},
+                             :doc {"xt/id" "my-id"},
                              :valid-from nil,
                              :valid-to nil}],
                 #time/date-time "2020-01-01T12:34:56.789"

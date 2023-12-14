@@ -104,16 +104,16 @@
     :modules [(json-ld-module {:handlers handlers})]}))
 
 (def ^ObjectMapper tx-op-mapper
-  (json/object-mapper {:encode-key-fn true
-                       :decode-key-fn true
-                       :modules
-                       [(doto (json-ld-module {:handlers handlers})
-                          (.addDeserializer Ops (OpsDeserializer.))
-                          (.addDeserializer Put (PutDeserializer.))
-                          (.addDeserializer Delete (DeleteDeserializer.))
-                          (.addDeserializer Erase (EraseDeserializer.))
-                          (.addDeserializer Call (CallDeserializer.))
-                          (.addDeserializer Tx (TxDeserializer.)))]}))
+  (let [tx-deserializer-module (doto (SimpleModule. "TxDeserializerModule")
+                                 (.addDeserializer Ops (OpsDeserializer.))
+                                 (.addDeserializer Put (PutDeserializer.))
+                                 (.addDeserializer Delete (DeleteDeserializer.))
+                                 (.addDeserializer Erase (EraseDeserializer.))
+                                 (.addDeserializer Call (CallDeserializer.))
+                                 (.addDeserializer Tx (TxDeserializer.)))]
+    (doto (ObjectMapper.)
+      (.registerModule (json-ld-module {:handlers handlers}))
+      (.registerModule tx-deserializer-module))))
 
 (def ^ObjectMapper query-mapper
   (let [query-deserializer-module (doto (SimpleModule. "QueryRequestDeserializerModule")
