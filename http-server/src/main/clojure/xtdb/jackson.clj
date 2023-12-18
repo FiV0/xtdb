@@ -24,14 +24,14 @@
            (xtdb.query Query Query$From Query$Where Query$Limit Query$Offset Query$OrderBy
                        Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return
                        Query$With Query$WithCols Query$Without Query$UnnestCol Query$UnnestVar Expr
-                       VarSpec ColSpec Basis QueryRequest
+                       VarSpec ColSpec Basis QueryRequest QueryOpts
                        Query$Aggregate Query$Relation Query$IJoin
                        QueryDeserializer FromDeserializer WhereDeserializer
                        LimitDeserializer OffsetDeserializer OrderByDeserializer
                        UnnestColDeserializer ReturnDeserializer QueryTailDeserializer
                        WithDeserializer WithColsDeserializer WithoutDeserializer UnnestVarDeserializer
                        UnifyDeserializer UnifyClauseDeserializer PipelineDeserializer TxKeyDeserializer
-                       BasisDeserializer QueryRequestDeserializer ExprDeserializer
+                       BasisDeserializer QueryRequestDeserializer QueryOptsDeserializer ExprDeserializer
                        AggregateDeserializer RelDeserializer IJoinDeserializer
                        VarSpecDeserializer ColSpecDeserializer)))
 
@@ -119,6 +119,7 @@
   (let [query-deserializer-module (doto (SimpleModule. "QueryRequestDeserializerModule")
                                     (.addDeserializer QueryRequest (QueryRequestDeserializer.))
                                     (.addDeserializer Query (QueryDeserializer.))
+                                    (.addDeserializer QueryOpts (QueryOptsDeserializer.))
                                     (.addDeserializer Query$QueryTail (QueryTailDeserializer.))
                                     (.addDeserializer Query$Unify (UnifyDeserializer.))
                                     (.addDeserializer Query$UnifyClause (UnifyClauseDeserializer.))
