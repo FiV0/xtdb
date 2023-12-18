@@ -19,8 +19,8 @@
            (jsonista.jackson FunctionalSerializer)
            (xtdb.api TransactionKey)
            (xtdb.jackson JsonLdValueOrPersistentHashMapDeserializer OpsDeserializer PutDeserializer
-                         DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer)
-           (xtdb.tx Ops Put Delete Erase Tx Call)
+                         DeleteDeserializer EraseDeserializer TxDeserializer CallDeserializer TxOptionsDeserializer)
+           (xtdb.tx Ops Put Delete Erase Tx Call TxOptions)
            (xtdb.query Query Query$From Query$Where Query$Limit Query$Offset Query$OrderBy
                        Query$QueryTail Query$Unify Query$UnifyClause Query$Pipeline Query$Return
                        Query$With Query$WithCols Query$Without Query$UnnestCol Query$UnnestVar Expr
@@ -110,7 +110,8 @@
                                  (.addDeserializer Delete (DeleteDeserializer.))
                                  (.addDeserializer Erase (EraseDeserializer.))
                                  (.addDeserializer Call (CallDeserializer.))
-                                 (.addDeserializer Tx (TxDeserializer.)))]
+                                 (.addDeserializer Tx (TxDeserializer.))
+                                 (.addDeserializer TxOptions (TxOptionsDeserializer.)))]
     (doto (ObjectMapper.)
       (.registerModule (json-ld-module {:handlers handlers}))
       (.registerModule tx-deserializer-module))))
