@@ -741,3 +741,17 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')")])
            (xt/q tu/*node*
                  '(from :people [{:xt/id $pid} name age])
                  {:explain? true}))))
+
+(t/deftest test-transit-encoding-of-ast-objects-3019
+  (t/is (thrown-with-msg? IllegalArgumentException
+                          #"Not all variables in expression are in scope"
+                          (xt/q tu/*node*
+                                '(-> (from :album [xt/id])
+                                     (return foo)))))
+  (t/is (thrown-with-msg? IllegalArgumentException
+                          #"Scalar subquery must only return a single column"
+                          (xt/q tu/*node*
+                                '(-> (from :album [xt/id])
+                                     (with {:foo (q (from :artist [xt/id name]))})))))
+
+  )
