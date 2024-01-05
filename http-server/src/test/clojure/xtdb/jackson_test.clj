@@ -9,7 +9,7 @@
            (xtdb.api TransactionKey TxOptions)
            (xtdb.jackson XtdbMapper)
            (xtdb.query Basis Binding Expr Expr Query Query$OrderDirection Query$OrderNulls Query$QueryTail Query$Unify QueryOpts QueryRequest TemporalFilter)
-           (xtdb.tx Ops Tx Sql)))
+           (xtdb.tx AOps Tx Sql)))
 
 (defn- roundtrip-json-ld [v]
   (-> (json/write-value-as-string v jackson/json-ld-mapper)

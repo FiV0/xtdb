@@ -2,12 +2,13 @@ package xtdb.query
 
 import xtdb.query.Query.UnifyClause
 import xtdb.query.TemporalFilter.TemporalExtents
+import xtdb.tx.AOps
 
-sealed interface DmlOps {
+sealed class DmlOps : AOps(){
     data class Insert(
         @JvmField val table: String,
         @JvmField val query: Query
-    ) : DmlOps
+    ) : DmlOps()
 
     data class Update(
         @JvmField val table: String,
@@ -15,7 +16,7 @@ sealed interface DmlOps {
         @JvmField val forValidTime: TemporalExtents? = null,
         @JvmField val bindSpecs: List<Binding>? = null,
         @JvmField val unifyClauses: List<UnifyClause>? = null
-    ) : DmlOps {
+    ) : DmlOps() {
 
         fun forValidTime(forValidTime: TemporalExtents) = copy(forValidTime = forValidTime)
         fun binding(bindSpecs: List<Binding>) = copy(bindSpecs = bindSpecs)
@@ -27,7 +28,7 @@ sealed interface DmlOps {
         @JvmField val forValidTime: TemporalExtents? = null,
         @JvmField val bindSpecs: List<Binding>? = null,
         @JvmField val unifyClauses: List<UnifyClause?>? = null
-    ) : DmlOps {
+    ) : DmlOps() {
 
         fun forValidTime(forValidTime: TemporalExtents) = copy(forValidTime = forValidTime)
         fun binding(bindSpecs: List<Binding>?) = copy(bindSpecs = bindSpecs)
@@ -38,14 +39,14 @@ sealed interface DmlOps {
         @JvmField val table: String,
         @JvmField val bindSpecs: List<Binding>? = null,
         @JvmField val unifyClauses: List<UnifyClause>? = null
-    ) : DmlOps {
+    ) : DmlOps() {
 
         fun binding(bindSpecs: List<Binding>?) = copy(bindSpecs = bindSpecs)
         fun unify(unifyClauses: List<UnifyClause>?) = Erase(table, bindSpecs, unifyClauses)
     }
 
-    class AssertExists(@JvmField val query: Query) : DmlOps
-    class AssertNotExists(@JvmField val query: Query) : DmlOps
+    class AssertExists(@JvmField val query: Query) : DmlOps()
+    class AssertNotExists(@JvmField val query: Query) : DmlOps()
 
     companion object {
         @JvmStatic

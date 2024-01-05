@@ -14,14 +14,16 @@ import static xtdb.query.Query.*;
 
 public class XtdbMapper {
     public static final SimpleModule TX_DESERIALIZER_MODULE = new SimpleModule("TxDeserializerModule")
-            .addDeserializer(Ops.class, new OpsDeserializer())
+            .addDeserializer(AOps.class, new AOpsDeserializer())
             .addDeserializer(Put.class, new PutDeserializer())
             .addDeserializer(Delete.class, new DeleteDeserializer())
             .addDeserializer(Erase.class, new EraseDeserializer())
             .addDeserializer(Call.class, new CallDeserializer())
             .addDeserializer(Sql.class, new SqlOpDeserializer())
             .addDeserializer(Tx.class, new TxDeserializer())
-            .addDeserializer(TxOptions.class, new TxOptionsDeserializer());
+            .addDeserializer(TxOptions.class, new TxOptionsDeserializer())
+            .addDeserializer(DmlOps.Insert.class, new InsertDeserializer())
+            .addDeserializer(DmlOps.Update.class, new UpdateDeserializer());
 
     public static final ObjectMapper TX_OP_MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule())

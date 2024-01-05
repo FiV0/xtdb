@@ -11,7 +11,7 @@ private val XT_TXS: Keyword = Keyword.intern("xt", "tx-fns")
 private val XT_ID: Keyword = Keyword.intern("xt", "id")
 private val XT_FN: Keyword = Keyword.intern("xt", "fn")
 
-sealed class Ops {
+sealed class Ops : AOps() {
     @Suppress("unused")
     interface HasArgs<ArgType, O : HasArgs<ArgType, O>?> {
         fun withArgs(args: List<ArgType>?): O
