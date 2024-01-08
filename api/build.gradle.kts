@@ -5,8 +5,8 @@ plugins {
     id("dev.clojurephant.clojure")
     `maven-publish`
     signing
-    kotlin("jvm") version "1.9.22"
-    kotlin("plugin.serialization") version "1.9.22"
+    kotlin("jvm")
+    kotlin("plugin.serialization")
 }
 
 publishing {

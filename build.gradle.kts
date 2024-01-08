@@ -7,6 +7,8 @@ plugins {
     `java-library`
     id("dev.clojurephant.clojure") version "0.7.0"
     id("io.freefair.aggregate-javadoc") version "6.6"
+    kotlin("jvm")
+    kotlin("plugin.serialization")
 }
 
 val defaultJvmArgs = listOf(

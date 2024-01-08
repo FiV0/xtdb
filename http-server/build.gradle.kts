@@ -6,6 +6,7 @@ plugins {
     `maven-publish`
     signing
     kotlin("jvm")
+    kotlin("plugin.serialization")
 }
 
 publishing {
@@ -38,6 +39,7 @@ dependencies {
     api("com.cognitect", "transit-clj", "1.0.329")
 
     api(kotlin("stdlib-jdk8"))
+    implementation("org.jetbrains.kotlinx", "kotlinx-serialization-json", "1.6.0")
 
     testImplementation(project(":"))
     testImplementation(project(":http-client-clj"))
