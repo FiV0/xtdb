@@ -32,8 +32,7 @@ dependencies {
     api("org.apache.arrow", "arrow-vector", "14.0.0")
     api("org.apache.arrow", "arrow-memory-netty", "14.0.0")
     api(kotlin("stdlib-jdk8"))
-    implementation("org.jetbrains.kotlinx", "kotlinx-serialization-json", "1.6.0")
-    implementation("org.jetbrains.kotlinx", "kotlinx-datetime", "0.5.0")
+    api("org.jetbrains.kotlinx", "kotlinx-serialization-json", "1.6.0")
 }
 
 tasks.javadoc {
