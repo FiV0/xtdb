@@ -54,5 +54,10 @@ tasks.javadoc.get().enabled = false
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+
+        java {
+            freeCompilerArgs.addAll(listOf("-Xjvm-default=all","-opt-in=kotlinx.serialization.ExperimentalSerializationApi"))
+        }
+
     }
 }

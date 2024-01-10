@@ -3,19 +3,17 @@ package xtdb.jackson
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.modules.serializersModuleOf
+import kotlinx.serialization.modules.SerializersModule
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 import java.time.Instant
 
-val json = Json { serializersModule
-//     SerializersModule {
-//        contextual(Map::class, JsonLdOrMapDeserializer),
-//         contextual(Map::class, JsonLdOrMapDeserializer)
-//
-//    }
-    serializersModuleOf(Map::class, JsonLdOrMapDeserializer as KSerializer<Map<*, *>>)
 
+val json = Json { serializersModule
+     SerializersModule {
+         contextual(Map::class, JsonLdOrMapDeserializer as KSerializer<Map<*,*>>)
+         contextual(Instant::class, JsonLdOrMapDeserializer as KSerializer<Instant>)
+    }
 }
 
 

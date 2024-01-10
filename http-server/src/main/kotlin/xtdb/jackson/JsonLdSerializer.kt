@@ -1,11 +1,11 @@
 package xtdb.jackson
 
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.descriptors.element
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.*
 import java.time.Instant
 import java.time.LocalDate
@@ -50,10 +50,10 @@ class JsonLdSerializer() : KSerializer<Any> {
             val type = jsonObject["@type"]
             val value = jsonObject["@value"]
             val parser : ((Any) -> Any)? = tagToParser.get<Any?, (Any) -> Any>(type)
-            if (parser != null) {
-                return parser(value!!)
+            return if (parser != null) {
+                parser(value!!)
             } else {
-               return decoder.json.decodeFromJsonElement(jsonObject)
+                decoder.json.decodeFromJsonElement(jsonObject)
             }
         } else {
             return decoder.json.decodeFromJsonElement(jsonObject)
