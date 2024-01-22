@@ -384,16 +384,58 @@ DML-Insert-sql: |
   FROM old_users AS ou
   -- end::DML-Insert-sql[]
 
+DML-Insert-json: |
+  // tag::DML-Insert-json[]
+  {
+      "insertInto": "users",
+      "query": {
+          "from": "old-users",
+          "bind": ["xt/id", {"given-name": {"xt:lvar": "first-name"}}, {"surname": {"xt:lvar": "last-name"}},
+                   "xt/valid-from", "xt/valid-to"]
+      }
+  }
+  // end::DML-Insert-json[]
+
 DML-Delete-sql: |
   -- tag::DML-Delete-sql[]
   DELETE FROM comments WHERE comments.post_id = ?
   -- end::DML-Delete-sql[]
+
+DML-Delete-json: |
+  // tag::DML-Delete-json[]
+  {
+      "op": {
+          "deleteFrom": "comments",
+          "bindSpecs": [{"post-id": {"xt:param": "$post-id"}}]
+      },
+      "args": [{"post-id": 1}]
+  }
+  // end::DML-Delete-json[]
 
 DML-Delete-additional-unify-clauses-sql: |
   -- tag::DML-Delete-additional-unify-clauses-sql[]
   DELETE FROM comments
   WHERE comments.post_id IN (SELECT posts.xt$id FROM posts WHERE posts.author_id = ?)
   -- end::DML-Delete-additional-unify-clauses-sql[]
+
+DML-Delete-bitemporal-json: |
+  // tag::DML-Delete-json[]
+  {
+       "deleteFrom": "promotions",
+       "forValidTime": {
+           "from": {
+               "@type": "xt:instant",
+               "@value": "2023-12-26T00:00:00Z"
+           }
+       },
+       "bindSpecs": [
+           {
+               "promotion-type": "christmas"
+           }
+       ]
+  }
+  // end::DML-Delete-json[]
+
 
 DML-Delete-bitemporal-sql: |
   -- tag::DML-Delete-bitemporal-sql[]
@@ -406,6 +448,13 @@ DML-Delete-everything-sql: |
   -- tag::DML-Delete-everything-sql[]
   DELETE FROM comments
   -- end::DML-Delete-everything-sql[]
+
+DML-Delete-everything-json: |
+  // tag::DML-Delete-everything-json[]
+  {
+       "deleteFrom": "comments"
+  }
+  // end::DML-Delete-everything-json[]
 
 DML-Update-sql: |
   -- tag::DML-Update-sql[]
@@ -425,12 +474,109 @@ DML-Update-bitemporal-sql-2: |
   WHERE p.post_id = ?
   -- end::DML-Update-bitemporal-sql-2[]
 
+DML-Update-bitemporal-json: |
+  // tag::DML-Update-bitemporal-json[]
+  {
+      "op": {
+          "updateTable": "posts",
+          "setSpecs": [
+              {
+                  "comment-count": {
+                      "xt:lvar": "cc"
+                  }
+              }
+          ],
+          "bindSpecs": [
+              {
+                  "xt/id": {
+                      "xt:param": "$post-id"
+                  }
+              }
+          ],
+          "unifyClauses": [
+              {
+                  "with": [
+                      {
+                          "cc": {
+                              "xt:q": [
+                                  {
+                                      "from": "comments",
+                                      "bind": [
+                                          {
+                                              "post-id": {
+                                                  "xt:param": "$post-id"
+                                              }
+                                          }
+                                      ]
+                                  },
+                                  {
+                                      "aggregate": [
+                                          {
+                                              "cc": {
+                                                  "xt:call": "row-count",
+                                                  "args": [
+                                                  ]
+                                              }
+                                          }
+                                      ]
+                                  }
+                              ]
+                          }
+                      }
+                  ]
+              }
+          ]
+      },
+      "args": [
+          {
+              "post-id": "my-post-id"
+          }
+      ]
+  }
+  // end::DML-Update-bitemporal-json[]
+
+
 DML-Erase-sql: |
   -- tag::DML-Erase-sql[]
   ERASE FROM users WHERE users.email = 'jms@example.com'
   -- end::DML-Erase-sql[]
 
-DML-Assert-sql: |
+DML-Erase-json: |
+  // tag::DML-Erase-json[]
+  {
+      "eraseFrom": "users",
+      "bindSpecs": [
+          {
+              "email": "jms@example.com"
+          }
+      ]
+  }
+  // end::DML-Erase-json[]
+
+DML-Assert-Not-sql: |
   -- tag::DML-Assert-sql[]
   ASSERT NOT EXISTS (SELECT 1 FROM users WHERE email = 'james@juxt.pro')
   -- end::DML-Assert-sql[]
+
+DML-Assert-Not-json: |
+  // tag::DML-Erase-json[]
+  {
+      "op": {
+          "assertNotExists": {
+              "from": "users",
+              "bind": [
+                  {
+                      "email": {
+                          "xt:param": "$email"
+                      }
+                  }
+              ]
+          }
+      },
+      "args": [
+          {
+              "email": "james@example.com"
+          }
+      ]
+  }
+  // end::DML-Erase-json[]
