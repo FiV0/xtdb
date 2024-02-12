@@ -15,7 +15,10 @@
 (def user-id (partial str "u_"))
 (def region-id (partial str "r_"))
 (def item-id (partial str "i_"))
+(def item-image-id (partial str "ii_"))
+(def item-comment-id (partial str "ic_"))
 (def item-bid-id (partial str "ib_"))
+(def item-feedback-id (partial str "if_"))
 (def category-id (partial str "c_"))
 (def global-attribute-group-id (partial str "gag_"))
 (def gag-id global-attribute-group-id)
@@ -104,42 +107,42 @@
          ;; increment number of bids on item
          i
          (conj [:put-docs :item (assoc (first (q '~item-query {:args {:i i}, :key-fn :snake-case-keyword}))
-                                  :i_num_bids (inc nbids))])
+                                       :i_num_bids (inc nbids))])
 
          ;; if new bid exceeds old, bump it
          upd_curr_bid
          (conj [:put-docs :item-max-bid (assoc (first (q '~item-max-bid-query {:args {:imb imb}, :key-fn :snake-case-keyword}))
-                                          :imb_bid bid)])
+                                               :imb_bid bid)])
 
          ;; we exceed the old max, win the bid.
          (and curr_bid new_bid_win)
          (conj [:put-docs :item-max-bid (assoc (first (q '~item-max-bid-query {:args {:imb imb}, :key-fn :snake-case-keyword}))
-                                          :imb_ib_id new_bid_id
-                                          :imb_ib_u_id u_id
-                                          :imb_updated now)])
+                                               :imb_ib_id new_bid_id
+                                               :imb_ib_u_id u_id
+                                               :imb_updated now)])
 
          ;; no previous max bid, insert new max bid
          (nil? imb_ib_id)
          (conj [:put-docs :item-max-bid {:xt/id (composite-id-fn new_bid_id i_id)
-                                    :imb_i_id i_id
-                                    :imb_u_id u_id
-                                    :imb_ib_id new_bid_id
-                                    :imb_ib_i_id i_id
-                                    :imb_ib_u_id u_id
-                                    :imb_created now
-                                    :imb_updated now}])
+                                         :imb_i_id i_id
+                                         :imb_u_id u_id
+                                         :imb_ib_id new_bid_id
+                                         :imb_ib_i_id i_id
+                                         :imb_ib_u_id u_id
+                                         :imb_created now
+                                         :imb_updated now}])
 
          :always
          ;; add new bid
          (conj [:put-docs :item-bid {:xt/id new_bid_id
-                                :ib_id new_bid_id
-                                :ib_i_id i_id
-                                :ib_u_id u_id
-                                :ib_buyer_id i_buyer_id
-                                :ib_bid new_bid
-                                :ib_max_bid max_bid
-                                :ib_created_at now
-                                :ib_updated now}]))))))
+                                     :ib_id new_bid_id
+                                     :ib_i_id i_id
+                                     :ib_u_id u_id
+                                     :ib_buyer_id i_buyer_id
+                                     :ib_bid new_bid
+                                     :ib_max_bid max_bid
+                                     :ib_created_at now
+                                     :ib_updated now}]))))))
 
 (defn- sample-category-id [worker]
   (if-some [weighting (::category-weighting (:custom-state worker))]
@@ -216,17 +219,17 @@
          (xt/submit-tx (:sut worker)))))
 
 ;; represents a probable state of an item that can be sampled randomly
-(defrecord ItemSample [i_id, i_u_id, i_status, i_end_date, i_num_bids])
+(defrecord ItemSample [i_id, i_u_id, i_status, i_start_date i_end_date, i_num_bids])
 
 (defn item-status-groups [node]
-  (let [items (xt/q node '(from :item [{:xt/id i} i_id i_u_id i_status i_end_date i_num_bids])
+  (let [items (xt/q node '(from :item [{:xt/id i} i_id i_u_id i_status i_start_date i_end_date i_num_bids])
                     {:key-fn :snake-case-keyword})
         all (ArrayList.)
         open (ArrayList.)
         ending-soon (ArrayList.)
         waiting-for-purchase (ArrayList.)
         closed (ArrayList.)]
-    (doseq [{:keys [i_id i_u_id i_status ^Instant i_end_date i_num_bids]} items
+    (doseq [{:keys [i_id i_u_id i_status i_start_date ^Instant i_end_date i_num_bids]} items
             :let [projected-status i_status #_(project-item-status i_status i_end_date i_num_bids now)
 
                   ^ArrayList alist
@@ -238,7 +241,7 @@
                     ;; TODO debug why this happens
                     nil)
 
-                  item-sample (->ItemSample i_id i_u_id i_status i_end_date i_num_bids)]]
+                  item-sample (->ItemSample i_id i_u_id i_status i_start_date i_end_date i_num_bids)]]
 
       (.add all item-sample)
       (when alist
@@ -337,6 +340,25 @@
                    (where (= $iid i_id)))
           {:args {:iid i_id}, :key-fn :snake-case-keyword})))
 
+(defn proc-new-comment [worker]
+  (let [{:keys [sut]} worker
+        buyer_id (b/sample-gaussian worker user-id)
+        {:keys [i_id]} (random-item worker :status :closed)
+        question (b/random-str worker 10 128)]
+    (xt/submit-tx sut [[:insert-into :item-comment
+                        '(-> (from :item [{:i_id $i_id :i_u_id seller_id}])
+                             (with {:ic_id (q (-> (from :item-comment [ic_id {:ic_i_id $i_id :ic_u_id $seller_id}])
+                                                  (aggregate {:ic_id (+ (max ic_id) 1)}))
+                                              {:i_id $i_id :seller_id seller-id})
+                                    :ic_i_id $i_id
+                                    :ic_u_id seller-id
+                                    :ic_buyer_id $buyer_id
+                                    :ic_date (current-timestamp)
+                                    :ic_question $question})
+                             (with {:xt/id ic_id})
+                             (return xt/id ic_id ic_i_id ic_u_id ic_buyer_id ic_date ic_question))
+                        {:i_id i_id :buyer_id buyer_id :question question}]])))
+
 (defn read-category-tsv []
   (let [cat-tsv-rows
         (with-open [rdr (io/reader (io/resource "data/auctionmark/auctionmark-categories.tsv"))]
@@ -421,7 +443,7 @@
         i_start_date (b/current-timestamp worker)
         i_end_date (.plus ^Instant (b/current-timestamp worker) (Duration/ofDays 32))
         i_status (sample-status worker)]
-    (add-item-status worker (->ItemSample i_id i_u_id i_status i_end_date 0))
+    (add-item-status worker (->ItemSample i_id i_u_id i_status i_start_date i_end_date 0))
     (when i_u_id
       {:xt/id i_id
        :i_id i_id
@@ -439,6 +461,51 @@
        :i_end_date i_end_date
        #_(.plus ^Instant (b2/current-timestamp worker) (Duration/ofDays 32))
        :i_status i_status})))
+
+(defn generate-item-image [worker]
+  (let [ii_id (b/increment worker item-image-id)
+        {:keys [i_id i_u_id]} (random-item worker)]
+    {:xt/id ii_id
+     :ii_id ii_id
+     :ii_i_id i_id
+     :ii_u_id i_u_id
+     :ii_path (b/random-str worker 20 100)}))
+
+(defn random-in-interval [worker ^Instant start, ^Instant end]
+  (-> (.longs (b/rng worker) 1 (inst-ms start) (inst-ms end))
+      .iterator
+      iterator-seq
+      first
+      Instant/ofEpochMilli))
+
+(defn generate-item-comment [worker]
+  (let [ic_id (b/increment worker item-comment-id)
+        {:keys [i_id i_u_id i_start_date i_end_date]} (random-item worker)
+        ;; TODO constraint on seller =/= buyer
+        ic_buyer_id (b/sample-flat worker user-id)]
+    {:xt/id ic_id
+     :ic_id ic_id
+     :ic_i_id i_id
+     :ic_u_id i_u_id
+     :ic_buyer_id ic_buyer_id
+     :ic_date (random-in-interval worker i_start_date i_end_date)
+     :ic_question (b/random-str worker 10 128)
+     :ic_repsonse (b/random-str worker 10 128)}))
+
+(defn generate-item-feedback [worker]
+  (let [if_id (b/increment worker item-feedback-id)
+        {:keys [i_id i_u_id i_start_date i_end_date]} (random-item worker)
+        ;; TODO constraint on seller =/= buyer
+        ic_buyer_id (b/sample-flat worker user-id)]
+    {:xt/id if_id
+     :if_id if_id
+     :if_i_id i_id
+     :if_u_id i_u_id
+     :if_buyer_id ic_buyer_id
+     :if_rating (rand-int 100)
+     :if_date (random-in-interval worker i_start_date i_end_date)
+     :if_comment (b/random-str worker 10 128)}))
+
 
 #_{:clj-kondo/ignore [:unused-private-var]}
 (defn- wrap-in-logging [f]
@@ -486,6 +553,9 @@
                        {:t :call, :f [bxt/generate :user generate-user (* sf 1e6)]}
                        {:t :call, :f [bxt/generate :user-attribute generate-user-attributes (* sf 1e6 1.3)]}
                        {:t :call, :f [bxt/generate :item generate-item (* sf 1e6 10)]}
+                       {:t :call, :f [bxt/generate :item-image generate-item-image (* sf 1e6 10 3.21)]}
+                       {:t :call, :f [bxt/generate :item-comment generate-item-comment (* sf 1e6 10 0.466)]}
+                       {:t :call, :f [bxt/generate :item-feedback generate-item-feedback (* sf 1e6 10 0.466)]}
                        {:t :call, :f [bxt/generate :gag generate-global-attribute-group 100]}
                        {:t :call, :f [bxt/generate :gav generate-global-attribute-value 1000]}
                        {:t :call, :f (fn [_] (log/info "finished load stage"))}]}]
