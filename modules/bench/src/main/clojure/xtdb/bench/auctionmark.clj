@@ -144,6 +144,43 @@
                                      :ib_created_at now
                                      :ib_updated now}]))))))
 
+(def check-winning-bids-fn
+  '(fn [start-time end-time]
+     (let [items-to-process (q (-> (from :item [i_id {:i_u_id seller_id} {:i_status :open} i_status i_end_date])
+                                   (where (<= $start_time i_end_date)
+                                          (<= i_end_date $end_time))
+                                   (limit 100)
+                                   (with {:max_bid_id (q (from :item-max-bid [imb_ib_id {:imb_u_id $i_u_id} {:imb_i_id $i_id}])
+                                                         {:args [i_id {:seller_id i_u_id}]})})
+                                   (with {:buyer_id (if (nil? max_bid_id)
+                                                      nil
+                                                      (q (from :item-bid [ib_buyer_id {:ib_id $max_bid_id :ib_u_id i_u_id}])
+                                                         {:args [max_bid_id i_u_id]}))})
+                                   (return i_id seller_id i_status imb_ib_id buyer_id))
+                               {:args {:start_time start-time :end_time end-time}})]
+       [[:call :post-auction items-to-process]])))
+
+(def post-auction-fn
+  '(fn [items-to-process]
+     (let [[with-bids no-bids] ((juxt filter remove) :max_bid_id items-to-process)
+           current-time (:current-time (first (q node (-> (rel [{}] [])
+                                                          (with {:current-time (current-timestamp)})))))]
+       [(into [:update {:table :item
+                        :bind [{:id_id $i_id :i_u_id $seller_id}]
+                        :set [{:i_status :closed}]}]
+              (map #(select-keys % [:i_id :seller_id]) no-bids))
+        (into [:update {:table :item
+                        :bind [{:id_id $i_id :i_u_id $seller_id}]
+                        :set [{:i_status :waiting}]}]
+              (map #(select-keys % [:i_id :seller_id]) with-bids))
+        (into [:put-docs :user-item]
+              (map (fn [{:keys [buyer_id i_id seller_id] :as item}]
+                     {:xt/id buyer_id
+                      :ui_u_id buyer_id
+                      :ui_i_id i_id
+                      :ui_i_u_id seller_id
+                      :current_timestamp current-time})))])))
+
 (defn- sample-category-id [worker]
   (if-some [weighting (::category-weighting (:custom-state worker))]
     (weighting (b/rng worker))
