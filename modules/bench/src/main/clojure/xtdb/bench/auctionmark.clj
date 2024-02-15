@@ -205,7 +205,7 @@
              :i_status :open}]]
           (for [[i image] (map-indexed vector images)
                 :let [ii_id (bit-or (bit-shift-left i 60) (bit-and i_id-raw 0x0FFFFFFFFFFFFFFF))]]
-            [:put-docs :item-comment
+            [:put-docs :item-image
              {:xt/id (str "ii_" ii_id)
               :ii_id ii_id
               :ii_i_id i_id
