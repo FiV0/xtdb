@@ -170,3 +170,28 @@
                                              {:key-fn :snake-case-keyword})))
                     (double -1.0))
                  0.0001))))))
+
+(t/deftest proc-new-comment
+  (let [worker (->worker *node*)]
+    (t/testing "new-comment"
+      ;; new item
+      (bxt2/install-tx-fns worker {:new-bid am/tx-fn-new-bid})
+      (bxt2/generate worker :user am/generate-user 1)
+      (am/load-categories-tsv worker)
+      (bxt2/generate worker :category am/generate-category 10)
+      (bxt2/generate worker :gag am/generate-global-attribute-group 10)
+      (bxt2/generate worker :gav am/generate-global-attribute-value 100)
+      (am/proc-new-item worker)
+
+      ;; update status-groups
+      (am/index-item-status-groups worker)
+
+      ;; 2x new comment call
+      (am/proc-new-comment worker)
+      (am/proc-new-comment worker)
+
+      (t/is (= [{:id 0, :seller_id "u_0", :buyer_id "u_0"}
+                {:id 1, :seller_id "u_0", :buyer_id "u_0"}]
+               (xt/q *node* '(-> (from :item-comment [{:xt/id id :ic_u_id seller-id :ic_buyer_id buyer-id}])
+                                 (order-by id))
+                     {:key-fn :snake-case-keyword}))))))

@@ -257,9 +257,7 @@
   (let [{:keys [sut, ^ConcurrentHashMap custom-state]} worker
         node sut
         res (item-status-groups node)]
-    (.putAll custom-state {:item-status-groups res #_(item-status-groups node now)})
-    #_(with-open [db (xt/open-db sut)]
-        (.putAll custom-state {:item-status-groups (item-status-groups db now)}))))
+    (.putAll custom-state {:item-status-groups res})))
 
 (defn largest-id [node table prefix-length]
   (let [id (->> (xt/q node (xt/template (from ~table [{:xt/id id}])))
@@ -343,13 +341,16 @@
 (defn proc-new-comment [worker]
   (let [{:keys [sut]} worker
         buyer_id (b/sample-gaussian worker user-id)
-        {:keys [i_id]} (random-item worker :status :closed)
+        ;; deviating from description here as the closed constraint seems arbitrary
+        {:keys [i_id]} (random-item worker) #_(random-item worker :status :closed)
         question (b/random-str worker 10 128)]
     (xt/submit-tx sut [[:insert-into :item-comment
                         '(-> (from :item [{:i_id $i_id :i_u_id seller_id}])
-                             (with {:ic_id (q (-> (from :item-comment [ic_id {:ic_i_id $i_id :ic_u_id $seller_id}])
-                                                  (aggregate {:ic_id (+ (max ic_id) 1)}))
-                                              {:i_id $i_id :seller_id seller-id})
+                             (with {:i_id $i_id}) ;; TO FIX #3181
+                             (with {:ic_id (coalesce (+ (q (-> (from :item-comment [ic_id {:ic_i_id $i_id :ic_u_id $seller_id}])
+                                                               (aggregate {:ic_id (max ic_id)}))
+                                                           {:args [{:i_id i_id :seller_id seller-id}]}) 1)
+                                                     0)
                                     :ic_i_id $i_id
                                     :ic_u_id seller-id
                                     :ic_buyer_id $buyer_id
