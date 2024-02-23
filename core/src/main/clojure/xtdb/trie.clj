@@ -1,23 +1,25 @@
 (ns xtdb.trie
   (:require [clojure.string :as str]
+            [juxt.clojars-mirrors.integrant.core :as ig]
             [xtdb.buffer-pool]
             [xtdb.metadata :as meta]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw])
-  (:import (java.lang AutoCloseable)
+  (:import (com.github.benmanes.caffeine.cache Cache Caffeine RemovalListener)
+           (java.lang AutoCloseable)
            (java.nio ByteBuffer)
            (java.nio.file Path)
            java.security.MessageDigest
            (java.util ArrayList Arrays List)
            (java.util.concurrent.atomic AtomicInteger)
-           (java.util.function IntConsumer IntFunction Supplier)
+           (java.util.function IntConsumer IntFunction Supplier Function)
            [java.util.stream IntStream]
            (org.apache.arrow.memory ArrowBuf BufferAllocator)
            (org.apache.arrow.vector VectorLoader VectorSchemaRoot)
-           (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            org.apache.arrow.vector.types.UnionMode
+           (org.apache.arrow.vector.types.pojo ArrowType$Union Schema)
            xtdb.IBufferPool
            (xtdb.trie ArrowHashTrie ArrowHashTrie$Leaf HashTrie HashTrie$Node HashTrieKt ITrieWriter LiveHashTrie LiveHashTrie$Leaf)
            (xtdb.vector IVectorReader RelationReader)
@@ -239,7 +241,7 @@
   #"(log-l(\p{XDigit}+)(?:-p(\p{XDigit}+))?-nr(\p{XDigit}+)(?:-rs(\p{XDigit}+))?)\.arrow$")
 
 (defn parse-trie-file-path [^Path file-path]
-  (let [trie-key (str (.getFileName file-path))] 
+  (let [trie-key (str (.getFileName file-path))]
     (when-let [[_ trie-key level-str part-str next-row-str rows-str] (re-find trie-file-path-regex trie-key)]
       (cond-> {:file-path file-path
                :trie-key trie-key
@@ -403,11 +405,12 @@
                     segments)
               (byte-array 0)))))
 
-(defrecord MetaFile [^HashTrie trie, ^ArrowBuf buf, ^RelationReader rdr]
+(defrecord MetaFile [^HashTrie trie, ^ArrowBuf buf, ^RelationReader rdr, ref-count]
   AutoCloseable
   (close [_]
-    (util/close rdr)
-    (util/close buf)))
+    (when (zero? (swap! ref-count dec))
+      (util/close rdr)
+      (util/close buf))))
 
 (defn open-meta-file [^IBufferPool buffer-pool ^Path file-path]
   (util/with-close-on-catch [^ArrowBuf buf @(.getBuffer buffer-pool file-path)]
@@ -415,7 +418,37 @@
           nodes-vec (.getVector root "nodes")]
       (with-open [record-batch (util/->arrow-record-batch-view (first arrow-blocks) buf)]
         (.load loader record-batch)
-        (->MetaFile (ArrowHashTrie. nodes-vec) buf (vr/<-root root))))))
+        (->MetaFile (ArrowHashTrie. nodes-vec) buf (vr/<-root root) (atom 1))))))
+
+(definterface IMetaFileCache
+  (^xtdb.trie.MetaFile getMetaFile [^java.nio.file.Path file-path]))
+
+(defrecord MetaFileCache [^Cache cache ^IBufferPool buffer-pool]
+  IMetaFileCache
+  (getMetaFile [_ file-path]
+    (let [{:keys [ref-count] :as meta-file} (.get cache file-path (reify Function
+                                                                    (apply [_ _]
+                                                                      (open-meta-file buffer-pool file-path))))]
+      (swap! ref-count inc)
+      meta-file))
+
+  AutoCloseable
+  (close [_] (util/close (vals (.asMap cache)))))
+
+(defmethod ig/prep-key ::meta-cache [_ opts]
+  (merge opts {:buffer-pool (ig/ref :xtdb/buffer-pool)}))
+
+(defmethod ig/init-key ::meta-cache [_ {:keys [buffer-pool]}]
+  (let [cache (-> (Caffeine/newBuilder)
+                  (.maximumSize 1024)
+                  (.removalListener (reify RemovalListener
+                                      (onRemoval [_ _path meta-file _reason]
+                                        (util/close meta-file))))
+                  (.build))]
+    (->MetaFileCache cache buffer-pool)))
+
+(defmethod ig/halt-key! ::meta-cache [_ ^AutoCloseable meta-cache]
+  (.close meta-cache))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface IDataRel

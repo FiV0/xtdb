@@ -169,6 +169,7 @@
        :xtdb/compactor {}
        :xtdb/meter-registry {}
        :xtdb/metrics-server {}
+       :xtdb.trie/meta-cache {}
 
        :xtdb/buffer-pool (.getStorage opts)
        :xtdb.indexer/live-index (.indexer opts)

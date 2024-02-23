@@ -29,13 +29,13 @@
            (org.apache.arrow.vector VectorLoader)
            (org.apache.arrow.vector.types.pojo FieldType)
            [org.roaringbitmap.buffer MutableRoaringBitmap]
-           xtdb.api.TransactionKey
-           (xtdb.bitemporal IRowConsumer Polygon)
            xtdb.IBufferPool
            xtdb.ICursor
+           xtdb.api.TransactionKey
+           (xtdb.bitemporal IRowConsumer Polygon)
            (xtdb.metadata IMetadataManager ITableMetadata)
            xtdb.operator.IRelationSelector
-           (xtdb.trie ArrowHashTrie$Leaf EventRowPointer HashTrie LiveHashTrie$Leaf)
+           (xtdb.trie ArrowHashTrie$Leaf EventRowPointer HashTrie LiveHashTrie$Leaf IMetaFileCache)
            (xtdb.util TemporalBounds TemporalBounds$TemporalColumn)
            (xtdb.vector IRelationWriter IRowCopier IVectorReader IVectorWriter RelationReader)
            (xtdb.watermark ILiveTableWatermark IWatermarkSource Watermark)))
@@ -361,9 +361,11 @@
 (defmethod ig/prep-key ::scan-emitter [_ opts]
   (merge opts
          {:metadata-mgr (ig/ref ::meta/metadata-manager)
-          :buffer-pool (ig/ref :xtdb/buffer-pool)}))
+          :buffer-pool (ig/ref :xtdb/buffer-pool)
+          :meta-file-cache (ig/ref ::trie/meta-cache)}))
 
-(defmethod ig/init-key ::scan-emitter [_ {:keys [^IMetadataManager metadata-mgr, ^IBufferPool buffer-pool]}]
+(defmethod ig/init-key ::scan-emitter [_ {:keys [^IMetadataManager metadata-mgr, ^IBufferPool buffer-pool,
+                                                 ^IMetaFileCache meta-file-cache]}]
   (reify IScanEmitter
     (tableColNames [_ wm table-name]
       (into #{} cat [(keys (.columnFields metadata-mgr table-name))
@@ -458,7 +460,7 @@
                        (util/with-open [iid-arrow-buf (when iid-bb (util/->arrow-buf-view allocator iid-bb))]
                          (let [merge-tasks (util/with-open [meta-files (LinkedList.)]
                                              (or (->merge-tasks (cond-> (mapv (fn [meta-file-path]
-                                                                                (let [{:keys [trie], meta-rdr :rdr, :as meta-file} (trie/open-meta-file buffer-pool meta-file-path)]
+                                                                                (let [{:keys [trie], meta-rdr :rdr, :as meta-file} (.getMetaFile meta-file-cache meta-file-path)]
                                                                                   (.add meta-files meta-file)
                                                                                   (let [^ITableMetadata table-metadata (.tableMetadata metadata-mgr meta-rdr meta-file-path)]
                                                                                     {:meta-file meta-file
