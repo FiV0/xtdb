@@ -352,41 +352,42 @@
      Segment :: {:keys [trie]} ;; and anything else you need - you'll get this back in `:leaf`
        trie :: HashTrie
 
-  return :: (LazySeq {:keys [path segments nodes]})"
+  return :: (seq {:keys [path segments nodes]})"
   ([segments] (->merge-plan segments {}))
 
   ([segments {:keys [path-pred]}]
-   (letfn [(mp-seq* [segments nodes ^bytes path]
-             (let [recencies (mapv #(some-> ^HashTrie$Node % (.getRecencies)) nodes)]
-               (cond
-                 (some some? recencies)
-                 ;; TODO apply recency filter
-                 ;; TODO probably loads of garbage and boxing in this `recur`
-                 (recur (mapcat (fn [segment ^longs recencies]
-                                  (if (nil? recencies)
-                                    [segment]
-                                    (repeat (alength recencies) segment)))
-                                segments recencies)
+   (let [results (ArrayList.)]
+     (letfn [(mp-seq* [segments nodes ^bytes path]
+               (let [recencies (mapv #(some-> ^HashTrie$Node % (.getRecencies)) nodes)]
+                 (cond
+                   (some some? recencies)
+                   ;; TODO apply recency filter
+                   ;; TODO probably loads of garbage and boxing in this `recur`
+                   (recur (mapcat (fn [segment ^longs recencies]
+                                    (if (nil? recencies)
+                                      [segment]
+                                      (repeat (alength recencies) segment)))
+                                  segments recencies)
 
-                        (mapcat (fn [^HashTrie$Node node ^longs recencies]
-                                  (if (nil? recencies)
-                                    [node]
-                                    (-> (IntStream/range 0 (alength recencies))
-                                        (.mapToObj (reify IntFunction
-                                                     (apply [_ idx]
-                                                       (.recencyNode node idx))))
-                                        (.toList))))
-                                nodes recencies)
+                          (mapcat (fn [^HashTrie$Node node ^longs recencies]
+                                    (if (nil? recencies)
+                                      [node]
+                                      (-> (IntStream/range 0 (alength recencies))
+                                          (.mapToObj (reify IntFunction
+                                                       (apply [_ idx]
+                                                         (.recencyNode node idx))))
+                                          (.toList))))
+                                  nodes recencies)
 
-                        path)
+                          path)
 
-                 (and path-pred (not (path-pred path))) nil
+                   (and path-pred (not (path-pred path))) nil
 
-                 :else
-                 (let [trie-children (mapv #(some-> ^HashTrie$Node % (.getIidChildren)) nodes)]
-                   (if (some some? trie-children)
-                     (->> (range HashTrie/LEVEL_WIDTH)
-                          (mapcat (fn [bucket-idx]
+                   :else
+                   (let [trie-children (mapv #(some-> ^HashTrie$Node % (.getIidChildren)) nodes)]
+                     (if (some some? trie-children)
+                       (->> (range HashTrie/LEVEL_WIDTH)
+                            (mapv (fn [bucket-idx]
                                     (mp-seq* segments
                                              (mapv (fn [node ^objects node-children]
                                                      (if node-children
@@ -395,13 +396,15 @@
                                                    nodes trie-children)
                                              (HashTrieKt/conjPath path bucket-idx)))))
 
-                     [{:path path, :segments segments, :nodes nodes}])))))]
+                       (.add results {:path path, :segments segments, :nodes nodes}))))))]
 
-     (mp-seq* segments
-              (mapv (fn [{:keys [^HashTrie trie]}]
-                      (some-> trie .getRootNode))
-                    segments)
-              (byte-array 0)))))
+       (mp-seq* segments
+                (mapv (fn [{:keys [^HashTrie trie]}]
+                        (some-> trie .getRootNode))
+                      segments)
+                (byte-array 0))
+
+       (iterator-seq (.iterator results))))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface IDataRel
