@@ -451,6 +451,8 @@
             (foreach-arg-row allocator args-rdr tx-op-idx
                              (-> (query-indexer ra-src wm-src erase-idxer inner-query tx-opts (assoc query-opts :default-all-valid-time? true))
                                  (wrap-sql-args)))
+            [:create_index index-name table column]
+            (throw (UnsupportedOperationException. "unsupported create-index"))
 
             (throw (UnsupportedOperationException. "sql query"))))
 
