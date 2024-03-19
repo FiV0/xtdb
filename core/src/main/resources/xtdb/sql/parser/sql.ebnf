@@ -2451,7 +2451,7 @@ directly_executable_statement
     | sql_transaction_statement
     | sql_session_statement
     | direct_implementation_defined_statement
-    | sql_create_index_statement
+    | create_index_statement
     ;
 
 <direct_sql_data_statement>
@@ -2612,5 +2612,5 @@ time_zone_region : #'([\w\/]+)'
 
 (* <indices> *)
 
-sql_create_index_statement
-    : 'CREATE' 'INDEX' identifier 'ON' table_name <left_paren> column_name [ ( <comma> column_name )+ ] <right_paren>
+create_index_statement
+    : 'CREATE' 'INDEX' identifier 'ON' table_name <left_paren> column_name_list <right_paren>

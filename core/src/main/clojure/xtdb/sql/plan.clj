@@ -1766,6 +1766,12 @@
     [:directly_executable_statement ^:z dsds]
     (plan dsds)
 
+    [:create_index_statement "CREATE" "INDEX" ^:z index "ON" ^:z table ^:z column-list]
+    (let [[column :as columns] (sem/identifiers column-list)]
+      (if (> (count columns) 1)
+        (throw (UnsupportedOperationException. "Index creation currently only possible on a single column!"))
+        [:create_index (sem/identifier index) (sem/identifier table) column]))
+
     [:insert_statement "INSERT" "INTO" ^:z table ^:z from-subquery]
     [:insert {:table (sem/identifier table)}
      (let [inner-plan (plan from-subquery)
@@ -1973,15 +1979,17 @@
                (lp/validate-plan plan)))]
      (try
        (let [plan (plan ag)]
-         (if (#{:insert :delete :update :erase} (first plan))
-           (let [[dml-op dml-op-opts plan] plan]
-             [dml-op dml-op-opts
-              (doto (rewrite-plan plan opts)
-                (validate-plan))])
-           (doto (rewrite-plan plan opts)
-             (validate-plan))))
+         (cond (#{:insert :delete :update :erase} (first plan))
+               (let [[dml-op dml-op-opts plan] plan]
+                 [dml-op dml-op-opts
+                  (doto (rewrite-plan plan opts)
+                    (validate-plan))])
+               (#{:create_index} (first plan))
+               (doto plan clojure.pprint/pprint)
+               :else (doto (rewrite-plan plan opts)
+                       (validate-plan))))
        (catch Throwable t
          (throw (err/illegal-arg ;;might not be a bad query but IAE returns errors via pg-wire
-                  ::plan-error
-                  {::err/message (format "Error Planning SQL: %s" (ex-message t))}
-                  t)))))))
+                 ::plan-error
+                 {::err/message (format "Error Planning SQL: %s" (ex-message t))}
+                 t)))))))
