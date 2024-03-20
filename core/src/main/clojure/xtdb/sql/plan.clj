@@ -225,10 +225,10 @@
     (list 'cast e :f32)
     [:approximate_numeric_type "DOUBLE" "PRECISION"]
     (list 'cast e :f64)
-            
+
     [:datetime_type "DATE"]
     (list 'cast e [:date :day])
-            
+
     [:datetime_type "TIME"]
     (list 'cast e [:time-local :micro])
     [:datetime_type "TIME" [:with_or_without_time_zone "WITHOUT" "TIME" "ZONE"]]
@@ -246,7 +246,7 @@
     (cast-temporal-with-precision e :timestamp-local fractional-precision)
     [:datetime_type "TIMESTAMP" [:unsigned_integer fractional-precision] [:with_or_without_time_zone "WITHOUT" "TIME" "ZONE"]]
     (cast-temporal-with-precision e :timestamp-local fractional-precision)
-    
+
     [:datetime_type "TIMESTAMP" [:with_or_without_time_zone "WITH" "TIME" "ZONE"]]
     (list 'cast-tstz e)
     [:datetime_type "TIMESTAMP" [:unsigned_integer fractional-precision] [:with_or_without_time_zone "WITH" "TIME" "ZONE"]]
@@ -843,7 +843,7 @@
     (list 'octet-length (expr nve))
 
     [:generic_length_expression "LENGTH" ^:z nve]
-    (list 'length (expr nve)) 
+    (list 'length (expr nve))
 
     [:character_overlay_function _ ^:z target _ ^:z placing _ ^:z pos _ ^:z len]
     (list 'overlay (expr target) (expr placing) (expr pos) (expr len))
@@ -1019,7 +1019,7 @@
     ;;=>
     (expr bve)
 
-    [:date_trunc_datetime_function "DATE_TRUNC" [:date_trunc_precision dtps] [:date_trunc_datetime_source ^:z dte]] 
+    [:date_trunc_datetime_function "DATE_TRUNC" [:date_trunc_precision dtps] [:date_trunc_datetime_source ^:z dte]]
     ;;=>
     (list 'date_trunc dtps (expr dte))
 
@@ -1944,8 +1944,8 @@
     (build-values-list rvel)
 
     [:contextually_typed_table_value_constructor _ ^:z cttvl]
-    (build-values-list cttvl) 
-    
+    (build-values-list cttvl)
+
     (r/zcase z
       :query_expression (plan-query-expr z)
       :in_value_list (build-values-list z)
@@ -1985,7 +1985,7 @@
                   (doto (rewrite-plan plan opts)
                     (validate-plan))])
                (#{:create_index} (first plan))
-               (doto plan clojure.pprint/pprint)
+               plan
                :else (doto (rewrite-plan plan opts)
                        (validate-plan))))
        (catch Throwable t

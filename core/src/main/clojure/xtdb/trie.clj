@@ -88,6 +88,7 @@
                            (types/col-type->field "delete" :null)
                            (types/col-type->field "erase" :null))]))
 
+
 (defn open-log-data-wtr
   (^xtdb.vector.IRelationWriter [^BufferAllocator allocator]
    (open-log-data-wtr allocator (data-rel-schema [:struct {}])))
@@ -195,6 +196,99 @@
         (close [_]
           (util/close [data-vsr data-file-wtr meta-vsr]))))))
 
+;; Schema for secondary indices tries
+
+(defn ->secondary-index-trie-key [^String column, ^long level, ^long next-row, ^long row-count]
+  (assert (<= 0 level 1))
+
+  (format "index-%s-l%s-nr%s-rs%s"
+          column
+          (util/->lex-hex-string level)
+          (util/->lex-hex-string next-row)
+          (Long/toString row-count 16)))
+
+(def ^org.apache.arrow.vector.types.pojo.Schema meta-rel-index-schema
+  (Schema. [(types/->field "nodes" (ArrowType$Union. UnionMode/Dense (int-array (range 3))) false
+                           (types/col-type->field "nil" :null)
+                           (types/col-type->field "branch-iid" [:list [:union #{:null :i32}]])
+                           (types/col-type->field "leaf" :i32))]))
+
+(def ^org.apache.arrow.vector.types.pojo.Schema data-rel-index-schema
+  (Schema. [(types/col-type->field "xt$iid" [:fixed-size-binary 16])]))
+
+(defn open-index-data-wtr
+  (^xtdb.vector.IRelationWriter [^BufferAllocator allocator]
+   (util/with-close-on-catch [root (VectorSchemaRoot/create data-rel-index-schema allocator)]
+     (vw/root->writer root))))
+
+(defn open-index-trie-writer ^xtdb.trie.ITrieWriter [^BufferAllocator allocator, ^IBufferPool buffer-pool,
+                                                     ^Path index-path, trie-key]
+  (util/with-close-on-catch [data-vsr (VectorSchemaRoot/create data-rel-index-schema allocator)
+                             data-file-wtr (.openArrowWriter buffer-pool (->table-data-file-path index-path trie-key) data-vsr)
+                             meta-vsr (VectorSchemaRoot/create meta-rel-index-schema allocator)]
+
+    (let [data-rel-wtr (vw/root->writer data-vsr)
+          meta-rel-wtr (vw/root->writer meta-vsr)
+
+          node-wtr (.colWriter meta-rel-wtr "nodes")
+          node-wp (.writerPosition node-wtr)
+
+          iid-branch-wtr (.legWriter node-wtr :branch-iid)
+          iid-branch-el-wtr (.listElementWriter iid-branch-wtr)
+
+          page-idx-wtr (.legWriter node-wtr :leaf)
+          !page-idx (AtomicInteger. 0)]
+
+      (reify ITrieWriter
+        (getDataWriter [_] data-rel-wtr)
+
+        (writeLeaf [_]
+          (.syncRowCount data-rel-wtr)
+
+          (let [meta-pos (.getPosition node-wp)]
+
+            (.writeBatch data-file-wtr)
+            (.clear data-rel-wtr)
+            (.clear data-vsr)
+
+            (.writeInt page-idx-wtr (.getAndIncrement !page-idx))
+            (.endRow meta-rel-wtr)
+
+            meta-pos))
+
+        (writeRecencyBranch [_ _]
+          (throw (UnsupportedOperationException. "Index tries don't support recencies!")))
+
+        (writeIidBranch [_ idxs]
+          (let [pos (.getPosition node-wp)]
+            (.startList iid-branch-wtr)
+
+            (dotimes [n (alength idxs)]
+              (let [idx (aget idxs n)]
+                (if (= idx -1)
+                  (.writeNull iid-branch-el-wtr)
+                  (.writeInt iid-branch-el-wtr idx))))
+
+            (.endList iid-branch-wtr)
+            (.endRow meta-rel-wtr)
+
+            pos))
+
+        (end [_]
+          (.end data-file-wtr)
+
+          (.syncSchema meta-vsr)
+          (.syncRowCount meta-rel-wtr)
+
+          ;; TODO how to keep
+          (util/with-open [meta-file-wtr (.openArrowWriter buffer-pool (->table-meta-file-path index-path trie-key) meta-vsr)]
+            (.writeBatch meta-file-wtr)
+            (.end meta-file-wtr)))
+
+        AutoCloseable
+        (close [_]
+          (util/close [data-vsr data-file-wtr meta-vsr]))))))
+
 (defn write-live-trie-node [^ITrieWriter trie-wtr, ^HashTrie$Node node, ^RelationReader data-rel]
   (let [copier (.rowCopier (.getDataWriter trie-wtr) data-rel)]
     (letfn [(write-node! [^HashTrie$Node node]
@@ -227,6 +321,16 @@
                                               (Schema. (for [^IVectorReader rdr data-rel]
                                                          (.getField rdr)))
                                               table-path trie-key)]
+
+    (let [trie (.compactLogs trie)]
+      (write-live-trie-node trie-wtr (.getRootNode trie) data-rel)
+
+      (.end trie-wtr))))
+
+(defn write-index-live-trie! [^BufferAllocator allocator, ^IBufferPool buffer-pool,
+                              ^Path table-path, trie-key,
+                              ^LiveHashTrie trie, ^RelationReader data-rel]
+  (util/with-open [trie-wtr (open-index-trie-writer allocator buffer-pool table-path trie-key)]
 
     (let [trie (.compactLogs trie)]
       (write-live-trie-node trie-wtr (.getRootNode trie) data-rel)

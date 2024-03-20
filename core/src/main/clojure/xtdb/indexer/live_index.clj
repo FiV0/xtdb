@@ -22,7 +22,7 @@
            xtdb.metadata.IMetadataManager
            (xtdb.trie LiveHashTrie)
            (xtdb.util RefCounter RowCounter)
-           (xtdb.vector IRelationWriter IVectorWriter)
+           (xtdb.vector IRelationWriter IVectorReader IVectorWriter)
            (xtdb.watermark ILiveIndexWatermark ILiveTableWatermark Watermark)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
@@ -33,7 +33,12 @@
   (^void logDelete [^java.nio.ByteBuffer iid, ^long validFrom, ^long validTo])
   (^void logErase [^java.nio.ByteBuffer iid])
   (^xtdb.indexer.live_index.ILiveTable commit [])
-  (^void abort []))
+  (^void abort [])
+
+  ;; secondary index
+  (^void createIndex [^String columnName])
+  (^void dropIndex [^String columnName])
+  (^boolean indexReady [^String columnName]))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveTable
@@ -44,11 +49,15 @@
   (^void close []))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
+
+
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveIndexTx
   (^xtdb.indexer.live_index.ILiveTableTx liveTable [^String tableName])
   (^xtdb.watermark.ILiveIndexWatermark openWatermark [])
   (^void commit [])
-  (^void abort []))
+  (^void abort [])
+  (^void createIndex [^String tableName ^String columnName]))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveIndex
@@ -91,15 +100,39 @@
         (when retain? (util/close out-cols))
         (throw t)))))
 
+(defn ->live-trie [log-limit page-limit iid-rdr]
+  (-> (doto (LiveHashTrie/builder iid-rdr)
+        (.setLogLimit log-limit)
+        (.setPageLimit page-limit))
+      (.build)))
+
 (deftype LiveTable [^BufferAllocator allocator, ^IBufferPool buffer-pool, ^RowCounter row-counter, ^String table-name
                     ^IRelationWriter live-rel, ^:unsynchronized-mutable ^LiveHashTrie live-trie
                     ^IVectorWriter iid-wtr, ^IVectorWriter system-from-wtr, ^IVectorWriter valid-from-wtr, ^IVectorWriter valid-to-wtr
-                    ^IVectorWriter put-wtr, ^IVectorWriter delete-wtr, ^IVectorWriter erase-wtr]
+                    ^IVectorWriter put-wtr, ^IVectorWriter delete-wtr, ^IVectorWriter erase-wtr
+                    ^Map secondary-indices, ^long log-limit, ^long page-limit]
+
   ILiveTable
   (startTx [this-table tx-key new-live-table?]
     (let [!transient-trie (atom live-trie)
           system-from-µs (time/instant->micros (.getSystemTime tx-key))]
       (reify ILiveTableTx
+
+        (createIndex [_ column-name]
+          (.computeIfAbsent secondary-indices column-name
+                            (reify Function
+                              (apply [_ _column-name]
+                                (util/with-close-on-catch [data-rel-wtr (trie/open-index-data-wtr allocator)]
+                                  (let [iid-wtr (.colWriter data-rel-wtr "xt$iid")
+                                        index-trie (->live-trie log-limit page-limit (vw/vec-wtr->rdr iid-wtr))]
+                                    {:data-rel-wtr data-rel-wtr
+                                     :iid-wtr iid-wtr
+                                     :index-trie index-trie}))))))
+        (dropIndex [_ _column-name]
+          (throw (UnsupportedOperationException. "Drop index not implemented on secondary indices!")))
+        (indexReady [_ _column-name]
+          (throw (UnsupportedOperationException. "Index ready not implemented on secondary indices!")))
+
         (docWriter [_] put-wtr)
 
         (logPut [_ iid valid-from valid-to write-doc!]
@@ -114,6 +147,17 @@
           (write-doc!)
 
           (.endRow live-rel)
+
+          ;; FIXME inefficient
+          (let [put-rdr (vw/vec-wtr->rdr put-wtr)]
+            (doseq [[column-name {:keys [^IVectorWriter iid-wtr ^LiveHashTrie index-trie
+                                         ^IRelationWriter data-rel-wtr]}] secondary-indices]
+              (when-let [col-rdr (.structKeyReader put-rdr column-name)]
+                (let [index (dec (.valueCount put-rdr))]
+                  (when-not (.isNull col-rdr index)
+                    (.writeBytes iid-wtr (trie/->iid (.getObject col-rdr index)))
+                    (.add index-trie (.getPosition (.writerPosition data-rel-wtr)))
+                    (.endRow data-rel-wtr))))))
 
           (swap! !transient-trie #(.add ^LiveHashTrie % (dec (.getPosition (.writerPosition live-rel)))))
           (.addRows row-counter 1))
@@ -179,7 +223,15 @@
                       (trie/write-live-trie! allocator buffer-pool
                                              (util/table-name->table-path table-name)
                                              (trie/->log-l0-l1-trie-key 0 next-chunk-idx row-count)
-                                             live-trie live-rel-rdr)))
+                                             live-trie live-rel-rdr)
+
+                      (doseq [[column-name {:keys [^IRelationWriter data-rel-wtr index-trie]}] secondary-indices]
+                        (when (pos? (.getPosition (.writerPosition data-rel-wtr)))
+                          (trie/write-index-live-trie!  allocator buffer-pool
+                                                        (util/table-name->table-path table-name)
+                                                        (trie/->secondary-index-trie-key column-name 0 next-chunk-idx row-count)
+                                                        index-trie (vw/rel-wtr->rdr data-rel-wtr))))))
+
               table-metadata (MapEntry/create table-name
                                               {:fields (live-rel->fields live-rel)
                                                :row-count (.rowCount live-rel-rdr)})]
@@ -205,6 +257,7 @@
 
   AutoCloseable
   (close [_]
+    (util/close (map :data-rel-wtr (vals secondary-indices)))
     (util/close live-rel)))
 
 (defn ->live-table
@@ -212,23 +265,19 @@
    (->live-table allocator buffer-pool row-counter table-name {}))
 
   (^xtdb.indexer.live_index.ILiveTable [allocator buffer-pool row-counter table-name
-                                        {:keys [->live-trie]
+                                        {:keys [->live-trie log-limit page-limit]
                                          :or {->live-trie (fn [iid-rdr]
                                                             (LiveHashTrie/emptyTrie iid-rdr))}}]
    (util/with-close-on-catch [rel (trie/open-log-data-wtr allocator)]
      (let [iid-wtr (.colWriter rel "xt$iid")
-           op-wtr (.colWriter rel "op")]
+           op-wtr (.colWriter rel "op")
+           put-wtr (.legWriter op-wtr :put)]
        (->LiveTable allocator buffer-pool row-counter table-name rel
                     (->live-trie (vw/vec-wtr->rdr iid-wtr))
                     iid-wtr (.colWriter rel "xt$system_from")
                     (.colWriter rel "xt$valid_from") (.colWriter rel "xt$valid_to")
-                    (.legWriter op-wtr :put) (.legWriter op-wtr :delete) (.legWriter op-wtr :erase))))))
-
-(defn ->live-trie [log-limit page-limit iid-rdr]
-  (-> (doto (LiveHashTrie/builder iid-rdr)
-        (.setLogLimit log-limit)
-        (.setPageLimit page-limit))
-      (.build)))
+                    put-wtr (.legWriter op-wtr :delete) (.legWriter op-wtr :erase)
+                    (HashMap.) log-limit page-limit)))))
 
 (deftype LiveIndex [^BufferAllocator allocator, ^IBufferPool buffer-pool, ^IMetadataManager metadata-mgr
                     ^:volatile-mutable ^TransactionKey latest-completed-tx
@@ -251,6 +300,9 @@
   (startTx [this-idx tx-key]
     (let [table-txs (HashMap.)]
       (reify ILiveIndexTx
+        (createIndex [this table-name column-name]
+          (.createIndex (.liveTable this table-name) column-name))
+
         (liveTable [_ table-name]
           (.computeIfAbsent table-txs table-name
                             (reify Function
@@ -259,7 +311,9 @@
                                       new-live-table? (nil? live-table)
                                       ^ILiveTable live-table (or live-table
                                                                  (->live-table allocator buffer-pool row-counter table-name
-                                                                               {:->live-trie (partial ->live-trie log-limit page-limit)}))]
+                                                                               {:->live-trie (partial ->live-trie log-limit page-limit)
+                                                                                :log-limit log-limit
+                                                                                :page-limit page-limit}))]
 
                                   (.startTx live-table tx-key new-live-table?))))))
 
