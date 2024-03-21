@@ -1,4 +1,5 @@
-(ns xtdb.expression-engine-doc)
+(ns xtdb.expression-engine-doc
+  (:import clojure.lang.Counted))
 
 ;; This namespace tries to give an introduction into our expression engine.
 ;; For the purpose of this document we are going to compile a very simple language,
@@ -25,6 +26,9 @@
                      lng
                      (throw (UnsupportedOperationException.))))
 
+  Counted
+  (count [_] (count v))
+
   Object
   (toString [_]
     (format "NullableLongVectorReader%s" (pr-str v))))
@@ -40,7 +44,7 @@
   (toString [_]
     (format "NullableLongVectorWriter%s" (pr-str v))))
 
-(defn ->vec-wrt [] (->NullableLongVectorWriter []))
+(defn ->vec-wrt ^NullableLongVectorWriter [] (->NullableLongVectorWriter []))
 
 ;; here I just implemented ValueBox as something implementing IVectorReader/IVectorWriter
 ;; In our real usage this implements ValueReader, but I didn't want to blow this implementation
@@ -195,16 +199,19 @@
   (codegen-direct '(if 1 (+ 1 1) 3))
   (codegen-direct '(if (+ 1 2) 3 4))
   (codegen-direct '(let [x (if (+ 1 2) 3 4)]
-                     (+ 1 x))))
+                     (+ 1 x)))
+
+  )
 
 (defn compile-expr [expr col-names]
   (-> `(fn ~(vec col-names)
          (let [res-vec# (->vec-wrt)]
-           (dotimes [~idx-sym 3]
+           (dotimes [~idx-sym (count ~(first col-names))]
              (if-let [res# ~(codegen-direct expr)]
                (.writeLong res-vec# res#)
                (.writeNull res-vec#)))
            res-vec#))
+      #_(doto clojure.pprint/pprint)
       eval))
 
 (comment
@@ -214,3 +221,77 @@
                     (+ 1 x))
                  ['y])
    (->vec-rdr [1 nil 2])))
+
+;; third approach - CPS style compiler
+
+(defmulti codegen-expr (fn [expr _cont]
+                         (cond (nil? expr) :nil
+                               (number? expr) :long
+                               (symbol? expr) :var
+                               (list? expr) (keyword (first expr)))))
+
+(defmethod codegen-expr :nil [_ cont] (cont :nil nil))
+(defmethod codegen-expr :long [lng cont] (cont :long lng))
+(defmethod codegen-expr :var [var cont]
+  `(if (.isNull ~var ~idx-sym)
+     (:nil nil)
+     ~(cont :long `(.getLong ~var ~idx-sym))))
+
+(defmethod codegen-expr :+ [[_ x-expr y-expr] cont]
+  (codegen-expr x-expr
+                (fn continue-x [x-type x-code]
+                  (case x-type
+                    :long (codegen-expr y-expr
+                                        (fn continue-y [y-type y-code]
+                                          (case y-type
+                                            :long (cont :long `(Math/addExact ~x-code ~y-code))
+                                            :nil (cont :nil nil))))
+                    :nil (cont :nil nil)))))
+
+(defmethod codegen-expr :if [[_ cond if-branch else-branch] cont]
+  `(if ~(codegen-expr cond (fn [_ x] x))
+     ~(codegen-expr if-branch cont)
+     ~(codegen-expr else-branch cont)))
+
+(defmethod codegen-expr :let [[_ [binding b-expr] body] cont]
+  (codegen-expr b-expr
+                (fn [b-type b-code]
+                  (codegen-expr body (fn [body-type body-code]
+                                       (cont body-type
+                                             `(let [~binding (->value-box)]
+                                                (case( ~b-type)
+                                                  :nil (.writeNull ~binding)
+                                                  :long (.writeLong ~binding ~b-code))
+                                                ~body-code)))))))
+
+
+(comment
+  (codegen-expr '(if 1 (+ 1 1) 3) (fn [type code] code))
+  (codegen-expr '(if (+ 1 2) 3 4) (fn [type code] code))
+  (codegen-expr '(let [x (if (+ 1 y) 3 4)]
+                   (+ 1 x))
+                (fn [type code] code)) )
+
+(defn compile-expr2 [expr col-names]
+  (let [res-vec-sym (gensym 'res-vec)]
+    (-> `(fn ~(vec col-names)
+           (let [~res-vec-sym (->vec-wrt)]
+             (dotimes [~idx-sym (count ~(first col-names))]
+               ~(codegen-expr expr
+                              (fn [out-type out-code]
+                                (case out-type
+                                  :nil `(.writeNull ~res-vec-sym)
+                                  :long `(.writeLong ~res-vec-sym ~out-code)))))
+             ~res-vec-sym))
+        (doto clojure.pprint/pprint)
+        eval)))
+
+(comment
+  ((compile-expr2 '(+ x 1) ['x]) (->vec-rdr [1 nil 2]))
+
+  ((compile-expr2 '(let [x (if (+ 1 y) 10 1)]
+                     (+ 1 x))
+                  ['y])
+   (->vec-rdr [1 nil 2]))
+
+  )
