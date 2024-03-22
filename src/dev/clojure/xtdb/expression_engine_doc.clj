@@ -3,10 +3,10 @@
 
 ;; This namespace tries to give an introduction into our expression engine.
 ;; For the purpose of this document we are going to compile a very simple language,
-;; which consists of null and number literals, if statements and
-;; a let statements which contain a single binding.
+;; which consists of null and number literals, `if`` statements and
+;; `let`` statements which contain a single binding.
 
-;; setting up something that resembles our readers/writers
+;; Setting up something that resembles our readers/writers
 ;; for a NullableLongVectorReader/Writer
 
 ;; This just simulates a mutable ArrowVector via a simple Clojure vector.
@@ -46,9 +46,11 @@
 
 (defn ->vec-wrt ^NullableLongVectorWriter [] (->NullableLongVectorWriter []))
 
-;; here I just implemented ValueBox as something implementing IVectorReader/IVectorWriter
-;; In our real usage this implements ValueReader, but I didn't want to blow this implementation
-;; out of proportion
+;; The below ValueBox implements IVectorReader/IVectorWriter.
+;; In our real usage this implements ValueReader, which is also accessible for arrow vectors.
+;; I didn't want to blow this implementation out of proportion so I stayed with IVectorWriter
+;; and IVectorReader. For this `ValueBox` the indices are just ignored and it gets the value in
+;; the box.
 
 (deftype ValueBox [^:unsynchronized-mutable value]
   IVectorReader
@@ -83,8 +85,9 @@
   (.getLong value-box -1))
 
 
-;; the language
-;; we consider nil to be false
+;; The language
+
+;; We consider nil to be false
 (comment
   nil
   1
@@ -93,7 +96,7 @@
   '(let [binding expr]
      body))
 
-;; lets do a first iteration without vectors
+;; Lets do a first iteration without vectors
 
 ;; first approach - interpreter
 
@@ -157,14 +160,13 @@
   (-> (parse-expr (if (+ 1 2) 3 4))
       (invoke {}))
 
-  (-> (parse-expr '(let [x (if (+ 1 2) 3 4)]
-                     (+ 1 2 3)))
-      (invoke {})))
+  (-> (parse-expr '(let [x (if (+ 1 y) 3 4)]
+                     (+ 1 2 x)))
+      (invoke {'y 1})))
 
 (def idx-sym (gensym 'idx))
 
-
-;; To actually use this interpreter we parse the expr and then call it on every vector element.
+;; To actually use this interpreter we parse the expr and then call it on every vector element(s).
 
 (defn execute-expr [expr col-names]
   (let [res-vec-sym (gensym 'res-vec)
@@ -191,7 +193,7 @@
                  '[y])
    (->vec-rdr [1 nil 2])))
 
-;; second approach direct compiler
+;; Second approach - direct compiler
 
 (defmulti codegen-direct (fn [expr] (cond (nil? expr) :nil
                                           (number? expr) :long
@@ -317,7 +319,7 @@
                                   :nil `(.writeNull ~res-vec-sym)
                                   :long `(.writeLong ~res-vec-sym ~out-code)))))
              ~res-vec-sym))
-        (doto clojure.pprint/pprint)
+        #_(doto clojure.pprint/pprint)
         eval)))
 
 (comment
@@ -326,6 +328,4 @@
   ((compile-expr2 '(let [x (if (+ 1 y) 10 1)]
                      (+ 1 x))
                   ['y])
-   (->vec-rdr [1 nil 2]))
-
-  )
+   (->vec-rdr [1 nil 2])))
