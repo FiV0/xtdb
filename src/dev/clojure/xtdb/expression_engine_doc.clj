@@ -161,10 +161,37 @@
                      (+ 1 2 3)))
       (invoke {})))
 
+(def idx-sym (gensym 'idx))
+
+
+;; To actually use this interpreter we parse the expr and then call it on every vector element.
+
+(defn execute-expr [expr col-names]
+  (let [res-vec-sym (gensym 'res-vec)
+        parsed-expr (parse-expr expr)]
+    (-> `(fn ~(vec col-names)
+           (let [~res-vec-sym (->vec-wrt)]
+             (dotimes [~idx-sym (count ~(first col-names))]
+               (if-let [res# (invoke ~parsed-expr (zipmap '~col-names (map #(if (.isNull % ~idx-sym)
+                                                                              nil
+                                                                              (.getLong % ~idx-sym))
+                                                                           ~col-names)))]
+                 (.writeLong ~res-vec-sym res#)
+                 (.writeNull ~res-vec-sym)))
+             ~res-vec-sym))
+        eval)))
+
+(comment
+  (execute-expr '(let [x (if (+ 1 y) 10 1)]
+                   (+ 1 x))
+                '[y])
+
+  ((execute-expr '(let [x (if (+ 1 y) 10 1)]
+                    (+ 1 x))
+                 '[y])
+   (->vec-rdr [1 nil 2])))
 
 ;; second approach direct compiler
-
-(def idx-sym (gensym 'idx))
 
 (defmulti codegen-direct (fn [expr] (cond (nil? expr) :nil
                                           (number? expr) :long
