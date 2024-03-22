@@ -14,6 +14,10 @@ import java.util.List;
 
 public interface IVectorReader extends AutoCloseable {
 
+    ValueVector getVector();
+
+    boolean isDirect();
+
     int valueCount();
 
     String getName();

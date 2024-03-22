@@ -5,6 +5,7 @@ import org.apache.arrow.memory.util.ArrowBufPointer
 import xtdb.trie.ArrowHashTrie.IidBranch
 import xtdb.trie.ArrowHashTrie.RecencyBranch
 import xtdb.trie.HashTrie.Node
+import java.nio.ByteBuffer
 import java.util.*
 import java.util.function.Predicate
 import java.util.stream.Stream
@@ -69,6 +70,18 @@ interface HashTrie<N : Node<N>> {
 
             return 0
         }
+
+        @JvmStatic
+        fun compareToPath(pointer: ByteBuffer, offset: Int, path: ByteArray): Int {
+            for (level in path.indices) {
+                val cmp = pointer[offset + level] compareTo path[level]
+                if (cmp != 0) return cmp
+            }
+
+            return 0
+        }
+
+
     }
 }
 

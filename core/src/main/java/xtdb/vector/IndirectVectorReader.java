@@ -40,6 +40,17 @@ class IndirectVectorReader implements IVectorReader {
     }
 
     @Override
+    public ValueVector getVector() {
+        throw new UnsupportedOperationException();
+//        return reader.getVector();
+    }
+
+    @Override
+    public boolean isDirect() {
+        return false;
+    }
+
+    @Override
     public int valueCount() {
         return indirection.valueCount();
     }

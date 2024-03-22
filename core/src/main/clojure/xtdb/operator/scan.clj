@@ -228,7 +228,7 @@
             is-valid-ptr (ArrowBufPointer.)]
         (with-open [out-rel (vw/->rel-writer allocator)]
           (let [^IRelationSelector iid-pred (get col-preds "xt$iid")
-                merge-q (PriorityQueue. (Comparator/comparing (util/->jfn :ev-ptr) (EventRowPointer/comparator)))
+                merge-q (PriorityQueue. (Comparator/comparing (util/->jfn :ev-ptr) (EventRowPointer/bbComparator)))
                 calculate-polygon (bitemp/polygon-calculator temporal-bounds)
                 bitemp-consumer (->bitemporal-consumer out-rel col-names)]
 
@@ -237,6 +237,7 @@
                           ^RelationReader leaf-rdr (cond-> data-rdr
                                                      iid-pred (.select (.select iid-pred allocator data-rdr params)))
                           ev-ptr (EventRowPointer. leaf-rdr path)]]
+
               (when (.isValid ev-ptr is-valid-ptr path)
                 (.add merge-q {:ev-ptr ev-ptr, :content-consumer (->content-consumer out-rel leaf-rdr fields)})))
 
@@ -470,24 +471,24 @@
                              current-meta-files (->> (trie/list-meta-files buffer-pool table-path)
                                                      (trie/current-trie-files))]
 
-                       (util/with-open [iid-arrow-buf (when iid-bb (util/->arrow-buf-view allocator iid-bb))]
-                         (let [merge-tasks (util/with-open [table-metadatas (LinkedList.)]
-                                             (or (->merge-tasks (cond-> (mapv (fn [meta-file-path]
-                                                                                (let [{:keys [trie] :as table-metadata} (.openTableMetadata metadata-mgr meta-file-path)]
-                                                                                  (.add table-metadatas table-metadata)
-                                                                                  (into (trie/->Segment trie)
-                                                                                        {:trie-key (:trie-key (trie/parse-trie-file-path meta-file-path))
-                                                                                         :table-metadata table-metadata
-                                                                                         :page-idx-pred (reduce (fn [^IntPredicate page-idx-pred col-name]
-                                                                                                                  (if-let [bloom-page-idx-pred (filter-pushdown-bloom-page-idx-pred table-metadata col-name)]
-                                                                                                                    (.and page-idx-pred bloom-page-idx-pred)
-                                                                                                                    page-idx-pred))
-                                                                                                                (.build metadata-pred table-metadata)
-                                                                                                                col-names)})))
-                                                                              current-meta-files)
+                         (util/with-open [iid-arrow-buf (when iid-bb (util/->arrow-buf-view allocator iid-bb))]
+                           (let [merge-tasks (util/with-open [table-metadatas (LinkedList.)]
+                                               (or (->merge-tasks (cond-> (mapv (fn [meta-file-path]
+                                                                                  (let [{:keys [trie] :as table-metadata} (.openTableMetadata metadata-mgr meta-file-path)]
+                                                                                    (.add table-metadatas table-metadata)
+                                                                                    (into (trie/->Segment trie)
+                                                                                          {:trie-key (:trie-key (trie/parse-trie-file-path meta-file-path))
+                                                                                           :table-metadata table-metadata
+                                                                                           :page-idx-pred (reduce (fn [^IntPredicate page-idx-pred col-name]
+                                                                                                                    (if-let [bloom-page-idx-pred (filter-pushdown-bloom-page-idx-pred table-metadata col-name)]
+                                                                                                                      (.and page-idx-pred bloom-page-idx-pred)
+                                                                                                                      page-idx-pred))
+                                                                                                                  (.build metadata-pred table-metadata)
+                                                                                                                  col-names)})))
+                                                                                current-meta-files)
 
-                                                                  live-table-wm (conj (-> (trie/->Segment (.liveTrie live-table-wm))
-                                                                                          (assoc :live-rel (.liveRelation live-table-wm)))))
+                                                                    false #_live-table-wm (conj (-> (trie/->Segment (.liveTrie live-table-wm))
+                                                                                                    (assoc :live-rel (.liveRelation live-table-wm)))))
 
                                                                   (->path-pred iid-arrow-buf))
                                                    []))]

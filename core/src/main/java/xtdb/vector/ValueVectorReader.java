@@ -37,6 +37,15 @@ public class ValueVectorReader implements IVectorReader {
 
     private final ValueVector vector;
 
+    @Override
+    public ValueVector getVector() {
+        return vector;
+    }
+
+    @Override
+    public boolean isDirect() {
+        return true;
+    }
 
     public ValueVectorReader(ValueVector vector) {
         this.vector = vector;

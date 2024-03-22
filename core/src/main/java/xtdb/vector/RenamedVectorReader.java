@@ -23,6 +23,16 @@ public class RenamedVectorReader implements IVectorReader {
     }
 
     @Override
+    public ValueVector getVector() {
+        return reader.getVector();
+    }
+
+    @Override
+    public boolean isDirect() {
+        return reader.isDirect();
+    }
+
+    @Override
     public int valueCount() {
         return reader.valueCount();
     }
@@ -107,6 +117,7 @@ public class RenamedVectorReader implements IVectorReader {
     public Object getObject(int idx) {
         return reader.getObject(idx, (k) -> k);
     }
+
     @Override
     public Object getObject(int idx, IKeyFn<?> keyFn) {
         return reader.getObject(idx, keyFn);
