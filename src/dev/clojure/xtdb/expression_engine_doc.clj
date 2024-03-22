@@ -225,7 +225,7 @@
 (comment
   (codegen-direct '(if 1 (+ 1 1) 3))
   (codegen-direct '(if (+ 1 2) 3 4))
-  (codegen-direct '(let [x (if (+ 1 2) 3 4)]
+  (codegen-direct '(let [x (if (+ 1 y) 3 4)]
                      (+ 1 x)))
 
   )
@@ -250,6 +250,8 @@
    (->vec-rdr [1 nil 2])))
 
 ;; third approach - CPS style compiler
+
+;; Be aware that this doesn't do batch bindings so local vars will be set up multiple times.
 
 (defmulti codegen-expr (fn [expr _cont]
                          (cond (nil? expr) :nil
