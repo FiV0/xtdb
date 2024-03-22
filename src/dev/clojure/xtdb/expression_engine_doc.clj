@@ -261,7 +261,7 @@
 (defmethod codegen-expr :long [lng cont] (cont :long lng))
 (defmethod codegen-expr :var [var cont]
   `(if (.isNull ~var ~idx-sym)
-     (:nil nil)
+     ~(cont :nil nil)
      ~(cont :long `(.getLong ~var ~idx-sym))))
 
 (defmethod codegen-expr :+ [[_ x-expr y-expr] cont]
@@ -283,13 +283,18 @@
 (defmethod codegen-expr :let [[_ [binding b-expr] body] cont]
   (codegen-expr b-expr
                 (fn [b-type b-code]
-                  (codegen-expr body (fn [body-type body-code]
-                                       (cont body-type
-                                             `(let [~binding (->value-box)]
-                                                (case( ~b-type)
-                                                  :nil (.writeNull ~binding)
-                                                  :long (.writeLong ~binding ~b-code))
-                                                ~body-code)))))))
+                  `(let [~binding (->value-box)]
+                     ~(case b-type
+                        :nil
+                        `(do
+                           (.writeNull ~binding)
+                           ~(codegen-expr body (fn [body-type body-code]
+                                                 (cont body-type body-code))))
+                        :long
+                        `(do
+                           (.writeLong ~binding ~b-code)
+                           ~(codegen-expr body (fn [body-type body-code]
+                                                 (cont body-type body-code)))))))))
 
 
 (comment
