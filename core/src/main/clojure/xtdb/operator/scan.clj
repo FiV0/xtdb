@@ -236,7 +236,7 @@
                     :let [^RelationReader data-rdr (merge-task-data-reader buffer-pool vsr-cache table-path leaf)
                           ^RelationReader leaf-rdr (cond-> data-rdr
                                                      iid-pred (.select (.select iid-pred allocator data-rdr params)))
-                          ev-ptr (EventRowPointer. leaf-rdr path)]]
+                          ev-ptr (EventRowPointer/createRowPointer leaf-rdr path)]]
 
               (when (.isValid ev-ptr is-valid-ptr path)
                 (.add merge-q {:ev-ptr ev-ptr, :content-consumer (->content-consumer out-rel leaf-rdr fields)})))
@@ -487,8 +487,8 @@
                                                                                                                   col-names)})))
                                                                                 current-meta-files)
 
-                                                                    false #_live-table-wm (conj (-> (trie/->Segment (.liveTrie live-table-wm))
-                                                                                                    (assoc :live-rel (.liveRelation live-table-wm)))))
+                                                                    live-table-wm (conj (-> (trie/->Segment (.liveTrie live-table-wm))
+                                                                                            (assoc :live-rel (.liveRelation live-table-wm)))))
 
                                                                   (->path-pred iid-arrow-buf))
                                                    []))]

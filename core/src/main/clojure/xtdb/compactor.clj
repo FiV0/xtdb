@@ -68,7 +68,7 @@
             :let [mp-nodes (.getMpNodes merge-plan-task)
                   ^bytes path (.getPath merge-plan-task)
                   data-rdrs (mapv trie/load-data-page mp-nodes)
-                  merge-q (PriorityQueue. (Comparator/comparing (util/->jfn :ev-ptr) (EventRowPointer/comparator)))
+                  merge-q (PriorityQueue. (Comparator/comparing (util/->jfn :ev-ptr) (EventRowPointer/bbComparator)))
                   path (if (or (nil? path-filter)
                                (> (alength path) (alength path-filter)))
                          path
@@ -76,7 +76,7 @@
 
       (doseq [^RelationReader data-rdr data-rdrs
               :when data-rdr
-              :let [ev-ptr (EventRowPointer. data-rdr path)
+              :let [ev-ptr (EventRowPointer/createRowPointer data-rdr path)
                     row-copier (reader->copier data-rdr)]]
         (when (.isValid ev-ptr is-valid-ptr path)
           (.add merge-q {:ev-ptr ev-ptr, :row-copier row-copier})))

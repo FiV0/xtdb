@@ -67,21 +67,27 @@ interface HashTrie<N : Node<N>> {
                 val cmp = bucketFor(pointer, level).toInt() compareTo (path[level].toInt())
                 if (cmp != 0) return cmp
             }
-
             return 0
+        }
+
+        // TODO one could compress the path once then all this wouldn't be necessary
+        fun bucketFor2(pointer: ByteBuffer, offset: Int, level: Int): Byte {
+            val bitIdx = level * LEVEL_BITS
+            val byteIdx = bitIdx / java.lang.Byte.SIZE
+            val bitOffset = bitIdx % java.lang.Byte.SIZE
+
+            val b = pointer.get(offset + byteIdx)
+            return ((b.toInt() ushr ((java.lang.Byte.SIZE - LEVEL_BITS) - bitOffset)) and LEVEL_MASK).toByte()
         }
 
         @JvmStatic
         fun compareToPath(pointer: ByteBuffer, offset: Int, path: ByteArray): Int {
             for (level in path.indices) {
-                val cmp = pointer[offset + level] compareTo path[level]
+                val cmp = bucketFor2(pointer, offset, level).toInt() compareTo path[level].toInt()
                 if (cmp != 0) return cmp
             }
-
             return 0
         }
-
-
     }
 }
 
