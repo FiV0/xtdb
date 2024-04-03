@@ -23,6 +23,9 @@ class IndirectMultiVectorReader(
 
     private val fields: List<Field?> = readers.map { it?.field }
     private val legReaders = ConcurrentHashMap<Keyword, IVectorReader>()
+    private val field by lazy (LazyThreadSafetyMode.PUBLICATION){
+        MERGE_FIELDS.applyTo(RT.seq(fields.filterNotNull())) as Field
+    }
 
     companion object {
         private val MERGE_FIELDS: IFn = requiringResolve("xtdb.types/merge-fields")
@@ -54,7 +57,7 @@ class IndirectMultiVectorReader(
     }
 
     override fun getField(): Field {
-        return MERGE_FIELDS.applyTo(RT.seq(fields.filterNotNull())) as Field
+        return field
     }
 
     override fun hashCode(idx: Int, hasher: ArrowBufHasher): Int {
