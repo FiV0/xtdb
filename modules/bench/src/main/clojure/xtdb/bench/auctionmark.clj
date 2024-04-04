@@ -10,6 +10,10 @@
            (java.util ArrayList Random)
            (java.util.concurrent ConcurrentHashMap)))
 
+(defn query-now
+  ([node query] (query-now node query))
+  ([node query opts] (xt/q node query (assoc opts :after-tx (:latest-completed-tx (xt/status node))))))
+
 (defn random-price [worker] (.nextDouble (b/rng worker)))
 
 (def user-id (partial str "u_"))
@@ -175,12 +179,12 @@
         end-date (.plusSeconds ^Instant start-date (* 60 60 24 (* (inc (.nextInt (b/rng worker) 42)))))
         ;; append attribute names to desc
         description-with-attributes
-        (->> (xt/q (:sut worker)
-                   '(unify (from :gag [{:xt/id gag-id} gag-name])
-                           (from :gav [{:xt/id gav-id, :gav-gag-id gag-id} gav-name])
-                           (unnest {gag-id $gag-ids})
-                           (unnest {gav-id $gav-ids}))
-                   {:args {:gag-ids gag-ids, :gav-ids gav-ids}, :key-fn :snake-case-keyword})
+        (->> (query-now (:sut worker)
+                        '(unify (from :gag [{:xt/id gag-id} gag-name])
+                                (from :gav [{:xt/id gav-id, :gav-gag-id gag-id} gav-name])
+                                (unnest {gag-id $gag-ids})
+                                (unnest {gav-id $gav-ids}))
+                        {:args {:gag-ids gag-ids, :gav-ids gav-ids}, :key-fn :snake-case-keyword})
              (str/join " ")
              (str description " "))]
 
@@ -219,8 +223,8 @@
 (defrecord ItemSample [i_id, i_u_id, i_status, i_end_date, i_num_bids])
 
 (defn item-status-groups [node]
-  (let [items (xt/q node '(from :item [{:xt/id i} i_id i_u_id i_status i_end_date i_num_bids])
-                    {:key-fn :snake-case-keyword})
+  (let [items (query-now node '(from :item [{:xt/id i} i_id i_u_id i_status i_end_date i_num_bids])
+                         {:key-fn :snake-case-keyword})
         all (ArrayList.)
         open (ArrayList.)
         ending-soon (ArrayList.)
@@ -332,10 +336,10 @@
         ;; _ (log/info "id:" i_id)
         ;; i_id (b2/sample-flat worker item-id)
         ]
-    (xt/q sut '(-> (from :item [{:xt/id i_id, :i_status :open}
-                                i_u_id i_initial_price i_current_price])
-                   (where (= $iid i_id)))
-          {:args {:iid i_id}, :key-fn :snake-case-keyword})))
+    (query-now sut '(-> (from :item [{:xt/id i_id, :i_status :open}
+                                     i_u_id i_initial_price i_current_price])
+                        (where (= $iid i_id)))
+               {:args {:iid i_id}, :key-fn :snake-case-keyword})))
 
 (defn read-category-tsv []
   (let [cat-tsv-rows
