@@ -23,7 +23,7 @@ class IndirectMultiVectorReader(
 
     private val fields: List<Field?> = readers.map { it?.field }
     private val legReaders = ConcurrentHashMap<Keyword, IVectorReader>()
-    private val field by lazy (LazyThreadSafetyMode.PUBLICATION){
+    private val vectorField by lazy (LazyThreadSafetyMode.PUBLICATION){
         MERGE_FIELDS.applyTo(RT.seq(fields.filterNotNull())) as Field
     }
 
@@ -57,7 +57,7 @@ class IndirectMultiVectorReader(
     }
 
     override fun getField(): Field {
-        return field
+        return vectorField
     }
 
     override fun hashCode(idx: Int, hasher: ArrowBufHasher): Int {
