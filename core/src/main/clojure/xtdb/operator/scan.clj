@@ -22,6 +22,7 @@
            (java.io Closeable)
            java.nio.ByteBuffer
            (java.nio.file Path)
+           (com.carrotsearch.hppc IntArrayList)
            (java.util ArrayList Comparator HashMap Iterator LinkedList Map PriorityQueue)
            (java.util.function IntPredicate Predicate)
            (java.util.stream IntStream)
@@ -39,7 +40,7 @@
            (xtdb.trie ArrowHashTrie$Leaf EventRowPointer HashTrie HashTrieKt LiveHashTrie$Leaf MergePlanNode MergePlanTask)
            (xtdb.util TemporalBounds TemporalBounds$TemporalColumn)
            (xtdb.vector IRelationWriter IRowCopier IVectorReader IVectorWriter RelationReader RelationWriter
-                        IMultiVectorRelationFactory)
+                        IMultiVectorRelationFactory IVectorIndirection$Selection IndirectMultiVectorReader)
            (xtdb.watermark ILiveTableWatermark IWatermarkSource Watermark)))
 
 (s/def ::table symbol?)
@@ -122,23 +123,39 @@
   (contains? #{"xt$system_from" "xt$system_to" "xt$valid_from" "xt$valid_to"}
              (util/str->normal-form-str col-name)))
 
-(defn- leaf-rdr->rel [^RelationReader leaf-rel, content-col-names]
-  (let [op-rdr (.readerForName leaf-rel "op")
-        put-rdr (.legReader op-rdr :put)]
+(defn rels->multi-vector-rel-factory ^xtdb.vector.IMultiVectorRelationFactory [leaf-rels, ^BufferAllocator allocator, col-names]
+  (let [put-rdrs (mapv (fn [^RelationReader rel]
+                         [(.rowCount rel) (-> (.readerForName rel "op") (.legReader :put))])
+                       leaf-rels)
+        reader-indirection (IntArrayList.)
+        vector-indirection (IntArrayList.)]
+    (letfn [(->indirect-multi-vec [col-name reader-selection vector-selection]
+              (let [normalized-name (util/str->normal-form-str col-name)
+                    readers (ArrayList.)]
+                (if (= normalized-name "xt$iid")
+                  (doseq [^RelationReader leaf-rel leaf-rels]
+                    (if-let [rdr (some-> (.readerForName leaf-rel "xt$iid")
+                                         (.withName col-name))]
+                      (.add readers rdr)
+                      (.add readers (vr/->absent-col col-name allocator (.rowCount leaf-rel)))))
 
-    (RelationReader/from
-     (for [^String col-name content-col-names
-           :let [normalized-name (util/str->normal-form-str col-name)
-                 rdr (if (= normalized-name "xt$iid")
-                       (some-> (.readerForName leaf-rel "xt$iid")
-                               (.withName col-name))
-                       (some-> (.structKeyReader put-rdr normalized-name)
-                               (.withName col-name)))]
-           :when rdr]
-       rdr))))
+                  (doseq [[row-count ^IVectorReader put-rdr] put-rdrs]
+                    (if-let [rdr (some-> (.structKeyReader put-rdr normalized-name)
+                                         (.withName col-name))]
+                      (.add readers rdr)
+                      (.add readers (vr/->absent-col col-name allocator row-count)))))
+                (IndirectMultiVectorReader. readers reader-selection vector-selection)))]
+      (reify IMultiVectorRelationFactory
+        (accept [_ rdrIdx vecIdx]
+          (.add reader-indirection rdrIdx)
+          (.add vector-indirection vecIdx))
+        (realize [_]
+          (let [reader-selection (IVectorIndirection$Selection. (.toArray reader-indirection))
+                vector-selection (IVectorIndirection$Selection. (.toArray vector-indirection))]
+            (RelationReader/from (mapv #(->indirect-multi-vec % reader-selection vector-selection) col-names))))))))
 
 (defn- ->content-rel-factory ^xtdb.vector.IMultiVectorRelationFactory [leaf-rdrs allocator content-col-names]
-  (vr/rels->multi-vector-rel-factory (mapv #(leaf-rdr->rel % content-col-names) leaf-rdrs) allocator content-col-names))
+  (rels->multi-vector-rel-factory leaf-rdrs allocator content-col-names))
 
 (defn- ->bitemporal-consumer ^xtdb.bitemporal.IRowConsumer [^IRelationWriter out-rel, col-names]
   (letfn [(writer-for [normalised-col-name]
