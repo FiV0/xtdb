@@ -334,14 +334,6 @@
 
   ([^ValueVector v, ^long start-idx, ^long len]
    (cond
-     ;; see #3088
-     (and (instance? ListVector v) (= 0 start-idx len))
-     (ListVector/empty (.getName v) (.getAllocator v))
-
-     (and (instance? UnionVector v) (= 0 start-idx len))
-     (doto (UnionVector/empty (.getName v) (.getAllocator v))
-       (.initializeChildrenFromFields (.getChildren (.getField v))))
-
      ;; doesn't preserve nullability otherwise
      (instance? BaseFixedWidthVector v)
      (-> (.getTransferPair v (.getField v) (.getAllocator v))
