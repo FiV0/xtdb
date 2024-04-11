@@ -203,26 +203,13 @@
                     (recur (inc mid) right)))))
             (int-array 0)))))))
 
-(defrecord VSRCache [^IBufferPool buffer-pool, ^BufferAllocator allocator, ^Map cache]
-  Closeable
-  (close [_] (util/close cache)))
-
-(defn ->vsr-cache [buffer-pool allocator]
-  (->VSRCache buffer-pool allocator (HashMap.)))
-
-(defn cache-vsr [{:keys [^Map cache, buffer-pool, allocator]} ^Path trie-leaf-file]
-  (.computeIfAbsent cache trie-leaf-file
-                    (util/->jfn
-                      (fn [trie-leaf-file]
-                        (bp/open-vsr buffer-pool trie-leaf-file allocator)))))
-
-(defn merge-task-data-reader ^IVectorReader [buffer-pool vsr-cache ^Path table-path [leaf-tag & leaf-args]]
+(defn merge-task-data-reader ^IVectorReader [buffer-pool allocator ^Path table-path [leaf-tag & leaf-args]]
   (case leaf-tag
     :arrow
     (let [[{:keys [trie-key]} page-idx] leaf-args
           data-file-path (trie/->table-data-file-path table-path trie-key)]
       (util/with-open [rb (bp/open-record-batch buffer-pool data-file-path page-idx)]
-        (let [vsr (cache-vsr vsr-cache data-file-path)
+        (let [vsr (bp/open-vsr buffer-pool data-file-path allocator)
               loader (VectorLoader. vsr)]
           (.load loader rb)
           (vr/<-root vsr))))
@@ -234,7 +221,7 @@
 (deftype TrieCursor [^BufferAllocator allocator, ^Iterator merge-tasks, ^IRelationWriter out-rel
                      ^Path table-path, col-names, ^Map col-preds,
                      ^TemporalBounds temporal-bounds
-                     params, vsr-cache, buffer-pool]
+                     params, buffer-pool]
   ICursor
   (tryAdvance [_ c]
     (if (.hasNext merge-tasks)
@@ -246,7 +233,7 @@
                 calculate-polygon (bitemp/polygon-calculator temporal-bounds)
                 bitemp-consumer (->bitemporal-consumer out-rel col-names)
                 leaf-rdrs (for [leaf leaves
-                                :let [^RelationReader data-rdr (merge-task-data-reader buffer-pool vsr-cache table-path leaf)]]
+                                :let [^RelationReader data-rdr (merge-task-data-reader buffer-pool allocator table-path leaf)]]
                             (cond-> data-rdr
                               iid-pred (.select (.select iid-pred allocator data-rdr params))))
                 [temporal-cols content-cols] ((juxt filter remove) temporal-column? col-names)
@@ -294,7 +281,6 @@
       false))
 
   (close [_]
-    (util/close vsr-cache)
     (util/close out-rel)))
 
 (defn- eid-select->eid [eid-select]
@@ -521,7 +507,6 @@
                                              table-path col-names col-preds
                                              (->temporal-bounds params basis scan-opts)
                                              params
-                                             (->vsr-cache buffer-pool allocator)
                                              buffer-pool)))))))}))))
 
 (defmethod lp/emit-expr :scan [scan-expr {:keys [^IScanEmitter scan-emitter scan-fields, param-fields]}]
