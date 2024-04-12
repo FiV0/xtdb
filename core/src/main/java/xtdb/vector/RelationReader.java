@@ -45,7 +45,7 @@ public class RelationReader implements Iterable<IVectorReader>, AutoCloseable {
     }
 
     private RelationReader from(Function<IVectorReader, IVectorReader> f, int rowCount) {
-        return from(cols.values().stream().map(f).toList(), rowCount);
+        return from(cols.values().stream().map(f).toList(), rowCount, cleanup);
     }
 
     public RelationReader select(int[] idxs) {

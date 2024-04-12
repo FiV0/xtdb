@@ -17,9 +17,10 @@
   (^xtdb.vector.RelationReader [cols ^long row-count] (RelationReader/from cols row-count))
   (^xtdb.vector.RelationReader [cols ^long row-count ^Closeable cleanup] (RelationReader/from cols row-count cleanup)))
 
-(defn <-root ^xtdb.vector.RelationReader
-  ([^VectorSchemaRoot root] (rel-reader (map vec->reader (.getFieldVectors root)) (.getRowCount root)))
-  ([^VectorSchemaRoot root close?]
+(defn <-root
+  (^xtdb.vector.RelationReader [^VectorSchemaRoot root]
+   (rel-reader (map vec->reader (.getFieldVectors root)) (.getRowCount root)))
+  (^xtdb.vector.RelationReader [^VectorSchemaRoot root close?]
    (if close?
      (rel-reader (map vec->reader (.getFieldVectors root)) (.getRowCount root) (reify Closeable
                                                                                  (close [_]

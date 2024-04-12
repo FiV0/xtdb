@@ -21,10 +21,10 @@
             [xtdb.xtql.edn :as edn])
   (:import (clojure.lang MapEntry)
            (com.carrotsearch.hppc IntArrayList)
-           (java.io Closeable)
+           java.io.Closeable
            java.nio.ByteBuffer
            (java.nio.file Path)
-           (java.util ArrayList Comparator HashMap Iterator LinkedList Map PriorityQueue)
+           (java.util ArrayList Comparator Iterator LinkedList Map PriorityQueue)
            (java.util.function IntPredicate Predicate)
            (java.util.stream IntStream)
            (org.apache.arrow.memory ArrowBuf BufferAllocator)
@@ -32,10 +32,10 @@
            (org.apache.arrow.vector VectorLoader)
            (org.apache.arrow.vector.types.pojo Field FieldType)
            [org.roaringbitmap.buffer MutableRoaringBitmap]
-           xtdb.api.TransactionKey
-           (xtdb.bitemporal IRowConsumer Polygon)
            xtdb.IBufferPool
            xtdb.ICursor
+           xtdb.api.TransactionKey
+           (xtdb.bitemporal IRowConsumer Polygon)
            (xtdb.metadata IMetadataManager ITableMetadata)
            xtdb.operator.IRelationSelector
            (xtdb.trie ArrowHashTrie$Leaf EventRowPointer HashTrie HashTrieKt LiveHashTrie$Leaf MergePlanNode MergePlanTask)
@@ -149,7 +149,11 @@
         (realize [_]
           (let [reader-selection (IVectorIndirection$Selection. (.toArray reader-indirection))
                 vector-selection (IVectorIndirection$Selection. (.toArray vector-indirection))]
-            (RelationReader/from (mapv #(->indirect-multi-vec % reader-selection vector-selection) col-names))))))))
+            (RelationReader/from (mapv #(->indirect-multi-vec % reader-selection vector-selection) col-names)
+                                 (.size vector-indirection)
+                                 (reify Closeable
+                                   (close [_]
+                                     (run! util/close leaf-rels))))))))))
 
 (defn- ->content-rel-factory ^xtdb.vector.IMultiVectorRelationFactory [leaf-rdrs allocator content-col-names]
   (rels->multi-vector-rel-factory leaf-rdrs allocator content-col-names))
@@ -212,7 +216,7 @@
         (let [vsr (bp/open-vsr buffer-pool data-file-path allocator)
               loader (VectorLoader. vsr)]
           (.load loader rb)
-          (vr/<-root vsr))))
+          (vr/<-root vsr true))))
 
     :live (first leaf-args)))
 
@@ -231,52 +235,52 @@
           (let [^IRelationSelector iid-pred (get col-preds "xt$iid")
                 merge-q (PriorityQueue. (Comparator/comparing (util/->jfn #(.ev_ptr ^LeafPointer %)) (EventRowPointer/comparator)))
                 calculate-polygon (bitemp/polygon-calculator temporal-bounds)
-                bitemp-consumer (->bitemporal-consumer out-rel col-names)
-                leaf-rdrs (for [leaf leaves
-                                :let [^RelationReader data-rdr (merge-task-data-reader buffer-pool allocator table-path leaf)]]
-                            (cond-> data-rdr
-                              iid-pred (.select (.select iid-pred allocator data-rdr params))))
-                [temporal-cols content-cols] ((juxt filter remove) temporal-column? col-names)
-                content-rel-factory (->content-rel-factory leaf-rdrs allocator content-cols)]
+                bitemp-consumer (->bitemporal-consumer out-rel col-names)]
+            (util/with-close-on-catch [data-rdrs (mapv #(merge-task-data-reader buffer-pool allocator table-path %) leaves)]
+              (let [leaf-rdrs (for [^RelationReader data-rdr data-rdrs]
+                                (cond-> data-rdr
+                                  iid-pred (.select (.select iid-pred allocator data-rdr params))))
+                    [temporal-cols content-cols] ((juxt filter remove) temporal-column? col-names)
+                    content-rel-factory (->content-rel-factory leaf-rdrs allocator content-cols)]
 
-            (doseq [[idx leaf-rdr] (map-indexed vector leaf-rdrs)
-                    :let [ev-ptr (EventRowPointer. leaf-rdr path)]]
-              (when (.isValid ev-ptr is-valid-ptr path)
-                (.add merge-q (->LeafPointer ev-ptr idx))))
-
-            (loop []
-              (when-let [^LeafPointer q-obj (.poll merge-q)]
-                (let [^EventRowPointer ev-ptr (.ev_ptr q-obj)]
-                  (when-let [^Polygon polygon (calculate-polygon ev-ptr)]
-                    (when (= :put (.getOp ev-ptr))
-                      (let [sys-from (.getSystemFrom ev-ptr)
-                            idx (.getIndex ev-ptr)]
-                        (dotimes [i (.getValidTimeRangeCount polygon)]
-                          (let [valid-from (.getValidFrom polygon i)
-                                valid-to (.getValidTo polygon i)
-                                sys-to (.getSystemTo polygon i)]
-                            (when (and (.inRange temporal-bounds valid-from valid-to sys-from sys-to)
-                                       (not (= valid-from valid-to))
-                                       (not (= sys-from sys-to)))
-                              (.startRow out-rel)
-                              (.accept content-rel-factory (.rel-idx q-obj) idx)
-                              (.accept bitemp-consumer idx valid-from valid-to sys-from sys-to)
-                              (.endRow out-rel)))))))
-
-                  (.nextIndex ev-ptr)
+                (doseq [[idx leaf-rdr] (map-indexed vector leaf-rdrs)
+                        :let [ev-ptr (EventRowPointer. leaf-rdr path)]]
                   (when (.isValid ev-ptr is-valid-ptr path)
-                    (.add merge-q q-obj))
-                  (recur))))
+                    (.add merge-q (->LeafPointer ev-ptr idx))))
 
-            (let [^RelationReader rel (cond-> (.realize content-rel-factory)
-                                        (or (empty? (seq content-cols)) (seq temporal-cols))
-                                        (vr/concat-rels (vw/rel-wtr->rdr out-rel)))
-                  ^RelationReader rel (reduce (fn [^RelationReader rel ^IRelationSelector col-pred]
-                                                (.select rel (.select col-pred allocator rel params)))
-                                              rel
-                                              (vals (dissoc col-preds "xt$iid")))]
-              (.accept c rel))))
-        true)
+                (loop []
+                  (when-let [^LeafPointer q-obj (.poll merge-q)]
+                    (let [^EventRowPointer ev-ptr (.ev_ptr q-obj)]
+                      (when-let [^Polygon polygon (calculate-polygon ev-ptr)]
+                        (when (= :put (.getOp ev-ptr))
+                          (let [sys-from (.getSystemFrom ev-ptr)
+                                idx (.getIndex ev-ptr)]
+                            (dotimes [i (.getValidTimeRangeCount polygon)]
+                              (let [valid-from (.getValidFrom polygon i)
+                                    valid-to (.getValidTo polygon i)
+                                    sys-to (.getSystemTo polygon i)]
+                                (when (and (.inRange temporal-bounds valid-from valid-to sys-from sys-to)
+                                           (not (= valid-from valid-to))
+                                           (not (= sys-from sys-to)))
+                                  (.startRow out-rel)
+                                  (.accept content-rel-factory (.rel-idx q-obj) idx)
+                                  (.accept bitemp-consumer idx valid-from valid-to sys-from sys-to)
+                                  (.endRow out-rel)))))))
+
+                      (.nextIndex ev-ptr)
+                      (when (.isValid ev-ptr is-valid-ptr path)
+                        (.add merge-q q-obj))
+                      (recur))))
+
+                (let [^RelationReader rel (cond-> (.realize content-rel-factory)
+                                            (or (empty? (seq content-cols)) (seq temporal-cols))
+                                            (vr/concat-rels (vw/rel-wtr->rdr out-rel)))
+                      ^RelationReader rel (reduce (fn [^RelationReader rel ^IRelationSelector col-pred]
+                                                    (.select rel (.select col-pred allocator rel params)))
+                                                  rel
+                                                  (vals (dissoc col-preds "xt$iid")))]
+                  (.accept c rel)))))
+          true))
 
       false))
 
