@@ -2,6 +2,7 @@ package xtdb.vector;
 
 import org.apache.arrow.memory.BufferAllocator;
 
+import java.io.Closeable;
 import java.util.*;
 import java.util.function.Function;
 
@@ -9,24 +10,30 @@ public class RelationReader implements Iterable<IVectorReader>, AutoCloseable {
 
     private final Map<String, IVectorReader> cols;
     private final int rowCount;
+    private final Closeable cleanup;
 
     public static RelationReader from(List<IVectorReader> cols) {
         return from(cols, cols.stream().mapToInt(IVectorReader::valueCount).findFirst().orElse(0));
     }
 
     public static RelationReader from(List<IVectorReader> cols, int rowCount) {
+        return from(cols, rowCount, null);
+    }
+
+    public static RelationReader from(List<IVectorReader> cols, int rowCount, Closeable cleanup) {
         var colsMap = new LinkedHashMap<String, IVectorReader>();
 
         for (IVectorReader col : cols) {
             colsMap.put(col.getName(), col);
         }
 
-        return new RelationReader(colsMap, rowCount);
+        return new RelationReader(colsMap, rowCount, cleanup);
     }
 
-    private RelationReader(Map<String, IVectorReader> cols, int rowCount) {
+    private RelationReader(Map<String, IVectorReader> cols, int rowCount, Closeable cleanup) {
         this.cols = cols;
         this.rowCount = rowCount;
+        this.cleanup = cleanup;
     }
 
     public int rowCount() {
@@ -72,6 +79,9 @@ public class RelationReader implements Iterable<IVectorReader>, AutoCloseable {
     public void close() throws Exception {
         for (IVectorReader vr : cols.values()) {
             vr.close();
+        }
+        if (this.cleanup != null) {
+            cleanup.close();
         }
     }
 }

@@ -1,25 +1,30 @@
 (ns xtdb.vector.reader
   (:require [clojure.set :as set]
+            [xtdb.util :as util]
             [xtdb.types :as types])
   (:import clojure.lang.MapEntry
-           (com.carrotsearch.hppc IntArrayList)
-           (java.util ArrayList)
+           java.io.Closeable
            (org.apache.arrow.memory BufferAllocator)
            (org.apache.arrow.vector ValueVector VectorSchemaRoot)
            xtdb.api.query.IKeyFn
-           (xtdb.vector IVectorReader RelationReader ValueVectorReadersKt IMultiVectorRelationFactory
-                        IVectorIndirection$Selection IndirectMultiVectorReader)))
+           (xtdb.vector IVectorReader RelationReader ValueVectorReadersKt)))
 
 (defn vec->reader ^IVectorReader [^ValueVector v]
   (ValueVectorReadersKt/from v))
 
 (defn rel-reader
   (^xtdb.vector.RelationReader [cols] (RelationReader/from cols))
-  (^xtdb.vector.RelationReader [cols ^long row-count] (RelationReader/from cols row-count)))
+  (^xtdb.vector.RelationReader [cols ^long row-count] (RelationReader/from cols row-count))
+  (^xtdb.vector.RelationReader [cols ^long row-count ^Closeable cleanup] (RelationReader/from cols row-count cleanup)))
 
-(defn <-root ^xtdb.vector.RelationReader [^VectorSchemaRoot root]
-  (rel-reader (map vec->reader (.getFieldVectors root))
-              (.getRowCount root)))
+(defn <-root ^xtdb.vector.RelationReader
+  ([^VectorSchemaRoot root] (rel-reader (map vec->reader (.getFieldVectors root)) (.getRowCount root)))
+  ([^VectorSchemaRoot root close?]
+   (if close?
+     (rel-reader (map vec->reader (.getFieldVectors root)) (.getRowCount root) (reify Closeable
+                                                                                 (close [_]
+                                                                                   (util/close root))))
+     (<-root root))))
 
 (defn ->absent-col [col-name allocator row-count]
   (vec->reader (doto (-> (types/col-type->field col-name :null)
