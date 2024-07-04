@@ -1,6 +1,7 @@
 (ns xtdb.util
   (:refer-clojure :exclude [with-open])
-  (:require [clojure.java.io :as io]
+  (:require [clojure.math :as math]
+            [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
@@ -663,3 +664,14 @@
                           (cons x (step (rest s) (conj seen v)))))))
                   xs seen)))]
      (step coll #{}))))
+
+(defn max-direct-memory
+  "Returns the maximum direct memory supposed to be used by the system"
+  []
+  (if-let [size-string (get (System/getProperties) "MaxDirectMemory")]
+    (let [^long size (parse-long (subs size-string 0 (dec (count size-string))))]
+      (case (last (str/lower-case size-string))
+        \g (* size 1024 1024 1024)
+        \m (* size 1024 1024)))
+    ;; otherwise we use as much direct memory as there was heap specified
+    (.maxMemory (Runtime/getRuntime))))
