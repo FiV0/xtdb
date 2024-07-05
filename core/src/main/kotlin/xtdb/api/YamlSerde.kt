@@ -119,5 +119,9 @@ val YAML_SERDE = Yaml(
 /**
  * @suppress
  */
-fun nodeConfig(yamlString: String): Xtdb.Config =
-    YAML_SERDE.decodeFromString<Xtdb.Config>(yamlString)
+fun nodeConfig(yamlString: String): Xtdb.Config {
+    val config = YAML_SERDE.decodeFromString<Xtdb.Config>(yamlString)
+    config.metrics()
+    return config
+}
+
