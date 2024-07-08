@@ -158,13 +158,13 @@
                   (CompletableFuture/completedFuture buffer-cache-path)
                   (CompletableFuture/failedFuture (os/obj-missing-exception k)))
                 (util/then-apply
-                 (fn [path]
-                   (try
-                     (let [nio-buffer (util/->mmap-path path)
-                           create-arrow-buf #(util/->arrow-buf-view allocator nio-buffer)]
-                       (cache-compute memory-store k create-arrow-buf))
-                     (catch ClosedByInterruptException _
-                       (throw (InterruptedException.))))))))))))
+                  (fn [path]
+                    (try
+                      (let [nio-buffer (util/->mmap-path path)
+                            create-arrow-buf #(util/->arrow-buf-view allocator nio-buffer)]
+                        (cache-compute memory-store k create-arrow-buf))
+                      (catch ClosedByInterruptException _
+                        (throw (InterruptedException.))))))))))))
 
   (putObject [_ k buffer]
     (CompletableFuture/completedFuture
@@ -231,24 +231,24 @@
     (free-memory memory-store)
     (util/close allocator)))
 
+(defn ->memory-buffer-cache ^Cache [^long max-cache-bytes]
+  (-> (Caffeine/newBuilder)
+      (.maximumWeight max-cache-bytes)
+      (.weigher (reify Weigher
+                  (weigh [_ _k v]
+                    (.capacity ^ArrowBuf v))))
+      (.removalListener (reify RemovalListener
+                          (onRemoval [_ _k v _]
+                            (util/close v))))
+      (.build)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-local-storage ^xtdb.IBufferPool [^BufferAllocator allocator, ^Storage$LocalStorageFactory factory]
-  (let [^Cache cache (-> (Caffeine/newBuilder)
-                         ;; (.maximumSize (.getMaxCacheEntries factory))
-                         (.maximumWeight (.getMaxCacheBytes factory))
-                         (.weigher (reify Weigher
-                                     (weigh [_ _k v]
-                                       (.capacity ^ArrowBuf v))))
-                         (.removalListener (reify RemovalListener
-                                             (onRemoval [_ _k v _]
-                                               (util/close v))))
-                         (.build))]
-    (->LocalBufferPool (.newChildAllocator allocator "buffer-pool" 0 Long/MAX_VALUE)
-                       cache
-                       (-> (.getPath factory)
-                           (.resolve storage-root))
-                       (.getMaxCacheBytes factory))))
+  (->LocalBufferPool (.newChildAllocator allocator "buffer-pool" 0 Long/MAX_VALUE)
+                     (->memory-buffer-cache (.getMaxCacheBytes factory))
+                     (-> (.getPath factory)
+                         (.resolve storage-root))
+                     (.getMaxCacheBytes factory)))
 
 (defn dir->buffer-pool
   "Creates a local storage buffer pool from the given directory."
@@ -425,20 +425,10 @@
 
 (defn open-remote-storage ^xtdb.IBufferPool [^BufferAllocator allocator, ^Storage$RemoteStorageFactory factory]
   (util/with-close-on-catch [object-store (.openObjectStore (.getObjectStore factory))]
-    (let [^Cache cache  (-> (Caffeine/newBuilder)
-                            ;; (.maximumSize (.getMaxCacheEntries factory))
-                            (.maximumWeight (.getMaxCacheBytes factory))
-                            (.weigher (reify Weigher
-                                        (weigh [_ _k  v]
-                                          (.capacity ^ArrowBuf v))))
-                            (.removalListener (reify RemovalListener
-                                                (onRemoval [_ _k v _]
-                                                  (util/close v))))
-                            (.build))]
-      (->RemoteBufferPool (.newChildAllocator allocator "buffer-pool" 0 Long/MAX_VALUE)
-                          cache
-                          (.getLocalDiskCache factory)
-                          object-store))))
+    (->RemoteBufferPool (.newChildAllocator allocator "buffer-pool" 0 Long/MAX_VALUE)
+                        (->memory-buffer-cache (.getMaxCacheBytes factory))
+                        (.getLocalDiskCache factory)
+                        object-store)))
 
 (defmulti ->object-store-factory
   #_{:clj-kondo/ignore [:unused-binding]}
