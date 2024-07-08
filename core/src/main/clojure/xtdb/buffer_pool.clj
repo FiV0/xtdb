@@ -14,7 +14,7 @@
            (java.util NavigableMap LinkedHashMap)
            [java.util.concurrent CompletableFuture]
            (java.util.concurrent.atomic AtomicLong)
-           [java.util.function Function]
+           [java.util.function Function BiFunction]
            [org.apache.arrow.memory ArrowBuf BufferAllocator]
            (org.apache.arrow.vector VectorSchemaRoot)
            (org.apache.arrow.vector.ipc ArrowFileWriter)
@@ -44,19 +44,16 @@
 (defn- retain [^ArrowBuf buf] (.retain (.getReferenceManager buf)) buf)
 
 (defn- cache-get ^ArrowBuf [^Cache memory-store k]
-  (locking memory-store
-    (some-> (.getIfPresent memory-store k) retain)))
+  (.. memory-store asMap (computeIfPresent k (reify BiFunction
+                                               (apply [_ _k v]
+                                                 (retain v))))))
 
 (defn- cache-compute
   "Computing the cached ArrowBuf from (f) if needed."
   [^Cache memory-store k f]
-  (locking memory-store
-    (let [cached! (volatile! true)]
-      (cond-> (.get memory-store k (reify Function
-                                     (apply [_ _]
-                                       (vreset! cached! false)
-                                       (retain (f)))))
-        @cached! retain))))
+  (.. memory-store asMap (compute k (reify BiFunction
+                                      (apply [_ _k v]
+                                        (retain (or v (f))))))))
 
 (defn- close-arrow-writer [^ArrowFileWriter aw]
   ;; arrow wraps InterruptExceptions
