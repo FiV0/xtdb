@@ -33,3 +33,7 @@ include("modules:c1-import", "modules:flight-sql")
 project(":modules:flight-sql").name = "xtdb-flight-sql"
 
 include("modules:bench", "modules:datasets")
+include("modules:cloudwatch-metrics")
+findProject(":modules:cloudwatch-metrics")?.name = "cloudwatch-metrics"
+include("modules:cloudwatch-metrics")
+findProject(":modules:cloudwatch-metrics")?.name = "cloudwatch-metrics"

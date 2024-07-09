@@ -6,6 +6,7 @@ import kotlinx.serialization.serializer
 import xtdb.api.IXtdb
 import xtdb.api.log.Log
 import xtdb.api.storage.ObjectStoreFactory
+import xtdb.metrics.MeterRegistryFactory
 import kotlin.reflect.KClass
 
 interface XtdbModule : AutoCloseable {
@@ -25,6 +26,9 @@ interface XtdbModule : AutoCloseable {
 
         @OptIn(InternalSerializationApi::class)
         fun <F : ObjectStoreFactory> registerObjectStore(factory: KClass<F>, serializer: KSerializer<F> = factory.serializer())
+
+        @OptIn(InternalSerializationApi::class)
+        fun <F : MeterRegistryFactory> registerMeterRegistry(factory: KClass<F>, serializer: KSerializer<F> = factory.serializer())
     }
 
     interface Registration {
