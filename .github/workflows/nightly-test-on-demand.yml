@@ -14,7 +14,6 @@ on: workflow_dispatch
 
 jobs:
   nightly-test:
-    if: github.repository == 'xtdb/xtdb'
     name: Nightly Test (on demand)
     runs-on: ubuntu-latest
     permissions:
