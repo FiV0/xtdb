@@ -1,6 +1,6 @@
 @file:UseSerializers(StringWithEnvVarSerde::class, PathWithEnvVarSerde::class)
 
-package xtdb.api.storage
+package xtdb.api.storage.aws
 
 import com.azure.identity.DefaultAzureCredential
 import kotlinx.serialization.SerialName
@@ -9,7 +9,9 @@ import kotlinx.serialization.UseSerializers
 import xtdb.api.PathWithEnvVarSerde
 import xtdb.api.StringWithEnvVarSerde
 import xtdb.api.module.XtdbModule
-import xtdb.api.storage.AzureBlobStorage.Factory
+import xtdb.api.storage.aws.AzureBlobStorage.Factory
+import xtdb.api.storage.ObjectStore
+import xtdb.api.storage.ObjectStoreFactory
 import xtdb.util.requiringResolve
 import java.nio.file.Path
 
