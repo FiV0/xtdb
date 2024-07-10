@@ -691,17 +691,17 @@
           :scan-emitter (ig/ref :xtdb.operator.scan/scan-emitter)
           :live-index (ig/ref :xtdb.indexer/live-index)
           :q-src (ig/ref ::q/query-source)
-          :registry (ig/ref :xtdb/meter-registry)}
+          :metrics (ig/ref :xtdb.metrics/metrics)}
          opts))
 
-(defmethod ig/init-key :xtdb/indexer [_ {:keys [allocator scan-emitter, q-src, live-index registry]}]
+(defmethod ig/init-key :xtdb/indexer [_ {:keys [allocator scan-emitter, q-src, live-index metrics]}]
   (util/with-close-on-catch [allocator (util/->child-allocator allocator "indexer")]
     (->Indexer allocator scan-emitter q-src live-index
 
                nil ;; indexer-error
 
                (PriorityBlockingQueue.)
-               {:tx-timer (metrics/add-timer registry "tx.op.timer"
+               {:tx-timer (metrics/add-timer (:registry metrics) "tx.op.timer"
                                              {:description "indicates the timing and number of transactions"})})))
 
 (defmethod ig/halt-key! :xtdb/indexer [_ indexer]

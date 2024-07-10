@@ -437,11 +437,11 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
            (set (xt/q tu/*node* "SELECT * EXCLUDE (_id) FROM foo, bar"))))
 
   ;; Thrown due to duplicate column projection in the query on `_id`
-  (t/is (thrown-with-msg? 
+  (t/is (thrown-with-msg?
          IllegalArgumentException
-         #"Duplicate column projection: xt\$id" 
+         #"Duplicate column projection: xt\$id"
          (xt/q tu/*node* "FROM foo, bar")))
-  
+
   (t/is (thrown-with-msg?
          IllegalArgumentException
          #"Duplicate column projection: xt\$id"
@@ -455,15 +455,15 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
 
   (t/is (= #{{:a 1 :c 3} {:a 1 :d 4} {:b 2 :c 3} {:b 2 :d 4}}
            (set (xt/q tu/*node* "FROM (SELECT * EXCLUDE (_id) FROM foo, bar) AS baz"))))
-  
+
   (t/is (= #{{:xt/id 1 :a 1 :c 3} {:xt/id 1 :b 2 :c 3} {:xt/id 2 :a 1 :d 4} {:xt/id 2 :b 2 :d 4}}
            (set (xt/q tu/*node* "SELECT bar.*, foo.a, foo.b FROM foo, bar"))))
-  
+
   (t/is (= #{{} {:b 2}}
            (set (xt/q tu/*node* "SELECT * EXCLUDE (_id, a) FROM foo"))))
-  
+
   (t/is (= #{{:xt/id 1 :new 1} {:xt/id 2 :b 2}}
-           (set (xt/q tu/*node* "SELECT * RENAME a AS new FROM foo")))) 
+           (set (xt/q tu/*node* "SELECT * RENAME a AS new FROM foo"))))
 
   (t/is (= #{{:xt/id 1 :new 1} {:xt/id 2 :new2 2}}
            (set (xt/q tu/*node* "SELECT * RENAME (a AS new, b AS new2)  FROM foo"))))

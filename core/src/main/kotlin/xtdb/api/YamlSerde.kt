@@ -112,6 +112,13 @@ val YAML_SERDE = Yaml(
                     ) {
                         polymorphic(ObjectStoreFactory::class) { subclass(factory, serializer) }
                     }
+
+                    override fun <F : MetricsConfigFactory> registerMetricsConfigFactory(
+                        factory: KClass<F>,
+                        serializer: KSerializer<F>,
+                    ) {
+                        polymorphic(MetricsConfigFactory::class) { subclass(factory, serializer) }
+                    }
                 })
             }
     })

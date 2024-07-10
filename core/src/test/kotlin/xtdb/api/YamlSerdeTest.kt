@@ -29,9 +29,21 @@ class YamlSerdeTest {
         storage: !Local
             path: local-storage
             maxCacheEntries: 1025
+        metrics: !Local
+            port: 3000
         """.trimIndent()
 
         println(nodeConfig(input).toString())
+    }
+
+    @Test
+    fun testMetricsConfigDecoding() {
+        val input = """
+        metrics: !Local
+            port: 3000
+        """.trimIndent()
+
+        assertEquals(LocalMetricsConfig.Factory(port = 3000), nodeConfig(input).metrics)
     }
 
     @Test

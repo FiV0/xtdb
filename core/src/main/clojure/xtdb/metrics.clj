@@ -10,11 +10,11 @@
            (io.micrometer.core.instrument.binder.jvm ClassLoaderMetrics JvmGcMetrics JvmHeapPressureMetrics JvmMemoryMetrics JvmThreadMetrics)
            (io.micrometer.core.instrument.binder.system ProcessorMetrics)
            (io.micrometer.core.instrument.simple SimpleMeterRegistry)
-           (io.micrometer.prometheus PrometheusConfig PrometheusMeterRegistry)
+           (io.micrometer.prometheus PrometheusMeterRegistry)
            (java.net InetSocketAddress)
            (java.util.function Supplier)
            (java.util.stream Stream)
-           (xtdb.api MetricsConfig Xtdb$Config)))
+           (xtdb.api MetricsConfigFactory LocalMetricsConfig LocalMetricsConfig$Factory Xtdb$Config)))
 
 (defn meter-reg ^MeterRegistry
   ([] (meter-reg (SimpleMeterRegistry.)))
@@ -23,12 +23,6 @@
                                 (JvmGcMetrics.) (ProcessorMetrics.) (JvmThreadMetrics.)]]
      (.bindTo metric meter-reg))
    meter-reg))
-
-(defmethod ig/init-key :xtdb/meter-registry [_ {}]
-  (meter-reg (PrometheusMeterRegistry. PrometheusConfig/DEFAULT)))
-
-(defmethod ig/halt-key! :xtdb/meter-registry [_ ^MeterRegistry registry]
-  (.close registry))
 
 (defn add-counter [reg name {:keys [description]}]
   (cond-> (Counter/builder name)
@@ -59,14 +53,16 @@
        (cond-> (:unit opts) (.baseUnit (str (:unit opts))))
        (.register reg))))
 
-(defmethod xtn/apply-config! :xtdb/metrics-server [^Xtdb$Config config, _ {:keys [port], :or {port 8080}}]
-  (.setMetrics config (MetricsConfig. port)))
+(defmethod xtn/apply-config! :xtdb.metrics/metrics [^Xtdb$Config config, _ {:keys [port], :or {port 8080}}]
+  (.setMetrics config (LocalMetricsConfig$Factory. (int port))))
 
-(defmethod ig/prep-key :xtdb/metrics-server [_ ^MetricsConfig opts]
-  {:registry (ig/ref :xtdb/meter-registry)
-   :port (.getPort opts)})
+(defmethod ig/prep-key :xtdb.metrics/metrics [_ ^MetricsConfigFactory opts]
+  (if-not opts
+    {:registry (SimpleMeterRegistry.)}
+    {:registry (.getMeterRegistry opts)
+     :port (.getPort ^LocalMetricsConfig$Factory opts)}))
 
-(defmethod ig/init-key :xtdb/metrics-server [_ {:keys [^PrometheusMeterRegistry registry port]}]
+(defn- metrics-server [{:keys [^PrometheusMeterRegistry registry port]}]
   (try
     (let [port (if (util/port-free? port) port (util/free-port))
           http-server (HttpServer/create (InetSocketAddress. port) 0)]
@@ -83,6 +79,12 @@
     (catch java.io.IOException e
       (throw (err/runtime-err :metrics-server-error {} e)))))
 
-(defmethod ig/halt-key! :xtdb/metrics-server [_ ^HttpServer server]
-  (.stop server 0)
-  (log/info "Metrics server stopped."))
+(defmethod ig/init-key :xtdb.metrics/metrics [_ {:keys [registry] :as opts}]
+  (cond-> {:registry (meter-reg registry)}
+    (instance? PrometheusMeterRegistry registry) (assoc :server (metrics-server opts))))
+
+(defmethod ig/halt-key! :xtdb.metrics/metrics [_ {:keys [^HttpServer server ^MeterRegistry registry]}]
+  (when server
+    (.stop server 0)
+    (log/info "Metrics server stopped."))
+  (.close registry))
