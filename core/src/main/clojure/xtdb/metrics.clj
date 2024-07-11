@@ -53,14 +53,32 @@
        (cond-> (:unit opts) (.baseUnit (str (:unit opts))))
        (.register reg))))
 
-(defmethod xtn/apply-config! :xtdb.metrics/metrics [^Xtdb$Config config, _ {:keys [port], :or {port 8080}}]
-  (.setMetrics config (LocalMetricsConfig$Factory. (int port))))
+(defmulti ->metrics-config-factory
+  #_{:clj-kondo/ignore [:unused-binding]}
+  (fn [tag opts]
+    (when-let [ns (and tag (namespace tag))]
+      (doseq [k [(symbol ns)
+                 (symbol (str ns "." (name tag)))]]
+
+        (try
+          (require k)
+          (catch Throwable _))))
+
+    tag)
+  :default ::default)
+
+(defmethod ->metrics-config-factory ::default [_ {:keys [port], :or {port 8080}}] (LocalMetricsConfig$Factory. port))
+(defmethod ->metrics-config-factory :cloudwatch [_ opts] (->metrics-config-factory :xtdb.aws.cloudwatch/metrics-config opts))
+
+(defmethod xtn/apply-config! :xtdb.metrics/metrics [^Xtdb$Config config, _ {:keys [type] :as opts}]
+  (.setMetrics config (->metrics-config-factory type opts)))
 
 (defmethod ig/prep-key :xtdb.metrics/metrics [_ ^MetricsConfigFactory opts]
   (if-not opts
     {:registry (SimpleMeterRegistry.)}
-    {:registry (.getMeterRegistry opts)
-     :port (.getPort ^LocalMetricsConfig$Factory opts)}))
+    (cond-> {:registry (.getMeterRegistry opts)}
+      (instance? LocalMetricsConfig$Factory opts)
+      (assoc :port (.getPort ^LocalMetricsConfig$Factory opts)))))
 
 (defn- metrics-server [{:keys [^PrometheusMeterRegistry registry port]}]
   (try

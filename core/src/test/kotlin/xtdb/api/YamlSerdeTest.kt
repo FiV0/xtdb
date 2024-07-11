@@ -15,6 +15,7 @@ import xtdb.aws.S3.s3
 import xtdb.api.storage.Storage.InMemoryStorageFactory
 import xtdb.api.storage.Storage.LocalStorageFactory
 import xtdb.api.storage.Storage.RemoteStorageFactory
+import xtdb.aws.CloudWatchMetricsConfig
 import java.nio.file.Paths
 
 class YamlSerdeTest {
@@ -44,6 +45,15 @@ class YamlSerdeTest {
         """.trimIndent()
 
         assertEquals(LocalMetricsConfig.Factory(port = 3000), nodeConfig(input).metrics)
+
+
+        val awsInput = """
+        metrics: !CloudWatch
+            namespace: "aws.namespace" 
+        """.trimIndent()
+
+        assertEquals(CloudWatchMetricsConfig.Factory("aws.namespace").namespace, (nodeConfig(awsInput).metrics as CloudWatchMetricsConfig.Factory).namespace)
+
     }
 
     @Test
