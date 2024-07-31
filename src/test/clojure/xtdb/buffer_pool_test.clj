@@ -101,7 +101,7 @@
         (bp/evict-cached-buffer! bp k)
         ;; Evicted from map and deleted from disk (ie, replicating effects of 'eviction' here)
         (.remove (.asMap local-disk-cache-evictor) (.resolve local-disk-cache k))
-        (util/delete-file (.resolve local-disk-cache k)) 
+        (util/delete-file (.resolve local-disk-cache k))
         ;; Will fetch from object store again
         (util/with-open [buf @(.getBuffer bp k)]
           (t/is (= 0 (util/compare-nio-buffers-unsigned expected (arrow-buf->nio buf)))))))))
@@ -123,24 +123,30 @@
     (swap! calls conj :put)
     (CompletableFuture/completedFuture nil))
 
+  (listAllObjects [_]
+    (keys @buffers))
+
+  (listObjects [_ path]
+    (->> (keys @buffers) (filter #(.startsWith ^Path % path)) (sort)))
+
   SupportsMultipart
   (startMultipart [_ k]
     (let [parts (atom [])]
       (CompletableFuture/completedFuture
-        (reify IMultipartUpload
-          (uploadPart [_ buf]
-            (swap! calls conj :upload)
-            (swap! parts conj (copy-byte-buffer buf))
-            (CompletableFuture/completedFuture nil))
+       (reify IMultipartUpload
+         (uploadPart [_ buf]
+           (swap! calls conj :upload)
+           (swap! parts conj (copy-byte-buffer buf))
+           (CompletableFuture/completedFuture nil))
 
-          (complete [_]
-            (swap! calls conj :complete)
-            (swap! buffers assoc k (concat-byte-buffers @parts))
-            (CompletableFuture/completedFuture nil))
+         (complete [_]
+           (swap! calls conj :complete)
+           (swap! buffers assoc k (concat-byte-buffers @parts))
+           (CompletableFuture/completedFuture nil))
 
-          (abort [_]
-            (swap! calls conj :abort)
-            (CompletableFuture/completedFuture nil)))))))
+         (abort [_]
+           (swap! calls conj :abort)
+           (CompletableFuture/completedFuture nil)))))))
 
 (def simulated-obj-store-factory
   (reify ObjectStoreFactory
@@ -223,16 +229,16 @@
       (t/testing "staying below max size - all elements available"
         (insert-utf8-to-local-cache bp (util/->path "a") 4)
         (insert-utf8-to-local-cache bp (util/->path "b") 4)
-        (t/is (= {:file-count 2 :file-names #{"a" "b"}} (file-info local-disk-cache)))) 
-      
+        (t/is (= {:file-count 2 :file-names #{"a" "b"}} (file-info local-disk-cache))))
+
       (t/testing "going above max size - all entries pinned (ie, in memory cache) - should return all elements"
         (insert-utf8-to-local-cache bp (util/->path "c") 4)
-        (t/is (= {:file-count 3 :file-names #{"a" "b" "c"}} (file-info local-disk-cache)))) 
-      
+        (t/is (= {:file-count 3 :file-names #{"a" "b" "c"}} (file-info local-disk-cache))))
+
       (t/testing "entries unpinned (cleared from memory cache by new entries) - should evict entries since above size limit"
-        (insert-utf8-to-local-cache bp (util/->path "d") 4) 
-        (Thread/sleep 100) 
-        (t/is (= 3 (:file-count (file-info local-disk-cache)))) 
+        (insert-utf8-to-local-cache bp (util/->path "d") 4)
+        (Thread/sleep 100)
+        (t/is (= 3 (:file-count (file-info local-disk-cache))))
 
         (insert-utf8-to-local-cache bp (util/->path "e") 4)
         (Thread/sleep 100)
@@ -261,6 +267,27 @@
 
       (with-open [^ArrowBuf buf @(.getBuffer bp (util/->path "b"))]
         (t/is (= 0 (util/compare-nio-buffers-unsigned (utf8-buf "aaaa") (arrow-buf->nio buf))))))))
+
+
+(t/deftest remote-buffer-pool
+  (util/with-tmp-dirs #{local-disk-cache}
+    ;; Writing files to buffer pool & local-disk-cache
+    (with-open [bp (bp/open-remote-storage
+                    tu/*allocator*
+                    (-> (Storage/remoteStorage simulated-obj-store-factory local-disk-cache)
+                        (.maxDiskCacheBytes 10)
+                        (.maxCacheBytes 12)))]
+      (insert-utf8-to-local-cache bp (util/->path "foo/bar/file1.txt") 4)
+      (insert-utf8-to-local-cache bp (util/->path "foo/bar/file2.txt") 4)
+
+
+      (t/testing "buffer pool correct object listing"
+
+        (t/is (= ["foo/bar/file1.txt" "foo/bar/file2.txt"] (->> (.listAllObjects bp) (mapv str))))
+        (t/is (= ["foo/bar/file1.txt" "foo/bar/file2.txt"] (->> (.listObjects bp (util/->path "foo")) (mapv str)))))
+      )
+
+    ))
 
 (t/deftest local-buffer-pool
   (tu/with-tmp-dirs #{tmp-dir}
