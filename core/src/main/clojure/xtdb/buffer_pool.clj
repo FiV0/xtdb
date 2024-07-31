@@ -192,10 +192,12 @@
 
   (listObjects [_ dir]
     (let [dir (.resolve disk-store dir)]
-      (when (Files/exists dir (make-array LinkOption 0))
-        (util/with-open [dir-stream (Files/newDirectoryStream dir)]
-          (vec (sort (for [^Path path dir-stream]
-                       (.relativize disk-store path))))))))
+      (if (Files/exists dir (make-array LinkOption 0))
+        (util/with-open [dir-stream (Files/walk dir (make-array FileVisitOption 0))]
+          (vec (sort (for [^Path path (iterator-seq (.iterator dir-stream))
+                           :when (Files/isRegularFile path (make-array LinkOption 0))]
+                       (.relativize disk-store path)))))
+        [])))
 
   (openArrowWriter [_ k vsr]
     (let [tmp-path (create-tmp-path disk-store)]
@@ -249,11 +251,12 @@
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-local-storage ^xtdb.IBufferPool [^BufferAllocator allocator, ^Storage$LocalStorageFactory factory]
-  (->LocalBufferPool (.newChildAllocator allocator "buffer-pool" 0 Long/MAX_VALUE)
-                     (->memory-buffer-cache (.getMaxCacheBytes factory))
-                     (-> (.getPath factory)
-                         (.resolve storage-root))
-                     (.getMaxCacheBytes factory)))
+  (let [disk-store-path (-> (.getPath factory) (.resolve storage-root))]
+    (util/mkdirs disk-store-path)
+    (->LocalBufferPool (.newChildAllocator allocator "buffer-pool" 0 Long/MAX_VALUE)
+                       (->memory-buffer-cache (.getMaxCacheBytes factory))
+                       disk-store-path
+                       (.getMaxCacheBytes factory))))
 
 (defn dir->buffer-pool
   "Creates a local storage buffer pool from the given directory."

@@ -67,7 +67,7 @@
       (.put dst src))
     (.flip dst)))
 
-(defn utf8-buf [s] (ByteBuffer/wrap (.getBytes (str s) "utf-8")))
+(defn utf8-buf ^ByteBuffer [s] (ByteBuffer/wrap (.getBytes (str s) "utf-8")))
 
 (defn arrow-buf-bytes ^bytes [^ArrowBuf arrow-buf]
   (let [n (.capacity arrow-buf)
@@ -261,3 +261,17 @@
 
       (with-open [^ArrowBuf buf @(.getBuffer bp (util/->path "b"))]
         (t/is (= 0 (util/compare-nio-buffers-unsigned (utf8-buf "aaaa") (arrow-buf->nio buf))))))))
+
+(t/deftest local-buffer-pool
+  (tu/with-tmp-dirs #{tmp-dir}
+    (with-open [bp (bp/open-local-storage tu/*allocator* (Storage/localStorage tmp-dir))]
+      (t/testing "empty buffer pool"
+        (t/is (= [] (.listAllObjects bp)))
+        (t/is (= [] (.listObjects bp (.toPath (io/file "foo"))))))
+
+      (t/testing "buffer pool correct object listing"
+        (.putObject bp (.toPath (io/file "foo/bar/file1.txt")) (utf8-buf "hello"))
+        (.putObject bp (.toPath (io/file "foo/bar/file2.txt")) (utf8-buf "world"))
+
+        (t/is (= ["foo/bar/file1.txt" "foo/bar/file2.txt"] (->> (.listAllObjects bp) (mapv str))))
+        (t/is (= ["foo/bar/file1.txt" "foo/bar/file2.txt"] (->> (.listObjects bp (.toPath (io/file "foo"))) (mapv str))))))))
