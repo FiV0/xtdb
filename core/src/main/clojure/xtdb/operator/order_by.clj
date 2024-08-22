@@ -112,7 +112,7 @@
           nil
           order-specs))
 
-(defn- rename-fields [fields]
+(defn rename-fields [fields]
   (vec (for [[col-name field] fields]
          (types/field-with-name field (str col-name)))))
 

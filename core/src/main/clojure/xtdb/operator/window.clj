@@ -116,7 +116,7 @@
          (util/with-open [rel-wtr (RelationWriter. allocator (for [^Field field static-fields]
                                                                (vw/->writer (.createVector field allocator))))]
 
-           (.forEachRemaining in-cursor (fn [_ in-rel]
+           (.forEachRemaining in-cursor (fn [in-rel]
                                           (vw/append-rel rel-wtr in-rel)
                                           (with-open [group-mapping (.groupMapping group-mapper in-rel)]
                                             (doseq [^IWindowFnSpec window-spec window-specs]
@@ -178,7 +178,7 @@
                            (doseq [^IWindowFnSpecFactory factory window-fn-factories]
                              (.add window-fn-specs (.build factory allocator)))
 
-                           (WindowFnCursor. allocator in-cursor fields
+                           (WindowFnCursor. allocator in-cursor (order-by/rename-fields fields)
                                             (group-by/->group-mapper allocator (select-keys fields partition-cols))
                                             (vec window-fn-specs)
                                             false)
