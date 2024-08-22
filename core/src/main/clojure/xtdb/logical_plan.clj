@@ -166,108 +166,113 @@
 
 (defn relation-columns [relation-in]
   (r/zmatch relation-in
-    [:table explicit-column-names _]
-    (vec explicit-column-names)
+            [:table explicit-column-names _]
+            (vec explicit-column-names)
 
-    [:table table]
-    (mapv symbol (if (map? table)
-                   (keys table)
-                   (keys (first table))))
+            [:table table]
+            (mapv symbol (if (map? table)
+                           (keys table)
+                           (keys (first table))))
 
-    [:scan _scan-opts columns]
-    (mapv ->projected-column columns)
+            [:scan _scan-opts columns]
+            (mapv ->projected-column columns)
 
-    [:join _ lhs rhs]
-    (vec (mapcat relation-columns [lhs rhs]))
+            [:join _ lhs rhs]
+            (vec (mapcat relation-columns [lhs rhs]))
 
-    [:mega-join _ rels]
-    (vec (mapcat relation-columns rels))
+            [:mega-join _ rels]
+            (vec (mapcat relation-columns rels))
 
-    [:cross-join lhs rhs]
-    (vec (mapcat relation-columns [lhs rhs]))
+            [:cross-join lhs rhs]
+            (vec (mapcat relation-columns [lhs rhs]))
 
-    [:left-outer-join _ lhs rhs]
-    (vec (mapcat relation-columns [lhs rhs]))
+            [:left-outer-join _ lhs rhs]
+            (vec (mapcat relation-columns [lhs rhs]))
 
-    [:semi-join _ lhs _]
-    (relation-columns lhs)
+            [:semi-join _ lhs _]
+            (relation-columns lhs)
 
-    [:anti-join _ lhs _]
-    (relation-columns lhs)
+            [:anti-join _ lhs _]
+            (relation-columns lhs)
 
-    [:mark-join projection lhs _]
-    (conj
-      (relation-columns lhs)
-      (->projected-column projection))
+            [:mark-join projection lhs _]
+            (conj
+             (relation-columns lhs)
+             (->projected-column projection))
 
-    [:single-join _ lhs rhs]
-    (vec (mapcat relation-columns [lhs rhs]))
+            [:single-join _ lhs rhs]
+            (vec (mapcat relation-columns [lhs rhs]))
 
-    [:rename prefix-or-columns relation]
-    (if (symbol? prefix-or-columns)
-      (vec (for [c (relation-columns relation)]
-             (symbol (str prefix-or-columns) (name c))))
-      (replace prefix-or-columns (relation-columns relation)))
+            [:rename prefix-or-columns relation]
+            (if (symbol? prefix-or-columns)
+              (vec (for [c (relation-columns relation)]
+                     (symbol (str prefix-or-columns) (name c))))
+              (replace prefix-or-columns (relation-columns relation)))
 
-    [:project projection _]
-    (mapv ->projected-column projection)
+            [:project projection _]
+            (mapv ->projected-column projection)
 
-    [:map projection relation]
-    (into (relation-columns relation) (map ->projected-column projection))
+            [:map projection relation]
+            (into (relation-columns relation) (map ->projected-column projection))
 
-    [:group-by columns _]
-    (mapv ->projected-column columns)
+            [:group-by columns _]
+            (mapv ->projected-column columns)
 
-    [:select _ relation]
-    (relation-columns relation)
+            [:select _ relation]
+            (relation-columns relation)
 
-    [:order-by _ relation]
-    (relation-columns relation)
+            [:order-by _ relation]
+            (relation-columns relation)
 
-    [:top _ relation]
-    (relation-columns relation)
+            [:top _ relation]
+            (relation-columns relation)
 
-    [:distinct relation]
-    (relation-columns relation)
+            [:distinct relation]
+            (relation-columns relation)
 
-    [:intersect lhs _]
-    (relation-columns lhs)
+            [:intersect lhs _]
+            (relation-columns lhs)
 
-    [:difference lhs _]
-    (relation-columns lhs)
+            [:difference lhs _]
+            (relation-columns lhs)
 
-    [:union-all lhs _]
-    (relation-columns lhs)
+            [:union-all lhs _]
+            (relation-columns lhs)
 
-    [:fixpoint _ base _]
-    (relation-columns base)
+            [:fixpoint _ base _]
+            (relation-columns base)
 
-    [:unnest columns relation]
-    (conj (relation-columns relation) (key (first columns)))
+            [:unnest columns relation]
+            (conj (relation-columns relation) (key (first columns)))
 
-    [:unnest columns opts relation]
-    (cond-> (conj (relation-columns relation) (val (first columns)))
-      (:ordinality-column opts) (conj (:ordinality-column opts)))
+            [:unnest columns opts relation]
+            (cond-> (conj (relation-columns relation) (val (first columns)))
+              (:ordinality-column opts) (conj (:ordinality-column opts)))
 
-    [:assign _ relation]
-    (relation-columns relation)
+            [:assign _ relation]
+            (relation-columns relation)
 
-    [:apply mode _ independent-relation dependent-relation]
-    (-> (relation-columns independent-relation)
-        (concat
-          (when-let [mark-join-projection (:mark-join mode)]
-            [(->projected-column mark-join-projection)])
-          (case mode
-            (:cross-join :left-outer-join :single-join) (relation-columns dependent-relation)
-            []))
-        (vec))
+            [:apply mode _ independent-relation dependent-relation]
+            (-> (relation-columns independent-relation)
+                (concat
+                 (when-let [mark-join-projection (:mark-join mode)]
+                   [(->projected-column mark-join-projection)])
+                 (case mode
+                   (:cross-join :left-outer-join :single-join) (relation-columns dependent-relation)
+                   []))
+                (vec))
 
-    [:arrow _path]
-    []
+            [:arrow _path]
+            []
 
-    (throw (err/illegal-arg ::cannot-calculate-relation-cols
-                            {::err/message (str "cannot calculate columns for: " (pr-str relation-in))
-                             :relation relation-in}))))
+            [:window specs relation]
+            (concat
+             (->> specs :projections (map ->projected-column))
+             (relation-columns relation))
+
+            (throw (err/illegal-arg ::cannot-calculate-relation-cols
+                                    {::err/message (str "cannot calculate columns for: " (pr-str relation-in))
+                                     :relation relation-in}))))
 
 (defn expr-symbols [expr]
   (set (for [x (flatten (if (coll? expr)
@@ -1263,4 +1268,3 @@
                             {::err/message (s/explain-str ::logical-plan plan)
                              :plan plan
                              :explain-data (s/explain-data ::logical-plan plan)}))))
-
