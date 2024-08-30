@@ -1673,23 +1673,85 @@
       (t/is (= [{:_id 1, :v 1}]
                (pg/query conn "SELECT * FROM foo"))))))
 
-(deftest test-java-sql-timestamp
-  (testing "java.sql.Timestamp"
-    (with-open [conn (jdbc-conn "prepareThreshold" -1)
-                stmt (.prepareStatement conn "SELECT ? AS v")]
+(comment
 
-      (.setObject stmt 1 (Timestamp/from #xt.time/instant "2030-01-04T12:44:55Z"))
+  (defn- jdbc-url2 [& params]
+    (let [param-str (when (seq params) (str "&" (str/join "&" (for [[k v] (partition 2 params)] (str k "=" v)))))]
+      (format "jdbc:postgresql://localhost:5432/postgres?user=postgres&password=postgres%s" (or param-str ""))))
+
+  (defn pg-conn ^java.sql.Connection [& params]
+    (jdbc/get-connection (apply jdbc-url2 params)))
+
+  (with-open [conn (jdbc/get-connection (jdbc-url2))
+              tz-stmt (.createStatement conn)
+              ]
+    [(.execute tz-stmt "SET TIME ZONE 'UTC'")
+     (with-open [stmt (.createStatement conn)
+                 rs (.executeQuery stmt "SHOW TIMEZONE")]
+
+       (rs->maps rs))]))
+
+(deftest test-jdbc-timezone
+
+  #_(with-open [conn (jdbc-conn "TimeZone" "UTC")
+                stmt (.createStatement conn)]
+      (.execute stmt "SET TIME ZONE 'UTC'")
+      (with-open [rs (.executeQuery stmt "SHOW timezone")]
+        (t/is (= [{"timezone" "UTC"}] (rs->maps rs)))))
+
+
+  (with-open [conn (pg-conn "TimeZone" "UTC") #_(jdbc-conn "TimeZone" "UTC")
+              stmt (.createStatement conn)
+              rs (.executeQuery stmt "SELECT current_time")]
+    (t/is (= [[{"timezone" "UTC"}]] (rs->maps rs))))
+
+  #_
+  (with-open [conn (jdbc-conn "TimeZone" "UTC")
+              stmt (.createStatement conn)
+              rs (.executeQuery stmt "SHOW timezone")]
+    (t/is (= [[{"timezone" "UTC"}]] (rs->maps rs))))
+
+
+  #_(with-open [conn (jdbc-conn "prepareThreshold" -1 "TimeZone" "UTC")
+                stmt (.prepareStatement conn "SHOW timezone")]
 
       (with-open [rs (.executeQuery stmt)]
 
-        ;;treated as text because pgjdbc sets the param oid to 0/unspecified
-        ;;will error in DML
-        ;;https://github.com/pgjdbc/pgjdbc/blob/84bdec6015472f309de7becf41df7fd8e423d0ac/pgjdbc/src/main/java/org/postgresql/jdbc/PgPreparedStatement.java#L1454
-        (t/is (= [{"v" "text"}]
-                 (result-metadata stmt)
-                 (result-metadata rs)))
+        (t/is (= [[{"timezone" "UTC"}]] (rs->maps rs)))))
 
-        (t/is (= [{"v" "2030-01-04 12:44:55+00"}] (rs->maps rs)))))))
+  #_(with-open [conn (jdbc-conn "prepareThreshold" -1 "TimeZone" "America/New_York")
+                stmt (.prepareStatement conn "SHOW timezone")]
+
+      (with-open [rs (.executeQuery stmt)]
+
+        (t/is (= [{"timezone" "America/New_York"}] (rs->maps rs))))))
+
+(deftest test-java-sql-timestamp
+  (testing "java.sql.Timestamp"
+    (with-open [conn #_(pg-conn "prepareThreshold" -1)  (jdbc-conn "prepareThreshold" -1 #_#_"TimeZone" "UTC")
+                tz-stmt (.createStatement conn)]
+
+      (.execute tz-stmt "SET TIME ZONE 'UTC'")
+
+      (with-open [stmt (.prepareStatement conn "SELECT ? AS v")]
+
+
+        (.setObject stmt 1 (Timestamp/from #xt.time/instant "2030-01-04T12:44:55Z") )
+
+        (with-open [rs (.executeQuery stmt)]
+
+          ;; (t/is (= nil (rs->maps rs)))
+          (t/is (= [{"v" "2030-01-04 12:44:55+00"}] (rs->maps rs)))
+
+
+          ;;treated as text because pgjdbc sets the param oid to 0/unspecified
+          ;;will error in DML
+          ;;https://github.com/pgjdbc/pgjdbc/blob/84bdec6015472f309de7becf41df7fd8e423d0ac/pgjdbc/src/main/java/org/postgresql/jdbc/PgPreparedStatement.java#L1454
+          #_(t/is (= [{"v" "text"}]
+                     (result-metadata stmt)
+                     (result-metadata rs)))
+
+          (t/is (= [{"v" "2030-01-04 12:44:55+00"}] (rs->maps rs))))))))
 
 (deftest test-java-time-instant
   (with-open [conn (pg-conn {})]

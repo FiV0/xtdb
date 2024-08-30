@@ -882,16 +882,21 @@
     (cmd-write-msg conn msg-auth {:result 0})
 
     (doseq [[k v] (merge
-                    ;; TimeZone derived from the servers :clock for now
-                    ;; this may change
-                    {"TimeZone" (str (.getZone ^Clock (:clock @server-state)))}
-                    (:parameters @server-state))]
+                   ;; TimeZone derived from the servers :clock for now
+                   ;; this may change
+                   {"TimeZone" (str (.getZone ^Clock (:clock @server-state)))}
+                   (:parameters @server-state))]
       (cmd-write-msg conn msg-parameter-status {:parameter k, :value v}))
 
     ;; set initial session parameters specified by client
-    (let [{:keys [startup-parameters]} (read-startup-parameters msg-in)]
+    (let [{:keys [startup-parameters] :as msg} (read-startup-parameters msg-in)]
       (doseq [[k v] startup-parameters]
-        (set-session-parameter conn k v)))
+        (set-session-parameter conn k v))
+
+
+      (prn {:conn conn
+            :msg msg}))
+
 
     ;; backend key data (used to identify conn for cancellation)
     (cmd-write-msg conn msg-backend-key-data {:process-id (:cid conn), :secret-key 0})
@@ -1212,7 +1217,7 @@
 
       (let [{:keys [error] :as tx-res} (execute-tx conn dml-buf {:default-tz (.getZone clock)
                                                                  :system-time tx-system-time})]
-       
+
         (if error
           (do
             (swap! conn-state (fn [conn-state]
@@ -1514,7 +1519,7 @@
 
   (cmd-send-ready conn))
 
-(defn- handle-msg [{:keys [msg-char8, msg-in]} {:keys [cid, conn-state] :as conn}]
+(defn- handle-msg [{:keys [msg-char8, msg-in] :as msg} {:keys [cid, conn-state] :as conn}]
   (try
     (let [msg-var (client-msgs msg-char8)]
 
@@ -1722,7 +1727,7 @@
   ([node {:keys [port num-threads drain-wait ssl-ctx]
           :or {port 5432
                num-threads 42
-               drain-wait 5000}}]
+               drain-wait 5000} :as opts}]
    (util/with-close-on-catch [accept-socket (ServerSocket. port)]
      (let [port (.getLocalPort accept-socket)
            server (map->Server {:port port
