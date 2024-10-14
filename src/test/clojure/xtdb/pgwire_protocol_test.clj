@@ -2,6 +2,7 @@
   (:require [clojure.test :as t :refer [deftest]]
             [clojure.tools.logging :as log]
             [xtdb.pgwire :as pgwire]
+            [xtdb.pgwire.io :as pgio]
             [xtdb.test-util :as tu]
             [xtdb.types :as types])
   (:import [java.io ByteArrayOutputStream DataInputStream DataOutputStream IOException InputStream]
@@ -55,7 +56,7 @@
     (let [response-char (char response-type)
           _length (.readInt in)]
 
-      (if-let [{:keys [read name]} @(get pgwire/server-msgs response-char)]
+      (if-let [{:keys [read name]} @(get pgio/server-msgs response-char)]
 
         (let [{auth-code :result :as message} (-> (read in)
                                                   (assoc :message-type name))]
