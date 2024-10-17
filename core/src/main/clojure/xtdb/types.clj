@@ -301,18 +301,21 @@
 (def date-time-types (descendants col-type-hierarchy :date-time))
 
 (defn flatten-union-types [col-type]
+  (if (= :union (col-type-head col-type))
+    (second col-type)
+    #{col-type})
   ;; FIXME this starts to smell (after my addition).
   ;; just trying to get it to work, will need to revisit
-  (cond
-    (and
-     (= :list (col-type-head col-type))
-     (= :union (col-type-head (second col-type)))
-     (= 1 (count (rest (second col-type)))))
-    [:list (second (second col-type))]
-    (= :union (col-type-head col-type))
-    (second col-type)
-    :else
-    #{col-type}))
+  #_(cond
+      (and
+       (= :list (col-type-head col-type))
+       (= :union (col-type-head (second col-type)))
+       (= 1 (count (rest (second col-type)))))
+      [:list (second (second col-type))]
+      (= :union (col-type-head col-type))
+      (second col-type)
+      :else
+      #{col-type}))
 
 (defn flatten-union-field [^Field field]
   (if (instance? ArrowType$Union (.getType field))
@@ -1242,25 +1245,24 @@
                                             (subs 1 (dec (count sa)))
                                             (str/split #","))))]
                           (mapv #(Long/parseLong %) elems)))
-                      ;; :read-binary #()
-           :write-text (fn [_env ^IVectorReader rdr idx]
-                         (let [^IVectorReader list-rdr (.listElementReader rdr)
+           ;; :read-binary #()
+           :write-text (fn [_env ^IVectorReader list-rdr idx]
+                         (let [^IVectorReader el-rdr (.listElementReader list-rdr)
                                sb (StringBuilder. "{")]
                            (log/tracef "write-text_int8 start %d len %d"
-                                      (.getListStartIndex list-rdr idx)
-                                      (.getListCount list-rdr idx))
-                           (if (not (zero? (.getListCount list-rdr idx)))
-                             (do
-                               (loop [lidx (.getListStartIndex list-rdr idx)]
-                                 (when (< lidx (+ (.getListCount list-rdr idx)
-                                                  (.getListStartIndex list-rdr idx)))
-                                   (.append sb (.getLong list-rdr lidx))
-                                   (.append sb ",")
-                                   (recur (inc lidx))))
-                               (.setCharAt sb (dec (.length sb)) \}))
-                             (.append sb "}"))
+                                       (.getListStartIndex list-rdr idx)
+                                       (.getListCount list-rdr idx))
+                           (let [start-idx (.getListStartIndex list-rdr idx)
+                                 end-idx (+ start-idx (.getListCount list-rdr idx))]
+                             (doseq [idx (range start-idx end-idx)]
+                               (.append sb (.getLong el-rdr idx))
+                               (when-not (= idx (dec end-idx))
+                                 (.append sb ","))))
+                           (.append sb "}")
                            (utf8 (.toString sb))))
            #_#_:write-binary #()}})
+
+
 
 (def pg-types-by-oid (into {} (map #(hash-map (:oid (val %)) (val %))) pg-types))
 
@@ -1281,13 +1283,11 @@
    [:timestamp-tz :micro] :timestamptz
    :tstz-range :tstz-range
    [:interval :month-day-nano] :interval
-   [:list #{:i32}] :_int4
-   #{[:list :i32]} :_int4
-   [:list #{:i64}] :_int8
-   #{[:list :i64]} :_int8
+   [:list :i32] :_int4
+   [:list :i64] :_int8
 
    #_#_; FIXME not supported by pgjdbc until we sort #3683 and #3212
-       :transit :transit})
+   :transit :transit})
 
 (defn col-type->pg-type [fallback-pg-type col-type]
   (get col-types->pg-types
@@ -1325,6 +1325,7 @@
 (comment
 
   (remove-nulls (flatten-union-types [:list [:union #{:i32 :null}]]))
+  ;; [1 nil 2] -> pg-wire?
   (remove-nulls (flatten-union-types [:list [:union #{:i32 :i64}]]))
   (remove-nulls (flatten-union-types [:union #{[:list :i64] :null}]))
   #_1)

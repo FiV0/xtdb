@@ -116,13 +116,15 @@
         :unsupported
         (throw e)))))
 
-(defn rs->maps [rs]
+(defn rs->maps [^ResultSet rs]
   (let [md (.getMetaData rs)]
     (-> (loop [res []]
           (if (.next rs)
             (recur (->>
-                    (for [idx (range 1 (inc (.getColumnCount md)))]
-                      {(.getColumnName md idx) (.getObject rs idx)})
+                    (for [idx (range 1 (inc (.getColumnCount md)))
+                          :let [obj (.getObject rs idx)]]
+                      {(.getColumnName md idx) (cond-> obj
+                                                 (instance? Array obj) (-> .getArray vec))})
                     (into {})
                     (conj res)))
             res))
@@ -2004,8 +2006,8 @@ ORDER BY t.oid DESC LIMIT 1"
       (with-open [stmt (.prepareStatement conn "SELECT ARRAY(SELECT _id FROM docs) AS ids")]
 
         (with-open [rs (.executeQuery stmt)]
-          (t/is (= [{"ids" "_int4"}]
+          (t/is (= [{"ids" "_int8"}]
                    (result-metadata stmt)
                    (result-metadata rs)))
 
-          #_(t/is (= [{"ids" [1 2]}] (rs->maps rs))))))))
+          (t/is (= [{"ids" [2 1]}] (rs->maps rs))))))))
