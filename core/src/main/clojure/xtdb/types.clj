@@ -1205,20 +1205,15 @@
                                             (subs 1 (dec (count sa)))
                                             (str/split #","))))]
                           (mapv #(Integer/parseInt %) elems)))
-                    ;; :read-binary #()
+           ;; :read-binary #()
            :write-text (fn [_env ^IVectorReader list-rdr idx]
-                         (let [^IVectorReader el-rdr (.listElementReader list-rdr)
-                               sb (StringBuilder. "{")
-                               len (.getListCount list-rdr idx)
-                               offset (.getListStartIndex list-rdr idx)]
-                           (if-not (zero? len)
-                             (do
-                               (dotimes [i len]
-                                 (.append sb (if (.isNull el-rdr (+ i offset))
-                                               "NULL"
-                                               (.getInt el-rdr (+ i offset))))
-                                 (.append sb ","))
-                               (.setCharAt sb (dec (.length sb)) \}))
+                         (let [list (.getObject list-rdr idx)
+                               sb (StringBuilder. "{")]
+                           (doseq [e list]
+                             (.append sb (or e "NULL"))
+                             (.append sb ","))
+                           (if (seq list)
+                             (.setCharAt sb (dec (.length sb)) \})
                              (.append sb "}"))
                            (utf8 (.toString sb))))
            :write-binary (fn [_env ^IVectorReader list-rdr idx]
@@ -1252,19 +1247,13 @@
                           (mapv #(Long/parseLong %) elems)))
            #_#_:read-binary (fn [_env ba])
            :write-text (fn [_env ^IVectorReader list-rdr idx]
-                         (let [^IVectorReader el-rdr (.listElementReader list-rdr)
-                               sb (StringBuilder. "{")
-                               len (.getListCount list-rdr idx)
-                               offset (.getListStartIndex list-rdr idx)]
-                           (if-not (zero? len)
-                             (do
-                               (dotimes [i len]
-                                 (log/tracef "write-text_int8 len: %d offset: %d idx: %d times: %d" len offset (+ i offset) i)
-                                 (.append sb (if (.isNull el-rdr (+ i offset))
-                                               "NULL"
-                                               (.getLong el-rdr (+ i offset))))
-                                 (.append sb ","))
-                               (.setCharAt sb (dec (.length sb)) \}))
+                         (let [list (.getObject list-rdr idx)
+                               sb (StringBuilder. "{")]
+                           (doseq [e list]
+                             (.append sb (or e "NULL"))
+                             (.append sb ","))
+                           (if (seq list)
+                             (.setCharAt sb (dec (.length sb)) \})
                              (.append sb "}"))
                            (utf8 (.toString sb))))
            :write-binary (fn [_env ^IVectorReader list-rdr idx]

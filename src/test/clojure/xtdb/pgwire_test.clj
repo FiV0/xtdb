@@ -2054,7 +2054,7 @@ ORDER BY t.oid DESC LIMIT 1"
           (t/is (= [nil] arr)))))))
 
 ;; FIXME this fails when trying to read third element of a list. the vector seems to only have two elems
-#_(deftest test-array-field
+(deftest test-array-field
   (with-open [conn (jdbc-conn)]
     (jdbc/execute! conn ["INSERT INTO docs(_id, arr) VALUES (8, ARRAY[1, 2, 3])"])
     (jdbc/execute! conn ["INSERT INTO docs(_id, arr) VALUES (9, ARRAY[4, 5, 6])"])
