@@ -13,7 +13,7 @@
             [xtdb.time :as time]
             [xtdb.util :as util])
   (:import [java.time ZonedDateTime]
-           [xtdb.api Xtdb$Config ServerConfig]
+           [xtdb.api AuthnSettings Xtdb$Config ServerConfig]
            [xtdb.api.tx TxOps]
            [xtdb.node.impl IXtdbInternal]
            [xtdb.query IQuerySource]
@@ -645,7 +645,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
 (t/deftest start-node-from-non-map-config
   (t/testing "directly using Xtdb$Config"
     (let [config-object (doto (Xtdb$Config.)
-                          (.setServer (ServerConfig. 0 42 nil)))]
+                          (.setServer (ServerConfig. 0 42 nil, (AuthnSettings.))))]
       (with-open [node (xtn/start-node config-object)]
         (t/is node)
         (xt/submit-tx node [[:put-docs :docs {:xt/id :foo, :inst #inst "2021"}]])

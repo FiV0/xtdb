@@ -28,6 +28,7 @@
            (org.pg.enums OID)
            (org.pg.error PGError PGErrorResponse)
            (org.postgresql.util PGInterval PGobject PSQLException)
+           xtdb.pgwire.Server
            xtdb.JsonSerde))
 
 (set! *warn-on-reflection* false) ; gagh! lazy. don't do this.
@@ -65,7 +66,7 @@
   (merge
    {:host "localhost"
     :port *port*
-    :user "xtdb"
+    :user "anonymous"
     :database "xtdb"}
    params))
 
@@ -74,7 +75,9 @@
   (pg/connect (pg-config params)))
 
 (defn- jdbc-url [& params]
-  (let [param-str (when (seq params) (str "?" (str/join "&" (for [[k v] (partition 2 params)] (str k "=" v)))))]
+  (let [params (-> (into {} (partitionv 2 params))
+                   (update "user" (fnil identity "anonymous")))
+        param-str (when (seq params) (str "?" (str/join "&" (for [[k v] params] (str k "=" v)))))]
     (format "jdbc:postgresql://localhost:%s/xtdb%s" *port* (or param-str ""))))
 
 (defn- jdbc-conn ^Connection [& params]
@@ -388,7 +391,7 @@
     (check-conn-resources-freed server-conn)))
 
 (deftest server-close-closes-idle-conns-test
-  (with-open [server (serve {:drain-wait 0})]
+  (with-open [^Server server (serve {:drain-wait 0})]
     (binding [*port* (:port server)]
       (with-open [_client-conn (jdbc-conn)
                   server-conn (get-last-conn server)]
@@ -557,7 +560,7 @@
 ;; (will probably move to a selector)
 (when (psql-available?)
   (deftest psql-connect-test
-    (let [{:keys [exit, out]} (sh/sh "psql" "-h" "localhost" "-p" (str *port*) "-c" "select 'ping' ping")]
+    (let [{:keys [exit, out] :as res} (sh/sh "psql" "-h" "localhost" "-p" (str *port*) "-c" "select 'ping' ping")]
       (is (= 0 exit))
       (is (str/includes? out " ping\n(1 row)")))))
 
@@ -582,7 +585,7 @@
                  (jdbc/execute! conn ["SELECT * FROM foo"]))))
 
       (when (psql-available?)
-        (let [{:keys [exit, out]} (sh/sh "psql" "-h" "localhost" "-p" (str *port*) "-c" "\\conninfo")]
+        (let [{:keys [exit, out] :as res} (sh/sh "psql" "-h" "localhost" "-p" (str *port*) "-c" "\\conninfo")]
           (is (= 0 exit))
           (is (str/includes? out "You are connected"))
           (is (str/includes? out "SSL connection (protocol: TLSv1.3")))))))
@@ -2063,3 +2066,29 @@ ORDER BY t.oid DESC LIMIT 1"
 
       (with-open [rs (.executeQuery stmt)]
         (t/is (= [{"_id" 8, "arr" [1 2 3]} {"_id" 9, "arr" [4 5 6]}] (rs->maps rs)))))))
+
+
+(deftest pg-authentication
+  (with-open [node (xtn/start-node {:server {:port 0 :authn-records [{:user "xtdb" :method :password :address "127.0.0.1"}]}})]
+    (binding [*port* (:port (tu/node->server node))]
+      (t/is (thrown-with-msg? PSQLException #"ERROR: no authentication record found for user: fin"
+                              (with-open [_ (jdbc-conn "user" "fin" "password" "foobar")]))
+            "users without record are blocked")
+
+      ;; user xtdb should be fine
+      (with-open [_ (jdbc-conn "user" "xtdb" "password" "xtdb")])
+
+      (t/is (thrown-with-msg? PSQLException #"ERROR: Invalid password"
+                              (with-open [_ (jdbc-conn "user" "xtdb" "password" "foobar")]))
+            "user with a wrong password gets blocked")))
+
+  (t/testing "users with a trusted record are allowed"
+    (with-open [node (xtn/start-node {:server {:port 0 :authn-records [{:user "fin" :method :trust :address "127.0.0.1"}]}})]
+      (binding [*port* (:port (tu/node->server node))]
+        (with-open [_ (jdbc-conn "user" "fin")]))))
+
+  (with-open [node (xtn/start-node {:server {:port 0 :authn-records [{:user "fin" :method :password :address "127.0.0.1"}]}})]
+    (binding [*port* (:port (tu/node->server node))]
+      (t/is (thrown-with-msg? PSQLException #"ERROR: password authentication failed for user: fin"
+                              (with-open [_ (jdbc-conn "user" "fin" "password" "foobar")]))
+            "users with a authentication record but not in the database"))))

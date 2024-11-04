@@ -7,7 +7,8 @@ import java.nio.file.Path
 data class ServerConfig(
     var port: Int = 5432,
     var numThreads: Int = 42,
-    var ssl: SslSettings? = null
+    var ssl: SslSettings? = null,
+    var authn: AuthnSettings = AuthnSettings()
 ) {
 
     @Serializable
@@ -26,6 +27,8 @@ data class ServerConfig(
     fun anyAvailablePort() = port(0)
 
     fun numThreads(numThreads: Int) = apply { this.numThreads = numThreads }
+
+    fun authn(authn: AuthnSettings) = apply { this.authn = authn }
 
     /**
      * Enable SSL for the Pgwire server.

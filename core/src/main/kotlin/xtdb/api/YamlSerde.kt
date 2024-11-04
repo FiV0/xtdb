@@ -13,6 +13,7 @@ import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.contextual
 import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
 import xtdb.api.log.Log
@@ -124,6 +125,7 @@ object BooleanWithEnvVarSerde : KSerializer<Boolean> {
  * @suppress
  */
 val YAML_SERDE = Yaml(
+    configuration = YamlConfiguration(polymorphismStyle = PolymorphismStyle.Tag),
     serializersModule = SerializersModule {
         polymorphic(Log.Factory::class) {
             subclass(InMemoryLogFactory::class)

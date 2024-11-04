@@ -30,7 +30,7 @@
            [org.apache.arrow.vector PeriodDuration]
            org.postgresql.util.PGobject
            (xtdb.antlr SqlVisitor Sql$DirectlyExecutableStatementContext)
-           [xtdb.api ServerConfig Xtdb$Config]
+           (xtdb.api AuthnSettings AuthnSettings$AuthnRecord AuthnSettings$AuthnMethod ServerConfig Xtdb$Config)
            xtdb.api.module.XtdbModule
            xtdb.node.impl.IXtdbInternal
            (xtdb.query BoundQuery PreparedQuery)
@@ -51,6 +51,8 @@
                    !closing?
 
                    server-state
+
+                   authn-records
 
                    !tmp-nodes]
   XtdbModule
@@ -97,6 +99,9 @@
     [frontend msg-def]
     [frontend msg-def data])
 
+  (read-client-msg! [frontend])
+  (host-address [frontent])
+
   (upgrade-to-ssl [frontend ssl-ctx])
 
   (flush! [frontend]))
@@ -109,6 +114,35 @@
   ([{:keys [frontend]} msg-def data]
    (send-client-msg! frontend msg-def data)))
 
+(def ^:private version-messages
+  "Integer codes sent by the client to identify a startup msg"
+  {
+   ;; this is the normal 'hey I'm a postgres client' if ssl is not requested
+   196608 :30
+   ;; cancellation messages come in as special startup sequences (pgwire does not handle them yet!)
+   80877102 :cancel
+   ;; ssl messages are used when the client either requires, prefers, or allows ssl connections.
+   80877103 :ssl
+   ;; gssapi encoding is not supported by xt, and we tell the client that
+   80877104 :gssenc})
+
+;; all postgres client IO arrives as either an untyped (startup) or typed message
+
+(defn- read-untyped-msg [^DataInputStream in]
+  (let [size (- (.readInt in) 4)
+        barr (byte-array size)
+        _ (.readFully in barr)]
+    (DataInputStream. (ByteArrayInputStream. barr))))
+
+(defn- read-version [^DataInputStream in]
+  (let [^DataInputStream msg-in (read-untyped-msg in)
+        version (.readInt msg-in)]
+    {:msg-in msg-in
+     :version (version-messages version)}))
+
+(declare client-msgs)
+(declare client-err)
+(declare err-protocol-violation)
 (declare ->socket-frontend)
 
 (defrecord SocketFrontend [^Socket socket, ^DataInputStream in, ^DataOutputStream out]
@@ -128,6 +162,21 @@
       (.writeByte out (byte (:char8 msg-def)))
       (.writeInt out (+ 4 (alength arr)))
       (.write out arr)))
+
+  (read-client-msg! [_]
+    (let [type-char (char (.readUnsignedByte in))
+          msg-var (or (client-msgs type-char)
+                      (throw (client-err (str "Unknown client message " type-char))))
+          rdr (:read @msg-var)]
+      (try
+        (-> (rdr (read-untyped-msg in))
+            (assoc :msg-name (:name @msg-var)))
+        (catch Exception e
+          (throw (ex-info "error reading client message"
+                          {::client-error (err-protocol-violation (str "Error reading client message " (ex-message e)))}
+                          e))))))
+
+  (host-address [_] (.getHostAddress (.getInetAddress socket)))
 
   (upgrade-to-ssl [this ssl-ctx]
     (if (and ssl-ctx (not (instance? SSLSocket socket)))
@@ -252,16 +301,16 @@
    :sql-state "XX000"
    :message msg})
 
-(defn- err-admin-shutdown [msg]
+(defn- err-invalid-auth-spec [msg]
   {:severity "ERROR"
    :localized-severity "ERROR"
-   :sql-state "57P01"
+   :sql-state "28000"
    :message msg})
 
-(defn- err-cannot-connect-now [msg]
+(defn- err-invalid-passwd [msg]
   {:severity "ERROR"
    :localized-severity "ERROR"
-   :sql-state "57P03"
+   :sql-state "28P01"
    :message msg})
 
 (defn- err-query-cancelled [msg]
@@ -789,7 +838,8 @@
   :query io-string
   :param-oids (io-list io-uint16 io-uint32))
 
-(def-msg msg-password :client \p)
+(def-msg msg-password :client \p
+  :password io-string)
 
 (def-msg msg-simple-query :client \Q
   :query io-string)
@@ -972,12 +1022,9 @@
                                                   (.withZone clock (ZoneId/of tz))))
   (set-session-parameter conn time-zone-nf-param-name tz))
 
-(defn cmd-startup-pg30 [conn startup-params]
+(defn startup-ok [conn startup-params]
   (let [{:keys [server]} conn
         {:keys [server-state]} server]
-
-    ;; send auth-ok to client
-    (cmd-write-msg conn msg-auth {:result 0})
 
     (let [default-server-params (-> (:parameters @server-state)
                                     (update-keys str/lower-case))
@@ -993,6 +1040,65 @@
     ;; backend key data (used to identify conn for cancellation)
     (cmd-write-msg conn msg-backend-key-data {:process-id (:cid conn), :secret-key 0})
     (cmd-send-ready conn)))
+
+(defn user+password [node user]
+  (first (xt/q node "SELECT passwd AS password, username AS user FROM pg_user WHERE username = ?" {:args [user]})))
+
+(defn most-specific-record [authn-records address user]
+  (->> authn-records
+       (filter #(= address (:address %)))
+       (reduce (fn [previous {record-user :user :as current}]
+                 (if (or (= user record-user)
+                         (and (nil? previous) (= "all" record-user)))
+                   current
+                   previous))
+               nil)))
+
+(defn cmd-startup-pg30 [{:keys [frontend server] :as conn} startup-params]
+  (let [{:keys [node !closing?]} conn
+        ;; TODO forbid the "all" user
+        user (or (get startup-params "user") "all")]
+    (if node ;; the playground does not have a node yet
+      (if-let [{:keys [method]} (most-specific-record (:authn-records server) (host-address frontend) user)]
+
+        (if (= :trust method)
+          (do
+            (cmd-write-msg conn msg-auth {:result 0})
+            (startup-ok conn startup-params))
+
+          (do
+            ;; asking for a password, we only have :trust and :password for now
+            (cmd-write-msg conn msg-auth {:result 3})
+
+            ;; we go idle until we receive a message
+            (when-let [{:keys [msg-name] :as msg} (read-client-msg! frontend)]
+              (if (not= :msg-password msg-name)
+                (do
+                  (reset! !closing? true)
+                  (cmd-send-error conn (err-invalid-auth-spec (str "password authentication failed for user: " user)))
+                  conn)
+
+                (if-let [{:keys [password]} (user+password node user)]
+                  (if (= (util/md5 (:password msg)) password)
+                    (do
+                      (cmd-write-msg conn msg-auth {:result 0})
+                      (startup-ok conn startup-params))
+
+                    (do
+                      (reset! !closing? true)
+                      (cmd-send-error conn (err-invalid-passwd "Invalid password"))))
+
+                  ;; there was a authn record, but no user in the database
+                  (do
+                    (reset! !closing? true)
+                    (cmd-send-error conn (err-invalid-auth-spec (str "password authentication failed for user: " user)))))))))
+
+        (do
+          (reset! !closing? true)
+          (cmd-send-error conn (err-invalid-auth-spec (str "no authentication record found for user: " user)))))
+      (do
+        (cmd-write-msg conn msg-auth {:result 0})
+        (startup-ok conn startup-params)))))
 
 (defn cmd-cancel
   "Tells the connection to stop doing what its doing and return to idle"
@@ -1018,45 +1124,6 @@
 (defn cmd-startup-err [conn err]
   (cmd-send-error conn err)
   (handle-msg* conn {:msg-name :msg-terminate}))
-
-(def ^:private version-messages
-  "Integer codes sent by the client to identify a startup msg"
-  {
-   ;; this is the normal 'hey I'm a postgres client' if ssl is not requested
-   196608 :30
-   ;; cancellation messages come in as special startup sequences (pgwire does not handle them yet!)
-   80877102 :cancel
-   ;; ssl messages are used when the client either requires, prefers, or allows ssl connections.
-   80877103 :ssl
-   ;; gssapi encoding is not supported by xt, and we tell the client that
-   80877104 :gssenc})
-
-;; all postgres client IO arrives as either an untyped (startup) or typed message
-
-(defn- read-untyped-msg [^DataInputStream in]
-  (let [size (- (.readInt in) 4)
-        barr (byte-array size)
-        _ (.readFully in barr)]
-    (DataInputStream. (ByteArrayInputStream. barr))))
-
-(defn- read-version [^DataInputStream in]
-  (let [^DataInputStream msg-in (read-untyped-msg in)
-        version (.readInt msg-in)]
-    {:msg-in msg-in
-     :version (version-messages version)}))
-
-(defn- read-typed-msg [{{:keys [^DataInputStream in]} :frontend :as _conn}]
-  (let [type-char (char (.readUnsignedByte in))
-        msg-var (or (client-msgs type-char)
-                    (throw (client-err (str "Unknown client message " type-char))))
-        rdr (:read @msg-var)]
-    (try
-      (-> (rdr (read-untyped-msg in))
-          (assoc :msg-name (:name @msg-var)))
-      (catch Exception e
-        (throw (ex-info "error reading client message"
-                        {::client-error (err-protocol-violation (str "Error reading client message " (ex-message e)))}
-                        e))))))
 
 (defn- read-startup-parameters [^DataInputStream in]
   (loop [in (PushbackInputStream. in)
@@ -1547,11 +1614,12 @@
 
   (cmd-send-ready conn))
 
-;; ignored by xt
-(defmethod handle-msg* :msg-password [_ _])
+;; ignore password messages, we are authenticated when getting here
+(defmethod handle-msg* :msg-password [_conn _msg])
 
 (defmethod handle-msg* ::default [_conn _]
   (throw (client-err "unknown client message")))
+
 
 (defn handle-msg [{:keys [cid] :as conn} {:keys [msg-name] :as msg}]
   (try
@@ -1559,7 +1627,6 @@
 
     (if (and (skip-until-sync? conn) (not= :msg-sync msg-name))
       (log/trace "Skipping msg until next sync due to error in extended protocol" {:cid cid, :msg msg})
-
       (handle-msg* conn msg))
 
     (catch InterruptedException e (throw e))
@@ -1568,7 +1635,7 @@
       (send-ex conn e))))
 
 (defn- conn-loop [{:keys [cid, server, conn-state],
-                   {:keys [^Socket socket]} :frontend,
+                   {:keys [^Socket socket] :as frontend} :frontend,
                    !conn-closing? :!closing?,
                    :as conn}]
   (let [{:keys [port], !server-closing? :!closing?} server]
@@ -1595,7 +1662,7 @@
 
         ;; go idle until we receive another msg from the client
         :else (do
-                (when-let [msg (read-typed-msg conn)]
+                (when-let [msg (read-client-msg! frontend)]
                   (handle-msg conn msg))
 
                 (recur))))))
@@ -1615,29 +1682,31 @@
   See comment 'Connection lifecycle'."
   [{:keys [server-state, port, node] :as server} ^Socket conn-socket]
   (let [close-promise (promise)
-        {:keys [cid] :as conn} (util/with-close-on-catch [_ conn-socket]
-                                 (let [cid (:next-cid (swap! server-state update :next-cid (fnil inc 0)))
-                                       !conn-state (atom {:close-promise close-promise
-                                                          :session {:access-mode :read-only
-                                                                    :clock (:clock @server-state)}})]
-                                   (try
-                                     (-> (map->Connection {:cid cid,
-                                                           :server server,
-                                                           :frontend (->socket-frontend conn-socket),
-                                                           :node node
-                                                           :!closing? (atom false)
-                                                           :conn-state !conn-state})
-                                         (cmd-startup)
-                                         (cond-> (nil? node) (assoc :node (->tmp-node server @!conn-state))))
-                                     (catch Throwable t
-                                       (log/warn t "error on conn startup")
-                                       (throw t)))))]
+        {:keys [cid !closing?] :as conn} (util/with-close-on-catch [_ conn-socket]
+                                           (let [cid (:next-cid (swap! server-state update :next-cid (fnil inc 0)))
+                                                 !conn-state (atom {:close-promise close-promise
+                                                                    :session {:access-mode :read-only
+                                                                              :clock (:clock @server-state)}})]
+                                             (try
+                                               (-> (map->Connection {:cid cid,
+                                                                     :server server,
+                                                                     :frontend (->socket-frontend conn-socket),
+                                                                     :node node
+                                                                     :!closing? (atom false)
+                                                                     :conn-state !conn-state})
+                                                   (cmd-startup)
+                                                   (cond-> (nil? node) (assoc :node (->tmp-node server @!conn-state))))
+                                               (catch Throwable t
+                                                 (log/warn t "error on conn startup")
+                                                 (throw t)))))]
 
     (try
-      (swap! server-state assoc-in [:connections cid] conn)
+      ;; the connection loop only gets initialized if we are not closing
+      (when (not @!closing?)
+        (swap! server-state assoc-in [:connections cid] conn)
 
-      (log/trace "Starting connection loop" {:port port, :cid cid})
-      (conn-loop conn)
+        (log/trace "Starting connection loop" {:port port, :cid cid})
+        (conn-loop conn))
       (catch SocketException e
         (when (= "Broken pipe (Write failed)" (.getMessage e))
           (log/trace "Client closed socket while we were writing" {:port port, :cid cid})
@@ -1697,6 +1766,9 @@
 
   (log/trace "exiting accept loop"))
 
+(def ^:private default-records [{:user "all" :address "127.0.0.1" :method :trust}
+                                {:user "all" :address "0:0:0:0:0:0:0:1" :method :trust}])
+
 (defn serve
   "Creates and starts a PostgreSQL wire-compatible server.
 
@@ -1707,11 +1779,12 @@
   :port (default 5432). Provide '0' to open a socket on an unused port.
   :num-threads (bounds the number of client connections, default 42)
   "
-  ([node] (serve node {}))
-  ([node {:keys [port num-threads drain-wait ssl-ctx]
-          :or {port 5432
-               num-threads 42
-               drain-wait 5000}}]
+  (^Server [node] (serve node {}))
+  (^Server [node {:keys [port num-threads drain-wait ssl-ctx authn-records]
+                  :or {port 5432
+                       num-threads 42
+                       drain-wait 5000
+                       authn-records default-records}}]
    (util/with-close-on-catch [accept-socket (ServerSocket. port)]
      (let [port (.getLocalPort accept-socket)
            server (map->Server {:node node
@@ -1732,6 +1805,7 @@
                                                                     "TimeZone" (str (.getZone ^Clock default-clock))
                                                                     "integer_datetimes" "on"}}))
                                 :ssl-ctx ssl-ctx
+                                :authn-records authn-records
                                 :!tmp-nodes (when-not node
                                               (ConcurrentHashMap.))})
 
@@ -1746,12 +1820,31 @@
        (.start accept-thread)
        server))))
 
-(defmethod xtn/apply-config! ::server [^Xtdb$Config config, _ {:keys [port num-threads ssl] :as server}]
+(defn ->authn-settings ^AuthnSettings [auth-records]
+  (letfn [(parse-record ^AuthnSettings$AuthnRecord [{:keys [user method address]}]
+            (AuthnSettings$AuthnRecord. user address (case method
+                                                       :trust AuthnSettings$AuthnMethod/TRUST
+                                                       :password AuthnSettings$AuthnMethod/PASSWORD)))]
+    (reduce (fn [^AuthnSettings settings record]
+              (.addRecord settings (parse-record record)))
+            (AuthnSettings. [])
+            auth-records)))
+
+(defn <-authn-settings [^AuthnSettings authn-settings]
+  (for [^AuthnSettings$AuthnRecord auth-record (.getAuthnRecords authn-settings)]
+    {:user (.getUser auth-record)
+     :method (condp = (.getMethod auth-record)
+               AuthnSettings$AuthnMethod/TRUST :trust
+               AuthnSettings$AuthnMethod/PASSWORD :password)
+     :address (.getAddress auth-record)}))
+
+(defmethod xtn/apply-config! ::server [^Xtdb$Config config, _ {:keys [port num-threads ssl authn-records] :as server}]
   (if server
     (cond-> (.getServer config)
       (some? port) (.port port)
       (some? num-threads) (.numThreads num-threads)
-      (some? ssl) (.ssl (util/->path (:keystore ssl)) (:keystore-password ssl)))
+      (some? ssl) (.ssl (util/->path (:keystore ssl)) (:keystore-password ssl))
+      (some? authn-records) (.authn (->authn-settings authn-records)))
 
     (.setServer config nil)))
 
@@ -1769,7 +1862,8 @@
   {:port (.getPort config)
    :num-threads (.getNumThreads config)
    :ssl-ctx (when-let [ssl (.getSsl config)]
-              (->ssl-ctx (.getKeyStore ssl) (.getKeyStorePassword ssl)))})
+              (->ssl-ctx (.getKeyStore ssl) (.getKeyStorePassword ssl)))
+   :authn-records (<-authn-settings (.getAuthn config))})
 
 (defmethod ig/prep-key ::server [_ config]
   (into {:node (ig/ref :xtdb/node)}
