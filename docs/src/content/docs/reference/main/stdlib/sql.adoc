@@ -1,0 +1,42 @@
+---
+title: SQL Standard Library
+---
+
+The following control structures are available in SQL:
+
+== Case
+
+SQL provides two forms of the CASE expression:
+
+[source,sql]
+----
+CASE <test-expr>
+     WHEN <value-expr> THEN <result-expr>
+     [ WHEN ... ]
+     [ ELSE <default-expr> ]
+  END
+----
+
+[source,sql]
+----
+CASE WHEN <predicate> THEN <result-expr>
+     [ WHEN ... ]
+     [ ELSE <default-expr> ]
+  END
+----
+
+== Coalesce / Null If
+
+'Coalesce' returns the first non-null value of its arguments:
+
+[source,sql]
+----
+COALESCE(<expr>, ...)
+----
+
+'Null if' returns null if `expr1` equals `expr2`; otherwise it returns the value of `expr1`.
+
+[source,sql]
+----
+NULLIF(<expr1>, <expr2>)
+----
