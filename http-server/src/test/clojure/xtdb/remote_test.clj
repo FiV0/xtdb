@@ -5,8 +5,10 @@
             [xtdb.api :as xt]
             [xtdb.client.impl :as xtc]
             [xtdb.error :as err]
+            [xtdb.node :as xtn]
             [xtdb.test-util :as tu :refer [*node*]]
-            [xtdb.tx-ops :as tx-ops])
+            [xtdb.tx-ops :as tx-ops]
+            [xtdb.util :as util])
   (:import (xtdb JsonSerde)))
 
 ;; ONLY put stuff here where remote DIFFERS to in-memory
@@ -46,7 +48,9 @@
             "latestCompletedTx" {"txId" 0, "systemTime" "2020-01-01T00:00:00Z"}}
            (-> (http/request {:accept :json
                               :as :string
-                              :request-method :get
+                              :request-method :post
+                              :content-type :transit+json
+                              :form-params {}
                               :url (http-url "status")})
                :body
                decode-json))
@@ -226,3 +230,91 @@
                :body
                decode-json*))
         "testing sql query with args"))
+
+(deftest http-authentication
+  (binding [tu/*http-port* (tu/free-port)]
+    (util/with-open [_ (xtn/start-node (assoc tu/*node-opts* :http-server
+                                              {:port tu/*http-port*
+                                               :authn-records [{:user "xtdb" :method :password :address "127.0.0.1"}]}))]
+      (binding [*node* (xtc/start-client (str "http://localhost:" tu/*http-port*))]
+        (t/testing "no authentication record"
+          (let [{:keys [status body]} (-> (http/request {:accept :json
+                                                         :as :string
+                                                         :request-method :post
+                                                         :content-type :transit+json
+                                                         :form-params {}
+                                                         :transit-opts xtc/transit-opts
+                                                         :url (http-url "status")
+                                                         :throw-exceptions? false}))
+
+                body (decode-json body)]
+            (t/is (= 401 status))
+            (t/is (= "no authentication record found for user: all" (ex-message body)))))
+
+        (t/is (= {"latestCompletedTx" nil, "latestSubmittedTx" nil}
+                 (-> (http/request {:accept :json
+                                    :as :string
+                                    :request-method :post
+                                    :content-type :transit+json
+                                    :form-params {:opts {:auth-opts {:user "xtdb" :password "xtdb"}}}
+                                    :transit-opts xtc/transit-opts
+                                    :url (http-url "status")
+                                    :throw-exceptions? false})
+                     :body
+                     decode-json)))
+
+        (t/is (= [{"x" 1}] (-> (http/request {:accept :json
+                                              :as :string
+                                              :request-method :post
+                                              :content-type :json
+                                              :form-params {:sql "SELECT 1 AS x"
+                                                            :queryOpts {:authOpts {:user "xtdb" :password "xtdb"}}}
+                                              :url (http-url "query")}
+                                             )
+                               :body
+                               decode-json))
+              "query auth with json")
+
+        (t/is (= {"txId" 0, "systemTime" "2020-01-01T00:00:00Z"}
+                 (-> (http/request {:accept :json
+                                    :as :string
+                                    :request-method :post
+                                    :content-type :json
+                                    :form-params {:txOps json-tx-ops
+                                                  :opts {:authOpts {:user "xtdb" :password "xtdb"}}}
+                                    :url (http-url "tx")})
+                     :body
+                     decode-json))
+              "transaction auth with json")
+
+        (t/testing "wrong password"
+          (let [{:keys [status body]} (-> (http/request {:accept :json
+                                                         :as :string
+                                                         :request-method :post
+                                                         :content-type :transit+json
+                                                         :form-params {:opts {:auth-opts {:user "xtdb" :password "foobar"}}}
+                                                         :transit-opts xtc/transit-opts
+                                                         :url (http-url "status")
+                                                         :throw-exceptions? false}))
+                body (decode-json body)]
+            (t/is (= 401 status))
+            (t/is (= "Invalid password" (ex-message body))))))))
+
+  (t/testing "users with a authentication record but not in the database"
+    (binding [tu/*http-port* (tu/free-port)]
+      (util/with-open [_ (xtn/start-node (assoc tu/*node-opts* :http-server
+                                                {:port tu/*http-port*
+                                                 :authn-records [{:user "fin" :method :password :address "127.0.0.1"}]}))]
+        (binding [*node* (xtc/start-client (str "http://localhost:" tu/*http-port*))]
+          (let [{:keys [status body]} (-> (http/request {:accept :json
+                                                         :as :string
+                                                         :request-method :post
+                                                         :content-type :transit+json
+                                                         :form-params {:opts {:auth-opts {:user "fin" :password "foobar"}}}
+                                                         :transit-opts xtc/transit-opts
+                                                         :url (http-url "status")
+                                                         :throw-exceptions? false}))
+
+                body (decode-json body)]
+            (t/is (= 401 status))
+            (t/is (= "password authentication failed for user: fin" (ex-message body)))))))))

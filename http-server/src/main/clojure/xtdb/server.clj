@@ -21,6 +21,7 @@
             [xtdb.api :as xt]
             [xtdb.error :as err]
             [xtdb.node :as xtn]
+            [xtdb.pgwire :as pgwire]
             [xtdb.protocols :as xtp]
             [xtdb.serde :as serde]
             [xtdb.time :as time]
@@ -30,12 +31,13 @@
            (java.util List Map)
            [java.util.function Consumer]
            [java.util.stream Stream]
+           javax.naming.AuthenticationException
            org.eclipse.jetty.server.Server
            (xtdb JsonSerde)
            (xtdb.api HttpServer$Factory TransactionKey Xtdb$Config)
            xtdb.api.module.XtdbModule
            (xtdb.api.query IKeyFn Query)
-           (xtdb.http Basis QueryOptions QueryRequest TxOptions TxRequest)))
+           (xtdb.http AuthOptions Basis QueryOptions QueryRequest TxOptions TxRequest )))
 
 (def json-format
   (mf/map->Format
@@ -78,7 +80,12 @@
 
 (s/def ::system-time ::time/datetime-value)
 
-(s/def :xtdb.server.tx/opts (s/nilable (s/keys :opt-un [::system-time ::default-tz ::key-fn ::explain?])))
+(s/def ::user string?)
+(s/def ::password string?)
+(s/def ::auth-opts (s/keys :req-un [::user ::password]))
+
+(s/def :xtdb.server.status/opts (s/nilable (s/keys :opt-un [::auth-opts])))
+(s/def :xtdb.server.tx/opts (s/nilable (s/keys :opt-un [::system-time ::default-tz ::key-fn ::explain? ::auth-opts])))
 
 (defn- json-status-encoder []
   (reify
@@ -93,8 +100,10 @@
   {:muuntaja (m/create (-> muuntaja-opts
                            (assoc-in [:formats "application/json" :encoder] (json-status-encoder))))
 
-   :get (fn [{:keys [node] :as _req}]
-          {:status 200, :body (xtp/status node)})})
+   :post {:handler (fn [{:keys [node] :as _req}]
+                     {:status 200, :body (xtp/status node)})
+
+          :parameters {:body (s/keys :opt-un [:xtdb.server.status/opts])}}})
 
 (def ^:private json-tx-encoder
   (reify
@@ -105,9 +114,15 @@
         (.getBytes (JsonSerde/encode data) ^String charset)))
     mf/EncodeToOutputStream))
 
+(defn <-AuthOptions [^AuthOptions opts]
+  (->> {:user (.getUser opts)
+        :password (.getPassword opts)}
+       (into {} (remove (comp nil? val)))))
+
 (defn- <-TxOptions [^TxOptions opts]
-  (->> {:system-time (.getSystemTime opts)
-        :default-tz (.getDefaultTz opts)}
+  (->> (cond-> {:system-time (.getSystemTime opts)
+                :default-tz (.getDefaultTz opts)}
+         (.getAuthOpts opts) (assoc :auth-opts (<-AuthOptions (.getAuthOpts opts))))
        (into {} (remove (comp nil? val)))))
 
 (def ^:private json-tx-decoder
@@ -234,25 +249,26 @@
 
 (s/def ::query-body
   (s/keys :req-un [::query],
-          :opt-un [::after-tx ::basis ::tx-timeout ::args ::default-tz ::key-fn ::explain?]))
+          :opt-un [::after-tx ::basis ::tx-timeout ::args ::default-tz ::key-fn ::explain? ::auth-opts]))
 
 (defn- <-QueryOpts [^QueryOptions opts]
-  (->> {:args (.getArgs opts)
+  (->> (cond-> {:args (.getArgs opts)
 
-        :after-tx (.getAfterTx opts)
-        :basis (->> (if-let [basis (.getBasis opts)]
-                      (if (instance? Basis basis)
-                        {:current-time (.getCurrentTime basis)
-                         :at-tx (.getAtTx basis)}
-                        basis)
-                      nil)
-                    (into {} (remove (comp nil? val))))
+                :after-tx (.getAfterTx opts)
+                :basis (->> (if-let [basis (.getBasis opts)]
+                              (if (instance? Basis basis)
+                                {:current-time (.getCurrentTime basis)
+                                 :at-tx (.getAtTx basis)}
+                                basis)
+                              nil)
+                            (into {} (remove (comp nil? val))))
 
-        :tx-timeout (.getTxTimeout opts)
+                :tx-timeout (.getTxTimeout opts)
 
-        :default-tz (.getDefaultTz opts)
-        :explain? (.getExplain opts)
-        :key-fn (.getKeyFn opts)}
+                :default-tz (.getDefaultTz opts)
+                :explain? (.getExplain opts)
+                :key-fn (.getKeyFn opts)}
+         (.getAuthOpts opts) (assoc :auth-opts (<-AuthOptions (.getAuthOpts opts))))
        (into {} (remove (comp nil? val)))))
 
 (defn json-query-decoder []
@@ -328,9 +344,38 @@
                             (merge {::err/message (str "Malformed " (-> ex ex-data :format pr-str) " request.")}
                                    #_(ex-data ex)))}))
 
-(defn- default-handler
-  [^Exception e _]
+
+
+(defn- auth-ex-handler [^Exception e _]
+  {:status 401 :body (ex-info (.getMessage e) {::err/error-type :authentication-error
+                                               :class (.getName (.getClass e))
+                                               :stringified (.toString e)})})
+
+(defn- default-handler [^Exception e _]
   {:status 500 :body (throwable->ex-info e)})
+
+(def authenticate-interceptor
+  {:name ::authenticate
+   :enter (fn [{:keys [request] :as ctx}]
+            (let [{:keys [node authn-records remote-addr]} request
+                  {:keys [user password] :or {user "all"}}
+                  ;; query body is already considered options
+                  (or (get-in request [:parameters :body :opts :auth-opts])
+                      (get-in request [:parameters :body :auth-opts]))]
+              (if-let [{:keys [method]} (pgwire/most-specific-record authn-records remote-addr user)]
+                (when-not (= :trust method)
+                  (if-let [{record-password :password} (pgwire/user+password node user)]
+                    (when-not (= (util/md5 password) record-password)
+                      (throw (AuthenticationException. "Invalid password")))
+
+                    ;; there was a authn record, but no user in the database
+                    (throw (AuthenticationException. (str "password authentication failed for user: " user)))))
+
+                (throw (AuthenticationException. (str "no authentication record found for user: " user))))
+
+              (-> ctx
+                  (update-in [:request :parameters :body] dissoc :auth-opts)
+                  (update-in [:request :parameters :body :opts] dissoc :auth-opts))))})
 
 (def router
   (http/router xtp/http-routes
@@ -350,6 +395,7 @@
                                       [ri.exception/exception-interceptor
                                        (merge ri.exception/default-handlers
                                               {::ri.exception/default default-handler
+                                               AuthenticationException auth-ex-handler
                                                xtdb.IllegalArgumentException handle-ex-info
                                                xtdb.RuntimeException handle-ex-info
                                                ::r.coercion/request-coercion handle-request-coercion-error
@@ -362,23 +408,27 @@
                                                                          (assoc :muuntaja/content-type "application/json"))))})]
 
                                       [ri.muuntaja/format-request-interceptor]
-                                      [rh.coercion/coerce-request-interceptor]]}}))
+                                      [rh.coercion/coerce-request-interceptor]
+                                      authenticate-interceptor]}}))
 
 (defn- with-opts [opts]
   {:enter (fn [ctx]
             (update ctx :request merge opts))})
 
-(defn handler [node]
+
+(defn handler [node opts]
   (http/ring-handler router
                      (r.ring/create-default-handler)
                      {:executor r.sieppari/executor
-                      :interceptors [[with-opts {:node node}]]}))
+                      :interceptors [[with-opts (merge {:node node} opts)]
+                                     #_authenticate-interceptor]}))
 
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-server [node ^HttpServer$Factory module]
   (let [port (.getPort module)
-        ^Server server (j/run-jetty (handler node)
+        authn-records (pgwire/<-authn-settings (.getAuthnSettings module))
+        ^Server server (j/run-jetty (handler node {:authn-records authn-records})
                                     (merge {:port port, :h2c? true, :h2? true}
                                            #_jetty-opts
                                            {:async? true, :join? false}))]
@@ -388,6 +438,7 @@
         (.stop server)
         (log/info "HTTP server stopped.")))))
 
-(defmethod xtn/apply-config! :xtdb/server [^Xtdb$Config config, _ {:keys [port]}]
+(defmethod xtn/apply-config! :xtdb/server [^Xtdb$Config config, _ {:keys [port authn-records]}]
   (.module config (cond-> (HttpServer$Factory.)
-                    (some? port) (.port port))))
+                    (some? port) (.port port)
+                    (seq authn-records) (.authn (pgwire/->authn-settings authn-records)))))

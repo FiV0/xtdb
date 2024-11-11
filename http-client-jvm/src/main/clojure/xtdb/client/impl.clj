@@ -110,7 +110,9 @@
   (latest-submitted-tx [_] @!latest-submitted-tx)
 
   (status [client]
-    (:body (request client :get :status)))
+    (:body (request client :post :status
+                    {:content-type :transit+json
+                     :form-params {}})))
 
   AutoCloseable
   (close [_]
