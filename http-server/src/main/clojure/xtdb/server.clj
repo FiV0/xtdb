@@ -82,7 +82,8 @@
 
 (s/def ::user string?)
 (s/def ::password string?)
-(s/def ::auth-opts (s/keys :req-un [::user ::password]))
+(s/def ::auth-opts (s/keys :req-un [::user ]
+                           :opt-un [::password]))
 
 (s/def :xtdb.server.status/opts (s/nilable (s/keys :opt-un [::auth-opts])))
 (s/def :xtdb.server.tx/opts (s/nilable (s/keys :opt-un [::system-time ::default-tz ::key-fn ::explain? ::auth-opts])))

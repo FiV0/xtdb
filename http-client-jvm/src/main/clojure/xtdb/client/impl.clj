@@ -114,6 +114,11 @@
                     {:content-type :transit+json
                      :form-params {}})))
 
+  (status [client opts]
+    (:body (request client :post :status
+                    {:content-type :transit+json
+                     :form-params {:opts opts}})))
+
   AutoCloseable
   (close [_]
     (.close http-client)))
