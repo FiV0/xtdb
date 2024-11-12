@@ -295,18 +295,18 @@ class YamlSerdeTest {
         val input = """
         authnRecords:
             - user: admin
-              address: 127.0.0.42
+              address: 127.0.0.42/8
               method: TRUST  
             - user: all
-              address: 127.0.0.1
+              address: ::1/128 
               method: PASSWORD  
         """.trimIndent()
 
         assertEquals(
             AuthnSettings(
                 listOf(
-                    AuthnSettings.AuthnRecord("admin","127.0.0.42", AuthnSettings.AuthnMethod.TRUST),
-                    AuthnSettings.AuthnRecord( "all", "127.0.0.1", AuthnSettings.AuthnMethod.PASSWORD)
+                    AuthnSettings.AuthnRecord("admin", InetAddressRange.parse("127.0.0.42/8"), AuthnSettings.AuthnMethod.TRUST),
+                    AuthnSettings.AuthnRecord( "all", InetAddressRange.parse("::1/128"), AuthnSettings.AuthnMethod.PASSWORD)
                 )
             ),
             YAML_SERDE.decodeFromString(AuthnSettings.serializer(), input)
