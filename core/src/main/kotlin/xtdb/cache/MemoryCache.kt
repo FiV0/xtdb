@@ -67,6 +67,8 @@ class MemoryCache
         return MemoryCacheStats(pinningCache.stats, metaSlices.size, dataSlices.size, metaWeightBytes, dataWeightBytes, pinnedVsUnpinned)
     }
 
+    val cache get() = pinningCache.cache
+
     interface PathLoader {
         fun load(path: Path): ByteBuffer
         fun load(pathSlice: PathSlice): ByteBuffer

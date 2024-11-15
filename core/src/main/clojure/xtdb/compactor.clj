@@ -248,7 +248,7 @@
   {:allocator (ig/ref :xtdb/allocator)
    :buffer-pool (ig/ref :xtdb/buffer-pool)
    :metadata-mgr (ig/ref :xtdb.metadata/metadata-manager)
-   :threads (max 1 (/ (.availableProcessors (Runtime/getRuntime)) 2))
+   :threads 1 #_(max 1 (/ (.availableProcessors (Runtime/getRuntime)) 2))
    :metrics-registry (ig/ref :xtdb.metrics/registry)
    :enabled? (.getEnabled config)})
 
@@ -377,7 +377,9 @@
 
 (defmethod ig/init-key :xtdb/compactor [_ {:keys [enabled?] :as opts}]
   (if enabled?
-    (open-compactor opts)
+    (do
+      (log/info (str "Compactor enabled with #") (:threads opts) " threads")
+      (open-compactor opts))
     (->NoOp)))
 
 (defmethod ig/halt-key! :xtdb/compactor [_ compactor]
@@ -387,4 +389,3 @@
 (defn compact-all!
   ([node] (compact-all! node nil))
   ([node timeout] (-compact-all! (util/component node :xtdb/compactor) timeout)))
-
