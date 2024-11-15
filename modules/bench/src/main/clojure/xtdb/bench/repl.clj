@@ -52,14 +52,30 @@
                     :node-dir node-dir}))
 
   (def node-dir (.toPath (io/file "dev/auctionmark")))
+  (future (run-bench {:type :auctionmark
+                      :opts {:duration "PT3H"
+                             :load-phase false
+                             :scale-factor 0.1
+                             :threads 8
+                             :sync true}
+                      :node-dir node-dir}))
 
-  (run-bench {:type :auctionmark
-              :opts {:duration "PT30S"
-                     :load-phase false
-                     :scale-factor 0.1
-                     :threads 8
-                     :sync true}
-              :node-dir node-dir})
+  (def memory-cache (-> bxt/bench-node :system :xtdb/buffer-pool :memory-cache))
+
+  (defn entry->k+ref-count [entry]
+    [(str (key entry)) (-> entry val deref (.getRefCount) (.get))])
+
+  (defn  get-files+ref-count []
+    (->> (.getCache memory-cache) (.asMap)
+         (map entry->k+ref-count)
+         (sort-by first)))
+
+  (get-files+ref-count)
+
+  (def snap1 )
+  (def snap2 (get-files+ref-count))
+
+  (= snap1 snap2)
 
 
   ;; readings

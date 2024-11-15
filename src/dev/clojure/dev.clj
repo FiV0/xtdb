@@ -35,7 +35,7 @@
   (alter-var-root #'node (constantly nil)))
 
 (def standalone-config
-  {::xtdb {:node-opts {:server {:port 5432
+  {::xtdb {:node-opts {:server {:port 0
                                 :ssl {:keystore (io/file (io/resource "xtdb/pgwire/xtdb.jks"))
                                       :keystore-password "password123"}}
                        :log [:local {:path (io/file dev-node-dir "log")}]
@@ -181,4 +181,9 @@
 
 (comment
   (->> (util/->path "target/compactor/lose-data-on-compaction/objects/v02/tables/docs/meta/log-l01-nr121-rs16.arrow")
-       (read-meta-file)))
+       (read-meta-file))
+
+  (go)
+  (halt)
+
+  )

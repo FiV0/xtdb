@@ -341,6 +341,7 @@
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-local-storage ^xtdb.IBufferPool [^BufferAllocator allocator, ^Storage$LocalStorageFactory factory, ^MeterRegistry metrics-registry]
   (let [memory-cache (MemoryCache. allocator (.getMaxCacheBytes factory))]
+    (log/info (str "Memory cache size: " (quot (.getMaxCacheBytes factory) (* 1000 1000)) "mb"))
     (metrics/add-cache-gauges metrics-registry "memorycache" #(.getStats memory-cache))
     (->LocalBufferPool (->buffer-pool-child-allocator allocator metrics-registry)
                        memory-cache
@@ -640,3 +641,66 @@
 
 (defmethod ig/halt-key! :xtdb/buffer-pool [_ ^IBufferPool buffer-pool]
   (util/close buffer-pool))
+
+(comment
+
+  (import 'com.github.benmanes.caffeine.cache.Caffeine
+          [java.util.concurrent.atomic AtomicInteger])
+
+  (def async-cache (-> (Caffeine/newBuilder)
+                       (.maximumWeight 0)
+                       (.weigher (fn [_ _] 1))
+                       (.buildAsync)))
+
+
+  @(.get async-cache 1 (fn [k v] (CompletableFuture/completedFuture k)))
+
+
+  (-> async-cache (.synchronous) (.policy) (.eviction) .get .weightedSize .getAsLong)
+  ;;    0
+
+  (-> async-cache (.synchronous) .asMap count)
+  ;;    1
+
+  (import (xtdb.cache PinningCache PinningCache$IEntry)
+          [java.util.concurrent.atomic AtomicInteger]
+          kotlin.jvm.functions.Function1)
+
+  (def pinning-cache (PinningCache. 0))
+
+  (def str->path util/->path)
+
+  (def entry @(.get pinning-cache (str->path "a") (reify Function1
+                                                    (invoke [_ k]
+                                                      (let [ai (AtomicInteger. 0)]
+                                                        (CompletableFuture/completedFuture
+                                                         (reify PinningCache$IEntry
+                                                           (getRefCount [_] ai)
+                                                           (getWeight [_] 1))))))))
+
+  (.getRefCount entry)
+  ;;    1
+
+  (.releaseEntry pinning-cache (str->path "a"))
+
+
+  (-> pinning-cache .getCache (.synchronous) (.policy) (.eviction) .get .weightedSize .getAsLong)
+  ;;    0
+
+  (-> pinning-cache .getCache (.synchronous) .asMap count)
+  ;;    1
+
+  (-> pinning-cache .getCache (.synchronous) (.policy) (.eviction) .get (.setMaximum 1))
+  (-> pinning-cache .getCache (.synchronous) (.policy) (.eviction) .get (.setMaximum 0))
+
+
+  (-> pinning-cache .getStats)
+  ;;    0
+
+  ;; maxSize 0
+  ;; pin 1 byte
+  ;; pinnedBytes 1 eviction.maximum 0
+  ;; unpin 1 byte
+
+
+  )
