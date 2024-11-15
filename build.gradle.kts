@@ -29,10 +29,10 @@ val defaultJvmArgs = listOf(
 )
 
 val sixGBJvmArgs = listOf(
-    "-Xmx2g",
-    "-Xms2g",
-    "-XX:MaxDirectMemorySize=3g",
-    "-XX:MaxMetaspaceSize=1g"
+    "-Xmx2000m",
+    "-Xms2000m",
+    "-XX:MaxDirectMemorySize=2000m",
+    "-XX:MaxMetaspaceSize=500m"
 )
 
 val twelveGBJvmArgs = listOf(

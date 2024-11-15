@@ -41,6 +41,8 @@
      (doseq [chunk (partition-all partition-count doc-seq)]
        (xt/submit-tx (:sut worker) [(into [:put-docs table] chunk)])))))
 
+(def bench-node nil)
+
 (defn run-benchmark [{:keys [node-opts benchmark-type benchmark-opts]}]
   (let [benchmark (case benchmark-type
                     :auctionmark
@@ -61,7 +63,9 @@
         benchmark-fn (b/compile-benchmark benchmark bm/wrap-task)]
     (with-open [node (tu/->local-node node-opts)]
       (binding [bm/*registry* (util/component node :xtdb.metrics/registry)]
-        (benchmark-fn node)))))
+        (alter-var-root #'bench-node (constantly node))
+        (benchmark-fn node)
+        (alter-var-root #'bench-node (constantly nil))))))
 
 (defn node-dir->config [^File node-dir]
   (let [^Path path (.toPath node-dir)]

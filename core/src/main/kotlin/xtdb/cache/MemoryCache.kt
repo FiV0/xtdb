@@ -65,6 +65,8 @@ class MemoryCache
         return MemoryCacheStats(pinningCache.stats, metaSlices.size, dataSlices.size, metaWeightBytes, dataWeightBytes, pinnedVsUnpinned)
     }
 
+    val cache get() = pinningCache.cache
+
     interface PathLoader {
         fun load(path: Path): ByteBuffer
         fun load(pathSlice: PathSlice): ByteBuffer
@@ -98,7 +100,7 @@ class MemoryCache
         }
     }
 
-    private inner class Entry(
+    inner class Entry(
         val inner: IEntry<PathSlice>,
         val onEvict: AutoCloseable?,
         val bbuf: ByteBuffer
