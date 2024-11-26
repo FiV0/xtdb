@@ -343,7 +343,7 @@
   (getTrie [_] trie))
 
 (defprotocol MergePlanPage
-  (load-page [mpg buffer-pool vsr-cache])
+  (load-page [mpg ^IBufferPool buffer-pool vsr-cache])
   (test-metadata [msg])
   (temporal-bounds [msg]))
 

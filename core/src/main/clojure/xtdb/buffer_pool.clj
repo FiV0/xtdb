@@ -56,8 +56,6 @@
       (metrics/add-allocator-gauge metrics-registry "buffer-pool.allocator.allocated_memory" child-allocator))
     child-allocator))
 
-
-
 (defrecord MemoryBufferPool [allocator, ^NavigableMap memory-store]
   IBufferPool
   (getBuffer [_ k]
@@ -156,7 +154,7 @@
   (doseq [buf (.getBuffers record-batch)]
     (retain buf)))
 
-(defn ->buf+record-batch ^org.apache.arrow.vector.ipc.message.ArrowRecordBatch
+(defn ->record-batch ^org.apache.arrow.vector.ipc.message.ArrowRecordBatch
   [^BufferAllocator alloc ^ArrowBlock block, ^Path path]
   (let [buffer (util/->mmap-path path FileChannel$MapMode/READ_ONLY (.getOffset block) (.getBodyLength block))
         arrow-buf (util/->arrow-buf-view alloc buffer)
@@ -199,7 +197,7 @@
             block (nth blocks block-idx nil)]
         (if-not block
           (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
-          (doto (->buf+record-batch allocator block path)
+          (doto (->record-batch allocator block path)
             (record-batch-retain))))
       (catch Exception e
         (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e)))))
