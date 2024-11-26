@@ -150,27 +150,28 @@
   (.limit bb limit)
   (.slice bb))
 
-(defn record-batch-retain [^ArrowRecordBatch record-batch]
+(defn retain-record-batch [^ArrowRecordBatch record-batch]
   (doseq [buf (.getBuffers record-batch)]
     (retain buf)))
 
 (defn ->record-batch ^org.apache.arrow.vector.ipc.message.ArrowRecordBatch
   [^BufferAllocator alloc ^ArrowBlock block, ^Path path]
-  (let [buffer (util/->mmap-path path FileChannel$MapMode/READ_ONLY (.getOffset block) (.getBodyLength block))
-        arrow-buf (util/->arrow-buf-view alloc buffer)
-        prefix-size (if (= (.getInt arrow-buf 0) MessageSerializer/IPC_CONTINUATION_TOKEN)
-                      8
-                      4)
-        ^RecordBatch batch (.header (Message/getRootAsMessage
-                                     (.nioBuffer arrow-buf
-                                                 prefix-size
-                                                 (- (.getMetadataLength block) prefix-size)))
-                                    (RecordBatch.))
-        body-buffer (doto (.slice arrow-buf
-                                  (.getMetadataLength block)
-                                  (.getBodyLength block))
-                      (-> (.getReferenceManager) (.retain)))]
-    (MessageSerializer/deserializeRecordBatch batch body-buffer)))
+  (prn [(.getOffset block) (.getMetadataLength block) (.getBodyLength block)])
+  (let [buffer (util/->mmap-path path FileChannel$MapMode/READ_ONLY (.getOffset block)
+                                 (+ (.getMetadataLength block) (.getBodyLength block)))]
+    (util/with-open [arrow-buf (util/->arrow-buf-view alloc buffer)]
+      (let [prefix-size (if (= (.getInt arrow-buf 0) MessageSerializer/IPC_CONTINUATION_TOKEN) 8 4)
+            ^RecordBatch batch (.header (Message/getRootAsMessage
+                                         (.nioBuffer arrow-buf
+                                                     prefix-size
+                                                     (- (.getMetadataLength block) prefix-size)))
+                                        (RecordBatch.))
+            body-buffer (doto (.slice arrow-buf
+                                      (.getMetadataLength block)
+                                      (.getBodyLength block))
+                          (-> (.getReferenceManager) (.retain)))]
+        (doto (MessageSerializer/deserializeRecordBatch batch body-buffer)
+          #_(retain-record-batch))))))
 
 (defrecord LocalBufferPool [allocator, ^MemoryCache memory-cache, ^Path disk-store, ^Cache arrow-footer-cache]
   IBufferPool
@@ -185,22 +186,22 @@
                 (CompletableFuture/completedFuture
                  (Pair. buffer-cache-path nil)))))))
 
-  (getRecordBatch [_ path block-idx]
-    (when-not (util/path-exists (.resolve disk-store path) )
-      (throw (os/obj-missing-exception path)))
+  (getRecordBatch [_ k block-idx]
+    (let [path (.resolve disk-store k)]
+      (when-not (util/path-exists path)
+        (throw (os/obj-missing-exception path)))
 
-    (try
-      (let [^ArrowFooter footer (.get arrow-footer-cache path
-                                      (fn [path]
-                                        (Relation/readFooter (path->seekable-byte-channel path))))
-            blocks (.getRecordBatches footer)
-            block (nth blocks block-idx nil)]
-        (if-not block
-          (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
-          (doto (->record-batch allocator block path)
-            (record-batch-retain))))
-      (catch Exception e
-        (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e)))))
+      (try
+        (let [^ArrowFooter footer (.get arrow-footer-cache k
+                                        (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))
+              blocks (.getRecordBatches footer)
+              block (nth blocks block-idx nil)]
+          (if-not block
+            (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
+            (doto (->record-batch allocator block path)
+              #_(retain-record-batch))))
+        (catch Exception e
+          (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e))))))
 
   (putObject [_ k buffer]
     (try

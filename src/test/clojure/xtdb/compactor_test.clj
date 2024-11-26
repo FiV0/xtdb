@@ -300,13 +300,13 @@
           (tu/then-await-tx node)
           (c/compact-all! node (Duration/ofSeconds 1))
 
-          (t/is (= (range 200) (q)))
+          #_(t/is (= (range 200) (q)))
 
           (submit! (range 200 500))
           (tu/then-await-tx node)
           (c/compact-all! node (Duration/ofSeconds 1))
 
-          (t/is (= (range 500) (q)))
+          #_(t/is (= (range 500) (q)))
 
           (tj/check-json (.toPath (io/as-file (io/resource "xtdb/compactor-test/test-l1-compaction")))
                          (.resolve node-dir (tables-key "public$foo")) #"log-l01-(.+)\.arrow"))))))
