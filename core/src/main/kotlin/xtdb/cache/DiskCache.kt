@@ -21,13 +21,15 @@ class DiskCache(
     @Suppress("MemberVisibilityCanBePrivate")
     val maxSizeBytes: Long
 ) {
-    val pinningCache = PinningCache<Entry>(maxSizeBytes)
+    val pinningCache = PinningCache<Key, Entry>(maxSizeBytes)
 
     val stats get() = pinningCache.stats
 
+    data class Key(override val path: Path) : PinningCache.IKey
+
     inner class Entry(
         inner: PinningCache.IEntry,
-        val k: Path,
+        val k: Key,
         val path: Path,
     ) : PinningCache.IEntry by inner, AutoCloseable {
 
@@ -37,7 +39,7 @@ class DiskCache(
             super.onEvict(k, reason)
         }
 
-        constructor(k: Path, path: Path) : this(pinningCache.Entry(path.fileSize()), k, path)
+        constructor(k: Path, path: Path) : this(pinningCache.Entry(path.fileSize()), Key(k), path)
 
         override fun close() {
             pinningCache.releaseEntry(k)
@@ -55,7 +57,7 @@ class DiskCache(
             })
             .forEach { path ->
                 val k = rootPath.relativize(path)
-                syncInnerCache.put(k, Entry(k, path))
+                syncInnerCache.put(Key(k), Entry(k, path))
             }
     }
 
@@ -70,24 +72,24 @@ class DiskCache(
 
     @Suppress("NAME_SHADOWING")
     fun get(k: Path, fetch: Fetch) =
-        pinningCache.get(k) { k ->
-            val diskCachePath = rootPath.resolve(k)
+        pinningCache.get(Key(k)) { k ->
+            val diskCachePath = rootPath.resolve(k.path)
 
             if (diskCachePath.exists())
-                completedFuture(Entry(k, diskCachePath))
+                completedFuture(Entry(k.path, diskCachePath))
             else
-                fetch(k, createTempPath())
+                fetch(k.path, createTempPath())
                     .thenApply { tmpPath ->
                         tmpPath.moveTo(diskCachePath.createParentDirectories(), ATOMIC_MOVE, REPLACE_EXISTING)
-                        Entry(k, diskCachePath)
+                        Entry(k.path, diskCachePath)
                     }
         }
 
     @Suppress("NAME_SHADOWING")
     fun put(k: Path, tmpFile: Path) {
         pinningCache.cache.asMap()
-            .computeIfAbsent(k) { k ->
-                val diskCachePath = rootPath.resolve(k)
+            .computeIfAbsent(Key(k)) { k ->
+                val diskCachePath = rootPath.resolve(k.path)
                 tmpFile.moveTo(diskCachePath.createParentDirectories(), ATOMIC_MOVE, REPLACE_EXISTING)
                 completedFuture(Entry(pinningCache.Entry(diskCachePath.fileSize()), k, diskCachePath))
             }

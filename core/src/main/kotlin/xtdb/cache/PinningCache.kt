@@ -12,7 +12,7 @@ import java.util.concurrent.locks.Lock
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
-class PinningCache<V : PinningCache.IEntry>(
+class PinningCache<K: PinningCache.IKey, V : PinningCache.IEntry>(
     @Suppress("MemberVisibilityCanBePrivate")
     val maxSizeBytes: Long
 ) : AutoCloseable {
@@ -27,6 +27,10 @@ class PinningCache<V : PinningCache.IEntry>(
             return Stats(pinnedBytes, evictableBytes, maxSizeBytes - pinnedBytes - evictableBytes)
         }
 
+    interface IKey {
+        val path: Path
+    }
+
     interface IEntry {
         val weight: Long
 
@@ -37,11 +41,11 @@ class PinningCache<V : PinningCache.IEntry>(
         fun onEvict(k: Path, reason: RemovalCause) {}
     }
 
-    val cache: AsyncCache<Path, V> = Caffeine.newBuilder()
+    val cache: AsyncCache<K, V> = Caffeine.newBuilder()
         .maximumWeight(maxSizeBytes)
-        .evictionListener<Path, V> { key, value, cause -> value!!.onEvict(key!!, cause) }
-        .removalListener<Path, V> { key, value, cause -> if (!cause.wasEvicted()) value!!.onEvict(key!!, cause) }
-        .weigher<Path, V> { _, value -> if (value.refCount.get() > 0) 0 else value.weight.toInt() }
+        .evictionListener<K, V> { key, value, cause -> value!!.onEvict(key!!.path, cause) }
+        .removalListener<K, V> { key, value, cause -> if (!cause.wasEvicted()) value!!.onEvict(key!!.path, cause) }
+        .weigher<K, V> { _, value -> if (value.refCount.get() > 0) 0 else value.weight.toInt() }
         .buildAsync()
 
     private val eviction = cache.synchronous().policy().eviction().get()
@@ -56,7 +60,7 @@ class PinningCache<V : PinningCache.IEntry>(
     }
 
     @Suppress("NAME_SHADOWING")
-    fun get(k: Path, f: (Path) -> CompletableFuture<V>): CompletableFuture<V> =
+    fun get(k: K, f: (IKey) -> CompletableFuture<V>): CompletableFuture<V> =
         cache.asMap().compute(k) { k, fut ->
             // NOTE: this MUST be thenApplyAsync rather than thenApply
             // otherwise the entry is at risk of eviction
@@ -70,7 +74,7 @@ class PinningCache<V : PinningCache.IEntry>(
                 }
         }!!
 
-    fun invalidate(k: Path) {
+    fun invalidate(k: K) {
         cache.synchronous().run {
             invalidate(k)
             cleanUp()
@@ -85,7 +89,7 @@ class PinningCache<V : PinningCache.IEntry>(
         ForkJoinPool.commonPool().awaitQuiescence(100, MILLISECONDS)
     }
 
-    fun releaseEntry(k: Path) {
+    fun releaseEntry(k: K) {
         cache.asMap().compute(k) { _, fut ->
             fut!!.thenApplyAsync { entry ->
                 if (0 == entry.refCount.decrementAndGet().also { check(it >= 0) }) updatePinnedBytes(-entry.weight)
