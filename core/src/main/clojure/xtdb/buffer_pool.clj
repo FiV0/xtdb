@@ -7,7 +7,7 @@
             [xtdb.object-store :as os]
             [xtdb.util :as util])
   (:import (clojure.lang PersistentQueue)
-           (com.github.benmanes.caffeine.cache Cache Caffeine)
+           (com.github.benmanes.caffeine.cache AsyncCache Cache Caffeine)
            [io.micrometer.core.instrument MeterRegistry]
            [io.micrometer.core.instrument.simple SimpleMeterRegistry]
            [java.io ByteArrayOutputStream Closeable]
@@ -62,6 +62,32 @@
 
 (defrecord MemoryBufferPool [allocator, ^NavigableMap memory-store]
   IBufferPool
+  (getByteBuffer [_ path]
+    (let [^ArrowBuf arrow-buf (or (locking memory-store
+                                    (some-> (.get memory-store path)))
+                                  (throw (os/obj-missing-exception path)))]
+      (copy-bb (.nioBuffer arrow-buf 0 (.capacity arrow-buf)))))
+
+  (getFooter [_ path]
+    (let [arrow-buf (or (locking memory-store
+                          (some-> (.get memory-store path)))
+                        (throw (os/obj-missing-exception path)))]
+      (util/read-arrow-footer arrow-buf)))
+
+  (getRecordBatch [_ path block-idx]
+    (try
+      (let [arrow-buf (or (locking memory-store
+                            (some-> (.get memory-store path)))
+                          (throw (os/obj-missing-exception path)))
+            footer (util/read-arrow-footer arrow-buf)
+            blocks (.getRecordBatches footer)
+            block (nth blocks block-idx nil)]
+        (if-not block
+          (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
+          (util/->arrow-record-batch-view block arrow-buf)))
+      (catch Exception e
+        (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e)))))
+
   (getByteBuffer [_ path]
     (let [^ArrowBuf arrow-buf (or (locking memory-store
                                     (some-> (.get memory-store path)))
@@ -212,6 +238,41 @@
                                               (.getBodyLength block))
                                   (-> (.getReferenceManager) (.retain)))]
                 (MessageSerializer/deserializeRecordBatch batch body-buffer)))))
+        (catch Exception e
+          (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e))))))
+
+  (getByteBuffer [_ k]
+    (when k
+      (util/with-open [arrow-buf (.get memory-cache k
+                                       (fn [^Path k]
+                                         (let [buffer-cache-path (.resolve disk-store k)]
+                                           (when-not (util/path-exists buffer-cache-path)
+                                             (throw (os/obj-missing-exception k)))
+
+                                           (CompletableFuture/completedFuture
+                                            (Pair. buffer-cache-path nil)))))]
+        (copy-bb (.nioBuffer arrow-buf 0 (.capacity arrow-buf))))))
+
+  (getFooter [_ k]
+    (let [path (.resolve disk-store k)]
+      (when-not (util/path-exists path)
+        (throw (os/obj-missing-exception path)))
+
+      (.get arrow-footer-cache k (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))))
+
+  (getRecordBatch [_ k block-idx]
+    (let [path (.resolve disk-store k)]
+      (when-not (util/path-exists path)
+        (throw (os/obj-missing-exception path)))
+
+      (try
+        (let [^ArrowFooter footer (.get arrow-footer-cache k
+                                        (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))
+              blocks (.getRecordBatches footer)
+              block (nth blocks block-idx nil)]
+          (if-not block
+            (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
+            (->record-batch allocator block path)))
         (catch Exception e
           (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e))))))
 
