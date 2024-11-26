@@ -1,12 +1,15 @@
 package xtdb
 
 import org.apache.arrow.memory.ArrowBuf
+import org.apache.arrow.vector.ipc.message.ArrowRecordBatch
 import xtdb.arrow.Relation
 import java.nio.ByteBuffer
 import java.nio.file.Path
 
 interface IBufferPool : AutoCloseable {
     fun getBuffer(key: Path): ArrowBuf
+
+    fun getRecordBatch(key: Path, blockIdx: Int): ArrowRecordBatch
 
     fun putObject(k: Path, buffer: ByteBuffer)
 
