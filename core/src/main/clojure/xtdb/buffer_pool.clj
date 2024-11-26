@@ -31,7 +31,7 @@
            (xtdb.api.storage ObjectStore Storage Storage$Factory Storage$LocalStorageFactory Storage$RemoteStorageFactory)
            xtdb.api.Xtdb$Config
            (xtdb.arrow Relation)
-           (xtdb.cache DiskCache DiskCache$Entry MemoryCache)
+           (xtdb.cache DiskCache DiskCache$Entry MemoryCache MemoryCache$Key)
            (org.apache.arrow.vector.ipc.message ArrowBlock ArrowFooter MessageSerializer)
            (xtdb.multipart IMultipartUpload SupportsMultipart)))
 
@@ -156,7 +156,6 @@
 
 (defn ->record-batch ^org.apache.arrow.vector.ipc.message.ArrowRecordBatch
   [^BufferAllocator alloc ^ArrowBlock block, ^Path path]
-  (prn [(.getOffset block) (.getMetadataLength block) (.getBodyLength block)])
   (let [buffer (util/->mmap-path path FileChannel$MapMode/READ_ONLY (.getOffset block)
                                  (+ (.getMetadataLength block) (.getBodyLength block)))]
     (util/with-open [arrow-buf (util/->arrow-buf-view alloc buffer)]
@@ -170,38 +169,44 @@
                                       (.getMetadataLength block)
                                       (.getBodyLength block))
                           (-> (.getReferenceManager) (.retain)))]
-        (doto (MessageSerializer/deserializeRecordBatch batch body-buffer)
-          #_(retain-record-batch))))))
+        (MessageSerializer/deserializeRecordBatch batch body-buffer)))))
 
 (defrecord LocalBufferPool [allocator, ^MemoryCache memory-cache, ^Path disk-store, ^Cache arrow-footer-cache]
   IBufferPool
-  (getBuffer [_ k]
-    (when k
-      (.get memory-cache k
-            (fn [^Path k]
-              (let [buffer-cache-path (.resolve disk-store k)]
-                (when-not (util/path-exists buffer-cache-path)
-                  (throw (os/obj-missing-exception k)))
+  #_(getBuffer [_ k]
+      (when k
+        (.get memory-cache k
+              (fn [^MemoryCache$Key k]
+                (let [buffer-cache-path (.resolve disk-store (.getPath k))]
+                  (when-not (util/path-exists buffer-cache-path)
+                    (throw (os/obj-missing-exception k)))
 
-                (CompletableFuture/completedFuture
-                 (Pair. buffer-cache-path nil)))))))
+                  (CompletableFuture/completedFuture
+                   (Pair. buffer-cache-path nil)))))))
 
   (getRecordBatch [_ k block-idx]
-    (let [path (.resolve disk-store k)]
-      (when-not (util/path-exists path)
-        (throw (os/obj-missing-exception path)))
+    (when k
+      (let [path (.resolve disk-store k)]
+        (when-not (util/path-exists path)
+          (throw (os/obj-missing-exception path)))
 
-      (try
-        (let [^ArrowFooter footer (.get arrow-footer-cache k
-                                        (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))
-              blocks (.getRecordBatches footer)
-              block (nth blocks block-idx nil)]
-          (if-not block
-            (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
-            (doto (->record-batch allocator block path)
-              #_(retain-record-batch))))
-        (catch Exception e
-          (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e))))))
+        (try
+          (let [^ArrowFooter footer (.get arrow-footer-cache k
+                                          (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))
+                blocks (.getRecordBatches footer)
+                ^ArrowBlock block (nth blocks block-idx nil)]
+            (if-not block
+              (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
+              (.get memory-cache k (long (.getOffset block)) (long (+ (.getMetadataLength block) (.getBodyLength block)))
+                    (fn [^MemoryCache$Key k]
+                      (let [buffer-cache-path (.resolve disk-store (.getPath k))]
+                        (when-not (util/path-exists buffer-cache-path)
+                          (throw (os/obj-missing-exception k)))
+
+                        (CompletableFuture/completedFuture
+                         (Pair. k nil)))))))
+          (catch Exception e
+            (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e)))))))
 
   (putObject [_ k buffer]
     (try
@@ -258,7 +263,7 @@
 
   EvictBufferTest
   (evict-cached-buffer! [_ k]
-    (.invalidate memory-cache k))
+    #_(.invalidate memory-cache k))
 
   Closeable
   (close [_]
@@ -421,7 +426,7 @@
 
   EvictBufferTest
   (evict-cached-buffer! [_ k]
-    (.invalidate memory-cache k))
+    #_(.invalidate memory-cache k))
 
   (close [_]
     (util/close memory-cache)
