@@ -71,7 +71,7 @@ class MemoryCache
         }
     }
 
-    private inner class Entry(
+    inner class Entry(
         val inner: IEntry<PathSlice>,
         val onEvict: AutoCloseable?,
         val bbuf: ByteBuffer
