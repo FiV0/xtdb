@@ -62,12 +62,6 @@
 
 (defrecord MemoryBufferPool [allocator, ^NavigableMap memory-store]
   IBufferPool
-  (getBuffer [_ k]
-    (when k
-      (or (locking memory-store
-            (some-> (.get memory-store k) retain))
-          (throw (os/obj-missing-exception k)))))
-
   (getByteBuffer [_ path]
     (let [^ArrowBuf arrow-buf (or (locking memory-store
                                     (some-> (.get memory-store path)))
@@ -167,17 +161,6 @@
 
 (defrecord LocalBufferPool [allocator, ^MemoryCache memory-cache, ^Path disk-store, ^Cache arrow-footer-cache]
   IBufferPool
-  (getBuffer [_ k]
-    (when k
-      (.get memory-cache (PathSlice. k)
-            (fn [^PathSlice path-slice]
-              (let [buffer-cache-path (.resolve disk-store (.getPath path-slice))]
-                (when-not (util/path-exists buffer-cache-path)
-                  (throw (os/obj-missing-exception k)))
-
-                (CompletableFuture/completedFuture
-                 (Pair. (->resolved-path-slice path-slice buffer-cache-path) nil)))))))
-
   (getByteBuffer [_ k]
     (when k
       (util/with-open [arrow-buf (.get memory-cache (PathSlice. k)
@@ -399,19 +382,6 @@
                              ^SortedMap !os-files
                              ^AutoCloseable !os-files-subscription]
   IBufferPool
-  (getBuffer [_ k]
-    (when k
-      (.get memory-cache (PathSlice. k)
-            (fn [^PathSlice path-slice]
-              (-> (.get disk-cache k
-                        (fn [^Path k, ^Path tmp-file]
-                          (.getObject object-store k tmp-file)))
-
-                  (.thenApply (fn [^DiskCache$Entry entry]
-                                ;; cleanup action - when the entry is evicted from the memory cache,
-                                ;; release one count on the disk-cache entry.
-                                (Pair. (->resolved-path-slice path-slice (.getPath entry)) entry))))))))
-
   (getByteBuffer [_ k]
     (when k
       (util/with-open [arrow-buf (.get memory-cache (PathSlice. k)
@@ -435,12 +405,38 @@
                                    (Relation/readFooter (path->seekable-byte-channel (.getPath entry)))))))
 
   (getRecordBatch [_ k block-idx]
-    #_(util/with-close-on-catch [^DiskCache$Entry entry @(.get disk-cache k
-                                                               (fn [^Path k, ^Path tmp-file]
-                                                                 (.getObject object-store k tmp-file)))]
-        (let [footer (Relation/readFooter (path->seekable-byte-channel (.getPath entry)))]
+    (util/with-close-on-catch [^DiskCache$Entry entry @(.get disk-cache k
+                                                             (fn [^Path k, ^Path tmp-file]
+                                                               (.getObject object-store k tmp-file)))]
+      (try
+        (let [path (.getPath entry)
+              ^ArrowFooter footer (.get arrow-footer-cache k
+                                        (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))
+              blocks (.getRecordBatches footer)
+              ^ArrowBlock block (nth blocks block-idx nil)]
+          (if-not block
+            (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
+            (util/with-open [arrow-buf (.get memory-cache (PathSlice. k (.getOffset block)
+                                                                      (+ (.getMetadataLength block) (.getBodyLength block)))
+                                             (fn [^PathSlice path-slice]
+                                               (CompletableFuture/completedFuture
+                                                ;; cleanup action - when the entry is evicted from the memory cache,
+                                                ;; release one count on the disk-cache entry.
+                                                (Pair. (->resolved-path-slice path-slice path) entry))))]
 
-          )))
+              (let [prefix-size (if (= (.getInt arrow-buf 0) MessageSerializer/IPC_CONTINUATION_TOKEN) 8 4)
+                    ^RecordBatch batch (.header (Message/getRootAsMessage
+                                                 (.nioBuffer arrow-buf
+                                                             prefix-size
+                                                             (- (.getMetadataLength block) prefix-size)))
+                                                (RecordBatch.))
+                    body-buffer (doto (.slice arrow-buf
+                                              (.getMetadataLength block)
+                                              (.getBodyLength block))
+                                  (-> (.getReferenceManager) (.retain)))]
+                (MessageSerializer/deserializeRecordBatch batch body-buffer)))))
+        (catch Exception e
+          (throw (ex-info (format "Failed opening record batch '%s'" k) {:path k :block-idx block-idx} e))))))
 
   (listAllObjects [_]
     (vec (.sequencedKeySet !os-files)))
