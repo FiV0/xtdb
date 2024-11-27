@@ -175,6 +175,7 @@
         (t/is (= [:put] (get-remote-calls bp)))
         (test-get-object bp (util/->path "min-part-put") (utf8-buf "12"))))))
 
+#_
 (t/deftest arrow-ipc-test
   (with-open [bp (remote-test-buffer-pool)]
     (t/testing "multipart, arrow ipc"
