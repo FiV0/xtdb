@@ -1,10 +1,12 @@
 (ns xtdb.metadata
-  (:require [cognitect.transit :as transit]
+  (:require [clojure.tools.logging :as log]
+            [cognitect.transit :as transit]
             [integrant.core :as ig]
             [xtdb.bloom :as bloom]
             xtdb.buffer-pool
             xtdb.expression.temporal
             [xtdb.serde :as serde]
+            [xtdb.trie :as trie]
             [xtdb.types :as types]
             [xtdb.util :as util])
   (:import (com.cognitect.transit TransitFactory)
@@ -51,7 +53,8 @@
   (^xtdb.metadata.ITableMetadata openTableMetadata [^java.nio.file.Path metaFilePath])
   (columnFields [^String tableName])
   (columnField [^String tableName, ^String colName])
-  (allColumnFields []))
+  (allColumnFields [])
+  (cleanUp []))
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
 (definterface IMetadataPredicate
@@ -170,6 +173,20 @@
           (->TableMetadata (ArrowHashTrie. nodes-vec) rel metadata-reader col-names page-idx-cache (AtomicInteger. 1)
                            min-rdr max-rdr))))))
 
+(defn metadata-manager-cleanup [table-names ^Cache table-metadata-cache ^IBufferPool buffer-pool]
+  (doseq [table-name table-names]
+    (let [table-path (util/table-name->table-path table-name)
+          superseded-meta-files (->> (trie/list-meta-files buffer-pool table-path)
+                                     (trie/superseded-trie-files))
+          m (.asMap table-metadata-cache)]
+      (doseq [meta-file superseded-meta-files]
+        (.computeIfPresent m meta-file
+                           (fn [_ table-metadata]
+                             (let [{:keys [^AtomicInteger ref-count]} table-metadata]
+                               (if (= 1 (.get ref-count))
+                                 (util/close table-metadata)
+                                 table-metadata))))))))
+
 (deftype MetadataManager [^IBufferPool buffer-pool
                           ^Cache table-metadata-cache
                           ^NavigableMap chunks-metadata
@@ -195,6 +212,9 @@
 
   (columnFields [_ table-name] (get fields table-name))
   (allColumnFields [_] fields)
+
+  (cleanUp [_]
+    (metadata-manager-cleanup (keys fields) table-metadata-cache buffer-pool))
 
   AutoCloseable
   (close [_]
