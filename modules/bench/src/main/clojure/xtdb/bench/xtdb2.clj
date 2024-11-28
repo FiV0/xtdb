@@ -44,7 +44,7 @@
                      :indexer (->> {:log-limit log-limit, :page-limit page-limit, :rows-per-chunk rows-per-chunk}
                                    (into {} (filter val)))
                      :server {:port 0}
-                     :compactor {:enabled? false}})))
+                     :compactor {:enabled? true}})))
 
 (defn generate
   ([worker table f n]
