@@ -70,6 +70,12 @@
 (defn ->table-meta-file-path [^Path table-path trie-key]
   (.resolve table-path (format "meta/%s.arrow" trie-key)))
 
+(defn data-file? [^Path file-path]
+  (boolean (re-find #".*data/.*\.arrow$" (str file-path))))
+
+(defn meta-file? [^Path file-path]
+  (boolean (re-find #".*meta/.*\.arrow$" (str file-path))))
+
 (defn list-meta-files [^IBufferPool buffer-pool ^Path table-path]
   (.listObjects buffer-pool (.resolve table-path "meta")))
 
