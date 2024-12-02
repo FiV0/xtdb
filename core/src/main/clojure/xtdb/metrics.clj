@@ -10,12 +10,15 @@
            java.util.List
            (java.util.stream Stream)
            (org.apache.arrow.memory BufferAllocator)
-           (xtdb.cache Stats)))
+           (xtdb.cache Stats MemoryCacheStats)))
 
-(defn add-counter [reg name {:keys [description]}]
-  (cond-> (Counter/builder name)
-    description (.description description)
-    :always (.register reg)))
+(defn add-counter
+  ([reg name] (add-counter reg name {}))
+  ([reg name {:keys [description]}]
+   (let [cnt (cond-> (Counter/builder name)
+               description (.description description)
+               :always (.register reg)) ]
+     cnt)))
 
 (def percentiles [0.75 0.85 0.95 0.98 0.99 0.999])
 
@@ -52,12 +55,34 @@
                #(.getFreeBytes ^Stats (get-stats))
                {:unit "bytes"})))
 
+(defn add-mem-cache-gauges [reg meter-name get-stats]
+  (add-cache-gauges reg meter-name get-stats)
+  (doto reg
+    (add-gauge (str meter-name ".metaSliceCount")
+               #(.getMetaSliceCount ^MemoryCacheStats (get-stats)))
+    (add-gauge (str meter-name ".dataSliceCount")
+               #(.getDataSliceCount ^MemoryCacheStats (get-stats)))
+    (add-gauge (str meter-name ".metaWeightBytes")
+               #(.getMetaWeightBytes ^MemoryCacheStats (get-stats))
+               {:unit "bytes"})
+    (add-gauge (str meter-name ".dataWeightBytes")
+               #(.getDataWeightBytes ^MemoryCacheStats (get-stats))
+               {:unit "bytes"})
+    (add-gauge (str meter-name ".metaPinned")
+               #(get (.getPinnedVsUnpinned ^MemoryCacheStats (get-stats)) "metaPinned"))
+    (add-gauge (str meter-name ".dataPinned")
+               #(get (.getPinnedVsUnpinned ^MemoryCacheStats (get-stats)) "dataPinned"))
+    (add-gauge (str meter-name ".metaUnpinned")
+               #(get (.getPinnedVsUnpinned ^MemoryCacheStats (get-stats)) "metaUnpinned"))
+    (add-gauge (str meter-name ".dataUnpinned")
+               #(get (.getPinnedVsUnpinned ^MemoryCacheStats (get-stats)) "dataUnpinned"))))
+
 (defn random-node-id []
   (format "xtdb-node-%1s" (subs (str (random-uuid)) 0 6)))
 
 (defmethod ig/init-key :xtdb.metrics/registry [_ _]
   (let [reg (CompositeMeterRegistry.)]
-    
+
     ;; Add common tag for the node
     (let [node-id (or (System/getenv "XTDB_NODE_ID") (random-node-id))
           ^List tags [(Tag/of "node-id" node-id)]]
