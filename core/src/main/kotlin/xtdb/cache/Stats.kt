@@ -1,3 +1,7 @@
 package xtdb.cache
 
-data class Stats(val pinnedBytes: Long, val evictableBytes: Long, val freeBytes: Long)
+interface Stats {
+    val pinnedBytes: Long
+    val evictableBytes: Long
+    val freeBytes: Long
+}
