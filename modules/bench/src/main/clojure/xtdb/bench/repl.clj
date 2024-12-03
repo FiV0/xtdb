@@ -32,7 +32,8 @@
     (bxt/run-benchmark
      {:node-opts (merge {:node-dir (or node-dir node-tmp-dir)
                          :instant-src (InstantSource/system)
-                         :metrics? true}
+                         :metrics? true
+                         :log-catchup? false}
                         node-opts)
       :benchmark-type type
       :benchmark-opts opts})))
@@ -52,47 +53,108 @@
                     :node-dir node-dir}))
 
   (def node-dir (.toPath (io/file "dev/auctionmark")))
+  (util/delete-dir node-dir)
+  (def node (tu/->local-node {:node-dir node-dir :log-catchup? false}))
+  (.close node)
+
   (future (run-bench {:type :auctionmark
-                      :opts {:duration "PT3H"
+                      :opts {:duration "PT5M"
                              :load-phase false
                              :scale-factor 0.1
                              :threads 8
                              :sync true}
                       :node-dir node-dir}))
 
-  (def memory-cache (-> bxt/bench-node :system :xtdb/buffer-pool :memory-cache))
+  (do
+    (def memory-cache (-> bxt/bench-node :system :xtdb/buffer-pool :memory-cache))
 
-  (defn path-slice->map [path-slice]
-    {:path (str (.getPath path-slice))
-     :offset (.getOffset path-slice)
-     :length (.getLength path-slice)})
+    (defn path-slice->map [path-slice]
+      {:path (.getPath path-slice)
+       :offset (.getOffset path-slice)
+       :length (.getLength path-slice)})
 
-  (defn entry->k+ref-count [entry]
-    [(path-slice->map  (key entry)) (-> entry val deref (.getRefCount) (.get))])
+    (defn entry->k+ref-count [entry]
+      [(path-slice->map  (key entry)) (-> entry val deref (.getRefCount) (.get))])
 
-  (defn  get-files+ref-count []
-    (->> (.getCache memory-cache) (.asMap)
-         (map entry->k+ref-count)
-         (sort-by (comp :path first))))
+    (defn  get-files+ref-count []
+      (->> (.getCache memory-cache) (.asMap)
+           (map entry->k+ref-count)
+           (sort-by (comp :path first)))))
 
   (def snap (get-files+ref-count))
 
-  (require '[xtdb.trie :as trie])
+  (require '[xtdb.trie :as trie]
+           '[clojure.set :as set])
 
-  (let [{meta-files true other-files false} (group-by (comp trie/meta-file? :path first) (get-files+ref-count))
-        meta-sizes (map (comp :length first) meta-files)
-        data-sizes (map (comp :length first) other-files)
-        #_#_parsed-meta-files (map (comp trie/parse-trie-file-path :path first) meta-files)
-        #_#_parsed-data-files (map (comp trie/parse-trie-file-path :path first) other-files)]
+  (defn snap-overlap [snap1 snap2]
+    (let [snap1-paths (map first snap1)
+          snap2-paths (map first snap2)
+          {meta1-files true data1-files false} (group-by (comp trie/meta-file? :path) snap1-paths)
+          {meta2-files true data2-files false} (group-by (comp trie/meta-file? :path) snap2-paths)]
+      {:meta-new (count (set/difference (set meta2-files) (set meta1-files)))
+       :data-new (count (set/difference (set data2-files) (set data1-files)))
+       :meta-old (count (set/intersection (set meta1-files) (set meta2-files)))
+       :data-old (count (set/intersection (set data1-files) (set data2-files)))}))
 
-    {:meta-file-count (count meta-files)
-     :meta-mb-total (quot (reduce + meta-sizes) (* 1000 1000))
+  (defn snap-overlap-seq [size]
+    (loop [old (get-files+ref-count) res [] n (dec size)]
+      (Thread/sleep 500)
+      (let [new (get-files+ref-count)
+            res (conj res (snap-overlap old new))]
+        (if (pos? n)
+          (recur new res (dec n))
+          res))))
+
+  (snap-overlap-seq 5)
+
+  (count (.getUniqueKeys memory-cache))
+
+  (def snap1 (get-files+ref-count))
+  (def snap2 (get-files+ref-count))
+
+  (snap-overlap snap1 snap2)
+
+
+
+  (let [snap (get-files+ref-count)
+        paths (map first snap)
+        {meta-files true other-files false} (group-by (comp trie/meta-file? :path) paths)
+        meta-sizes (map (comp :length) meta-files)
+        data-sizes (map (comp :length) other-files)
+        parsed-meta-files (map (comp trie/parse-trie-file-path :path) meta-files)
+        parsed-data-files (map (comp trie/parse-trie-file-path :path first) other-files)
+        file->length (into {} (map (fn [{:keys [path length]}] [path length])) paths)
+        file->ref-count (into {} (map (fn [[{:keys [path]} ref-count]] [path ref-count])) snap)]
+
+    {:levels-count (->> parsed-meta-files
+                        (map (comp :level))
+                        (frequencies))
+     :levels-size-kb (->> parsed-meta-files
+                          (group-by :level)
+                          (map (fn [[k v]] [k (quot (->> (map (comp file->length :file-path) v) (reduce +))
+                                                    (* (count v) 1000))]))
+                          (into {}))
+     #_#_:level-2 (->> (get (->> parsed-meta-files (group-by :level)) 2)
+                       (map (fn [v]  ((comp #(quot % (* 1000 1000)) file->length :file-path) v)))
+
+                       )
+     :meta-pinned-vs-unpinned (->> meta-files
+                                   (map #(if (pos? (file->ref-count (:path %))) :pinned :unpinned))
+                                   frequencies)
+
+     :meta-file-count (count meta-files)
+     :meta-total-mb (quot (reduce + meta-sizes) (* 1000 1000))
      :meta-average-mb (if (empty? meta-sizes) 0 (quot (reduce + meta-sizes) (* (count meta-sizes) 1000 1000)))
 
      :data-file-count (count other-files)
-     :data-mb-total (quot (reduce + data-sizes) (* 1000 1000))
-     :data-average-mb (if (empty? data-sizes) 0 (quot (reduce + data-sizes) (* (count meta-sizes) 1000 1000)))}
-    #_parsed-meta-files)
+     :data-total-mb (quot (reduce + data-sizes) (* 1000 1000))
+     :data-average-mb (if (empty? data-sizes) 0 (quot (reduce + data-sizes) (* (count meta-sizes) 1000 1000)))
+
+     :data-pinned-vs-unpinned (->> other-files
+                                   (map #(if (pos? (file->ref-count (:path %))) :pinned :unpinned))
+                                   frequencies)
+
+     })
 
 
 

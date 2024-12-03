@@ -186,4 +186,8 @@
   (go)
   (halt)
 
+  (require '[xtdb.util :as util])
+
+  (util/max-direct-memory)
+
   )

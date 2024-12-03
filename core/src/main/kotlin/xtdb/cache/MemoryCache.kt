@@ -46,6 +46,7 @@ class MemoryCache
     private val pathLoader: PathLoader = PathLoader()
 ) : AutoCloseable {
     private val pinningCache = PinningCache<PathSlice, Entry>(maxSizeBytes)
+    val uniqueKeys = mutableSetOf<PathSlice>()
 
     val stats: MemoryCacheStats
         get()  {
@@ -121,6 +122,7 @@ class MemoryCache
 
     @Suppress("NAME_SHADOWING")
     fun get(k: PathSlice, fetch: Fetch): ArrowBuf {
+        uniqueKeys.add(k)
         val entry = pinningCache.get(k) { k ->
             fetch(k).thenApplyAsync { (pathSlice, onEvict) ->
                 var bbuf: ByteBuffer

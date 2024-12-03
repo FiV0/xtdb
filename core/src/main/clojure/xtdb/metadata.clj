@@ -1,14 +1,14 @@
 (ns xtdb.metadata
-  (:require [clojure.tools.logging :as log]
-            [cognitect.transit :as transit]
-            [integrant.core :as ig]
-            [xtdb.bloom :as bloom]
-            xtdb.buffer-pool
-            xtdb.expression.temporal
-            [xtdb.serde :as serde]
-            [xtdb.trie :as trie]
-            [xtdb.types :as types]
-            [xtdb.util :as util])
+  (:require
+   [cognitect.transit :as transit]
+   [integrant.core :as ig]
+   [xtdb.bloom :as bloom]
+   xtdb.buffer-pool
+   xtdb.expression.temporal
+   [xtdb.serde :as serde]
+   [xtdb.trie :as trie]
+   [xtdb.types :as types]
+   [xtdb.util :as util])
   (:import (com.cognitect.transit TransitFactory)
            (com.github.benmanes.caffeine.cache Cache Caffeine RemovalListener)
            (java.io ByteArrayInputStream ByteArrayOutputStream)
@@ -17,6 +17,7 @@
            (java.nio.file Path)
            (java.util HashMap HashSet Map NavigableMap TreeMap)
            (java.util.concurrent.atomic AtomicInteger)
+           (org.apache.arrow.memory ArrowBuf)
            (org.apache.arrow.vector.types.pojo ArrowType Field FieldType)
            (xtdb.arrow Relation)
            xtdb.IBufferPool
@@ -199,6 +200,8 @@
     (.put chunks-metadata chunk-idx new-chunk-metadata))
 
   (openTableMetadata [_ file-path]
+    #_(->table-metadata buffer-pool file-path)
+
     (-> (.asMap table-metadata-cache)
         (.compute file-path (fn [file-path table-metadata]
                               (let [{:keys [^AtomicInteger ref-count] :as tm} (or table-metadata

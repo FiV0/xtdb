@@ -29,8 +29,8 @@ val defaultJvmArgs = listOf(
 )
 
 val sixGBJvmArgs = listOf(
-    "-Xmx2000m",
-    "-Xms2000m",
+    "-Xmx4000m",
+    "-Xms4000m",
     "-XX:MaxDirectMemorySize=2000m",
     "-XX:MaxMetaspaceSize=500m"
 )
@@ -121,7 +121,7 @@ allprojects {
                 forkOptions.run {
                     val jvmArgs = defaultJvmArgs.toMutableList()
 
-                    // memoryMaximumSize = "4g"
+                    memoryMaximumSize = "2g"
 
                     if (project.hasProperty("yourkit")) {
                         jvmArgs += "-agentpath:/opt/yourkit/bin/linux-x86-64/libyjpagent.so=app_name=xtdb"
