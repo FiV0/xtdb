@@ -11,6 +11,8 @@ import org.apache.arrow.memory.ForeignAllocation
 import org.apache.arrow.memory.util.MemoryUtil
 import xtdb.cache.PinningCache.IEntry
 import xtdb.util.isMetaFile
+import java.lang.foreign.Arena
+import java.lang.foreign.MemorySegment
 import java.nio.ByteBuffer
 import java.nio.channels.ClosedByInterruptException
 import java.nio.channels.FileChannel
@@ -65,9 +67,8 @@ class MemoryCache
     }
 
     interface PathLoader {
-        fun load(path: Path): ByteBuffer
-        fun load(pathSlice: PathSlice): ByteBuffer
-        fun tryFree(bbuf: ByteBuffer) {}
+        fun load(path: Path): Pair<MemorySegment, Arena>
+        fun load(pathSlice: PathSlice): Pair<MemorySegment, Arena>
 
         companion object {
 
@@ -78,19 +79,29 @@ class MemoryCache
             }
 
             operator fun invoke() = object : PathLoader {
-                override fun load(path: Path) =
+                override fun load(path: Path) {
+                    val arena = Arena.ofConfined()
                     try {
+
                         val ch = FileChannel.open(path, setOf(StandardOpenOption.READ, ExtendedOpenOption.DIRECT))
                         val size = ch.size()
+
+
 
                         val bbuf = ByteBuffer.allocateDirect(multipleOfBlockSize(size))
                         ch.read(bbuf)
                         bbuf.flip()
                         bbuf
 
+                        return Pair(segment, arena)
                     } catch (e: ClosedByInterruptException) {
+                        arena.close()
                         throw InterruptedException(e.message)
+                    } catch (e : Exception) {
+                        arena.close()
+                        throw e
                     }
+                }
 
                 override fun load(pathSlice: PathSlice) =
                     try {
@@ -105,10 +116,6 @@ class MemoryCache
                     } catch (e: ClosedByInterruptException) {
                         throw InterruptedException(e.message)
                     }
-
-                override fun tryFree(bbuf: ByteBuffer) {
-                    PlatformDependent.freeDirectBuffer(bbuf)
-                }
             }
         }
     }
@@ -116,10 +123,11 @@ class MemoryCache
     private inner class Entry(
         val inner: IEntry<PathSlice>,
         val onEvict: AutoCloseable?,
-        val bbuf: ByteBuffer
+        val bbuf: ByteBuffer,
+        val arena: Arena
     ) : IEntry<PathSlice> by inner {
         override fun onEvict(k: PathSlice, reason: RemovalCause) {
-            pathLoader.tryFree(bbuf)
+            arena.close()
             onEvict?.close()
         }
     }

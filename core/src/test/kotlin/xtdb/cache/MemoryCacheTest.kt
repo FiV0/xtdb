@@ -136,7 +136,7 @@ class MemoryCacheTest {
 //        return buffer.slice()
 //    }
 
-    private fun getAlignedMemorySegment(arena: Arena, size: Int, alignment: Int): MemorySegment {
+    private fun getAlignedMemorySegment(arena: Arena , size: Int, alignment: Int): MemorySegment {
         val segment = arena.allocate(size.toLong(), alignment.toLong())
         return segment
     }
