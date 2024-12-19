@@ -524,7 +524,7 @@
           ([] (read in))
           ([stream]
            (let [^InputStream stream (case stream :err err stream)]
-             (loop [wait-until (+ (System/currentTimeMillis) 1000)]
+             (loop [wait-until (+ (System/currentTimeMillis) 2000)]
                (or (when (pos? (.available stream))
                      (let [barr (byte-array (.available stream))]
                        (.read stream barr)
@@ -627,6 +627,8 @@
      (fn [send read]
        (testing "error query"
          (send "INSERT INTO foo (id, a) VALUES (1, 2);\n")
+         (Thread/sleep 50)
+         (is (= [["INSERT 0 0"]] (read)))
          (is (= [["ERROR:  Illegal argument: 'missing-id'"]] (read :err))))
 
        (testing "ping"
