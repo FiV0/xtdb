@@ -30,7 +30,7 @@
            [java.security KeyStore]
            [java.time Clock Duration LocalDate LocalDateTime LocalTime OffsetDateTime Period ZoneId ZonedDateTime]
            [java.util List Map Set UUID]
-           [java.util.concurrent BlockingQueue ConcurrentHashMap ExecutorService Executors LinkedBlockingQueue TimeUnit]
+           [java.util.concurrent BlockingDeque ConcurrentHashMap ExecutorService Executors LinkedBlockingDeque TimeUnit]
            [javax.net.ssl KeyManagerFactory SSLContext]
            (org.antlr.v4.runtime ParserRuleContext)
            (org.apache.arrow.memory BufferAllocator RootAllocator)
@@ -71,11 +71,11 @@
                            (log/info "vertx server shutdown succesfully")
                            (log/info "vertx could errored shutting down"))))
     (when (compare-and-set! !closing? false true)
-      (when-not (#{Thread$State/NEW, Thread$State/TERMINATED} (.getState accept-thread))
-        (log/trace "Closing accept thread")
-        (.interrupt accept-thread)
-        (when-not (.join accept-thread (Duration/ofSeconds 5))
-          (log/error "Could not shut down accept-thread gracefully" {:port port, :thread (.getName accept-thread)})))
+      #_(when-not (#{Thread$State/NEW, Thread$State/TERMINATED} (.getState accept-thread))
+          (log/trace "Closing accept thread")
+          (.interrupt accept-thread)
+          (when-not (.join accept-thread (Duration/ofSeconds 5))
+            (log/error "Could not shut down accept-thread gracefully" {:port port, :thread (.getName accept-thread)})))
 
       (let [drain-wait (:drain-wait @server-state 5000)]
         (when-not (contains? #{0, nil} drain-wait)
@@ -143,30 +143,57 @@
 
 ;; all postgres client IO arrives as either an untyped (startup) or typed message
 
-(defn- read-untyped-msg [^DataInputStream in]
-  (let [size (- (.readInt in) 4)
-        barr (byte-array size)
-        _ (.readFully in barr)]
-    (DataInputStream. (ByteArrayInputStream. barr))))
-
-(defn- read-version [^DataInputStream in]
-  (let [^DataInputStream msg-in (read-untyped-msg in)
-        version (.readInt msg-in)]
-    {:msg-in msg-in
-     :version (version-messages version)}))
-
 (declare client-msgs)
 (declare client-err)
 (declare err-protocol-violation)
 (declare ->socket-frontend)
 
-(defrecord SocketFrontend [^NetSocket socket, ^BlockingQueue buffer-queue, ^DataOutputStream out]
+(defn take-untyped-buffer ^Buffer [^BlockingDeque buffer-queue]
+  (loop [^Buffer buffer (.take buffer-queue)]
+    (log/warn "buffer taken" buffer)
+    (if (and (<= 4 (.length buffer)) (<= (.length buffer) (.getInt buffer 0)))
+      (let [end (.getInt buffer 0)
+            res (.slice buffer 4 end)]
+        (when (< end (.length buffer))
+          (.addFirst buffer-queue (.slice buffer end (.length buffer))))
+        res)
+      (let [next (.take buffer-queue)]
+        (.appendBuffer buffer next)
+        (recur buffer)))))
+
+(defn- buffer->is [^Buffer buffer]
+  (let [size (.length buffer)
+        barr (byte-array size)]
+    (.getBytes buffer 0 size barr)
+    (DataInputStream. (ByteArrayInputStream. barr))))
+
+
+(defn- read-version [^BlockingDeque buffer-queue]
+  (let [buffer (take-untyped-buffer buffer-queue)
+        version (.getInt buffer 0)]
+    {:msg-in (buffer->is buffer)
+     :version (version-messages version)}))
+
+(defn take-typed-buffer ^Buffer [^BlockingDeque buffer-queue]
+  (loop [^Buffer buffer (.take buffer-queue)]
+    (log/warn "buffer taken" buffer)
+    (if (and (<= 5 (.length buffer)) (<= (.length buffer) (inc (.getInt buffer 1))))
+      (let [end (inc (.getInt buffer 1))
+            res (.slice buffer 0 end)]
+        (when (< end (.length buffer))
+          (.addFirst buffer-queue (.slice buffer end (.length buffer))))
+        res)
+      (let [next (.take buffer-queue)]
+        (.appendBuffer buffer next)
+        (recur buffer)))))
+
+(defrecord SocketFrontend [^NetSocket socket, ^BlockingDeque buffer-queue, ^DataOutputStream out]
   Frontend
   (send-client-msg! [_ msg-def]
     (log/trace "Writing server message" (select-keys msg-def [:char8 :name]))
-    (.write socket (doto (Buffer/buffer)
-                     (.appendByte (byte (:char8 msg-def)))
-                     (.appendInt 4))))
+    (.write socket (doto (Buffer/buffer 5)
+                     (.setByte 0 (byte (:char8 msg-def)))
+                     (.setInt 1 4))))
 
   (send-client-msg! [_ msg-def data]
     (log/trace "Writing server message (with body)" (select-keys msg-def [:char8 :name]))
@@ -174,28 +201,29 @@
           msg-out (DataOutputStream. bytes-out)
           _ ((:write msg-def) msg-out data)
           arr (.toByteArray bytes-out)]
-      (.write socket (doto (Buffer/buffer)
-                       (.appendByte (byte (:char8 msg-def)))
-                       (.appendInt (+ 4 (alength arr)))
-                       (.appendBytes arr)))))
+      (.write socket (doto (Buffer/buffer (+ 5 (alength arr)))
+                       (.setByte 0 (byte (:char8 msg-def)))
+                       (.setInt 1 (+ 4 (alength arr)))
+                       (.setBytes 5 arr)))))
 
   (read-client-msg! [_]
-    (let [^Buffer buffer (.take buffer-queue)
-          type-char (char (.getUnsignedByte buffer 0))
-          msg-var (or (client-msgs type-char)
-                      (throw (client-err (str "Unknown client message " type-char))))
-          rdr (:read @msg-var)
-          size (- (.getInt buffer 1) 4)
-          barr (byte-array size)
-          _ (.getBytes buffer 5 (.length buffer) barr)
-          in (DataInputStream. (ByteArrayInputStream. barr))]
-      (try
+    (try
+      (let [^Buffer buffer (take-typed-buffer buffer-queue)
+            type-char (char (.getUnsignedByte buffer 0))
+            msg-var (or (client-msgs type-char)
+                        (throw (client-err (str "Unknown client message " type-char))))
+            rdr (:read @msg-var)
+            size (- (.getInt buffer 1) 4)
+            barr (byte-array size)
+            _ (.getBytes buffer 5 (.length buffer) barr)
+            in (DataInputStream. (ByteArrayInputStream. barr))]
+
         (-> (rdr in)
-            (assoc :msg-name (:name @msg-var)))
-        (catch Exception e
-          (throw (ex-info "error reading client message"
-                          {::client-error (err-protocol-violation (str "Error reading client message " (ex-message e)))}
-                          e))))))
+            (assoc :msg-name (:name @msg-var))))
+      (catch Exception e
+        (throw (ex-info "error reading client message"
+                        {::client-error (err-protocol-violation (str "Error reading client message " (ex-message e)))}
+                        e)))))
 
   (host-address [_] (.host (.remoteAddress socket)))
 
@@ -207,7 +235,8 @@
         (do
           (log/trace "upgrading to SSL")
 
-          (.writeByte out (byte \S))
+          (.write socket (doto (Buffer/buffer 1)
+                           (.setByte (byte \S))))
 
           (let [^SSLSocket ssl-socket (-> (.getSocketFactory ^SSLContext ssl-ctx)
                                           (.createSocket socket
@@ -227,31 +256,22 @@
 
         ;; unsupported - recur and give the client another chance to say hi
         (do
-          (.writeByte out (byte \N))
+          (.write socket (doto (Buffer/buffer 1)
+                           (.setByte 0 (byte \N))))
           this)))
 
   (flush! [_] (.flush out))
 
   AutoCloseable
   (close [_]
+    (log/info "Close NetSocket")
     @(.close socket)))
 
 (defn ->socket-frontend [^NetSocket socket]
-  (let [acc-buffer (atom (Buffer/buffer))
-        buffer-queue (LinkedBlockingQueue.)]
+  (let [buffer-queue (LinkedBlockingDeque.)]
     (.handler socket (fn [^Buffer buffer]
-                       (let [^Buffer acc @acc-buffer]
-                         (.appendBuffer acc buffer)
-                         (loop []
-                           (when ((<= 5 (.length acc)) (<= (inc (.getInt acc 1)) (.length acc)))
-                             (let [end (inc (.getInt acc 1))]
-                               (.add buffer-queue (.slice acc 0 end)))
-                             (reset! acc-buffer (.slice acc end))
-                             (recur)))))
-
-              #_(reify io.vertx.core.Handler
-                  (handle [this ^Buffer buffer]
-                    (.appendBuffer in-buffer buffer))))
+                       (log/info "Incoming buffer" (.length buffer))
+                       (.add buffer-queue buffer)))
     (->SocketFrontend socket buffer-queue nil)))
 
 (defrecord Connection [^BufferAllocator allocator
@@ -1193,8 +1213,8 @@
                   (recur in (assoc acc (read-c-string in) (read-c-string in))))))))
 
 (defn cmd-startup [conn]
-  (loop [{{:keys [in]} :frontend, :keys [server], :as conn} conn]
-    (let [{:keys [version msg-in]} (read-version in)]
+  (loop [{{:keys [buffer-queue]} :frontend, :keys [server], :as conn} conn]
+    (let [{:keys [version msg-in]} (read-version buffer-queue)]
       (case version
         :gssenc (doto conn
                   (cmd-startup-err (err-protocol-violation "GSSAPI is not supported")))
@@ -1800,7 +1820,8 @@
                             (reset! !conn-closing? true)))
 
     (.exceptionHandler socket (fn [e]
-                                (log/error e "An unexpected socket error occurred")))
+                                (log/error e "An unexpected socket error occurred")
+                                (throw e)))
     (loop []
       (cond
         @!conn-closing?
@@ -1876,8 +1897,9 @@
           @(.close conn-socket))
 
         ;; socket being closed is normal, otherwise log.
-        (when-not (.isClosed conn-socket)
-          (log/error e "An exception was caught during connection" {:port port, :cid cid})))
+        ;; TODO deal with closed socket in vert.x
+        #_(when-not (.isClosed conn-socket)
+            (log/error e "An exception was caught during connection" {:port port, :cid cid})))
 
       (catch EOFException _
         (log/trace "Connection closed by client" {:port port, :cid cid}))
@@ -1893,37 +1915,6 @@
         ;; can be used to co-ordinate waiting for close
         (when-not (realized? close-promise)
           (deliver close-promise true))))))
-
-(defn- accept-loop [{:keys [^ServerSocket accept-socket, ^ExecutorService thread-pool] :as server}]
-  (try
-    (loop []
-      (cond
-        (Thread/interrupted) (throw (InterruptedException.))
-
-        (.isClosed accept-socket)
-        (log/trace "Accept socket closed, exiting accept loop")
-
-        :else
-        (do
-          (try
-            (let [conn-socket (.accept accept-socket)]
-              (.setTcpNoDelay conn-socket true)
-              ;; TODO fix buffer on tp? q gonna be infinite right now
-              (.submit thread-pool ^Runnable (fn [] (connect server conn-socket))))
-            (catch SocketException e
-              (when (and (not (.isClosed accept-socket))
-                         (not= "Socket closed" (.getMessage e)))
-                (log/warn e "Accept socket exception")))
-            (catch IOException e
-              (log/warn e "Accept IO exception")))
-          (recur))))
-
-    (catch InterruptedException _)
-
-    (finally
-      (util/try-close accept-socket)))
-
-  (log/trace "exiting accept loop"))
 
 (def ^:private net-server-opts (doto (NetServerOptions.)
                                  (.setTcpNoDelay true)))
@@ -1943,57 +1934,51 @@
                   :or {port 5432
                        num-threads 42
                        drain-wait 5000}}]
-   (util/with-close-on-catch [accept-socket (ServerSocket. port)]
-     (let [port (.getLocalPort accept-socket)
-           !tmp-nodes (when-not node
-                        (ConcurrentHashMap.))
-           vertx (Vertx/vertx)
-           net-server (.createNetServer vertx net-server-opts)
-           server (map->Server {:allocator allocator
-                                :port port
-                                :accept-socket accept-socket
-                                :thread-pool (Executors/newFixedThreadPool num-threads (util/->prefix-thread-factory "pgwire-connection-"))
-                                :!closing? (atom false)
-                                ;;TODO use clock from node or at least take clock as a param for testing
-                                :server-state (atom (let [default-clock (Clock/systemDefaultZone)]
-                                                      {:clock default-clock
-                                                       :drain-wait drain-wait
-                                                       :parameters {"server_version" expr/postgres-server-version
-                                                                    "server_encoding" "UTF8"
-                                                                    "client_encoding" "UTF8"
-                                                                    "search_path" "public"
-                                                                    "DateStyle" "ISO"
-                                                                    "IntervalStyle" "ISO_8601"
-                                                                    "TimeZone" (str (.getZone ^Clock default-clock))
-                                                                    "integer_datetimes" "on"}}))
+   (let [port (if (zero? port) (util/free-port) port)
+         !tmp-nodes (when-not node
+                      (ConcurrentHashMap.))
+         vertx (Vertx/vertx)
+         net-server (.createNetServer vertx net-server-opts)
+         server (map->Server {:allocator allocator
+                              :thread-pool (Executors/newFixedThreadPool num-threads (util/->prefix-thread-factory "pgwire-connection-"))
+                              :port port
+                              :!closing? (atom false)
+                              ;;TODO use clock from node or at least take clock as a param for testing
+                              :server-state (atom (let [default-clock (Clock/systemDefaultZone)]
+                                                    {:clock default-clock
+                                                     :drain-wait drain-wait
+                                                     :parameters {"server_version" expr/postgres-server-version
+                                                                  "server_encoding" "UTF8"
+                                                                  "client_encoding" "UTF8"
+                                                                  "search_path" "public"
+                                                                  "DateStyle" "ISO"
+                                                                  "IntervalStyle" "ISO_8601"
+                                                                  "TimeZone" (str (.getZone ^Clock default-clock))
+                                                                  "integer_datetimes" "on"}}))
 
-                                :ssl-ctx ssl-ctx
-                                :authn authn
+                              :ssl-ctx ssl-ctx
+                              :authn authn
 
-                                :!tmp-nodes !tmp-nodes
-                                :->node (fn [db-name]
-                                          (cond
-                                            (nil? node) (->tmp-node !tmp-nodes db-name)
-                                            (= db-name "xtdb") node))
-                                :net-server net-server})
+                              :!tmp-nodes !tmp-nodes
+                              :->node (fn [db-name]
+                                        (cond
+                                          (nil? node) (->tmp-node !tmp-nodes db-name)
+                                          (= db-name "xtdb") node))
+                              :net-server net-server})]
 
-           #_#_accept-thread (-> (Thread/ofVirtual)
-                                 (.name (str "pgwire-server-accept-" port))
-                                 (.uncaughtExceptionHandler util/uncaught-exception-handler)
-                                 (.unstarted (fn []
-                                               (accept-loop server))))
+     (.connectHandler net-server (fn [^NetSocket socket]
+                                   (connect server socket)))
 
-           #_#_server (assoc server :accept-thread accept-thread)]
+     ;; server wide connections
+     (.exceptionHandler net-server (fn [e]
+                                     (log/error e "A vert.x server error occurred")))
 
-       (.connectHandler net-server (fn [^NetSocket socket]
-                                     (connect server socket)))
+     (.listen net-server ^int port (fn [^AsyncResult ar]
+                                     (if (.succeeded ar)
+                                       (log/info "vertx server succesfully started on port: " port)
+                                       (log/info "vertx could not be started on port: " port))))
 
-       (.listen net-server port (fn [^AsyncResult ar]
-                                  (if (.succeeded ar)
-                                    (log/info "vertx server succesfully started on port: " port)
-                                    (log/info "vertx could not be started on port: " port))))
-       ;; (.start accept-thread)
-       server))))
+     server)))
 
 (defmethod xtn/apply-config! ::server [^Xtdb$Config config, _ {:keys [port num-threads ssl] :as server}]
   (if server
