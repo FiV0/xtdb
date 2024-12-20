@@ -39,6 +39,7 @@ dependencies {
     api(libs.netty.common)
 
     api("org.roaringbitmap", "RoaringBitmap", "1.0.1")
+    api("io.vertx:vertx-core:4.5.11")
 
     api(libs.integrant)
     api("clj-commons", "clj-yaml", "1.0.27")
