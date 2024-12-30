@@ -18,9 +18,9 @@
             [xtdb.util :as util]
             [xtdb.vector.writer :as vw])
   (:import [clojure.lang MapEntry]
-           [io.vertx.core AsyncResult Vertx]
+           [io.vertx.core AsyncResult Vertx Future]
            [io.vertx.core.buffer Buffer]
-           [io.vertx.core.net NetServer NetServerOptions NetSocket]
+           [io.vertx.core.net NetServer NetServerOptions NetSocket JksOptions]
            [java.io ByteArrayInputStream ByteArrayOutputStream Closeable DataInputStream DataOutputStream EOFException IOException InputStream OutputStream PushbackInputStream]
            [java.lang AutoCloseable Thread$State]
            [java.net ServerSocket SocketException URI]
@@ -66,10 +66,6 @@
                    ^NetServer net-server]
   XtdbModule
   (close [_]
-    (.close net-server (fn [^AsyncResult ar]
-                         (if (.succeeded ar)
-                           (log/info "vertx server shutdown succesfully")
-                           (log/info "vertx could errored shutting down"))))
     (when (compare-and-set! !closing? false true)
       #_(when-not (#{Thread$State/NEW, Thread$State/TERMINATED} (.getState accept-thread))
           (log/trace "Closing accept thread")
@@ -107,7 +103,12 @@
 
         (util/close allocator)
 
-        (log/info "Server stopped.")))))
+        (log/info "Server stopped.")))
+
+    (.close net-server (fn [^AsyncResult ar]
+                         (if (.succeeded ar)
+                           (log/info "vertx server shutdown succesfully")
+                           (log/info "vertx could errored shutting down"))))))
 
 (defprotocol Frontend
   (send-client-msg!
@@ -151,7 +152,7 @@
 (defn take-untyped-buffer ^Buffer [^BlockingDeque buffer-queue]
   (loop [^Buffer buffer (.take buffer-queue)]
     (log/warn "buffer taken" buffer)
-    (if (and (<= 4 (.length buffer)) (<= (.length buffer) (.getInt buffer 0)))
+    (if (and (<= 4 (.length buffer)) (<= (.getInt buffer 0) (.length buffer)))
       (let [end (.getInt buffer 0)
             res (.slice buffer 4 end)]
         (when (< end (.length buffer))
@@ -167,17 +168,17 @@
     (.getBytes buffer 0 size barr)
     (DataInputStream. (ByteArrayInputStream. barr))))
 
-
 (defn- read-version [^BlockingDeque buffer-queue]
   (let [buffer (take-untyped-buffer buffer-queue)
         version (.getInt buffer 0)]
-    {:msg-in (buffer->is buffer)
+    {:msg-in (buffer->is (.slice buffer 4 (.length buffer)))
      :version (version-messages version)}))
 
 (defn take-typed-buffer ^Buffer [^BlockingDeque buffer-queue]
   (loop [^Buffer buffer (.take buffer-queue)]
-    (log/warn "buffer taken" buffer)
-    (if (and (<= 5 (.length buffer)) (<= (.length buffer) (inc (.getInt buffer 1))))
+    (log/warn "buffer taken" {:current-length (.length buffer)
+                              :expected-length (inc (.getInt buffer 1))})
+    (if (and (<= 5 (.length buffer)) (<= (inc (.getInt buffer 1)) (.length buffer)))
       (let [end (inc (.getInt buffer 1))
             res (.slice buffer 0 end)]
         (when (< end (.length buffer))
@@ -229,7 +230,7 @@
 
   (upgrade-to-ssl [this ssl-ctx]
     (throw (UnsupportedOperationException.))
-    #_(if (and ssl-ctx (not (instance? SSLSocket socket)))
+    #_(if (and ssl-ctx (not (.isSSL socket)))
         ;; upgrade the socket, then wait for the client's next startup message
 
         (do
@@ -265,7 +266,8 @@
   AutoCloseable
   (close [_]
     (log/info "Close NetSocket")
-    @(.close socket)))
+    ;; TODO making blocking?
+    (.close socket)))
 
 (defn ->socket-frontend [^NetSocket socket]
   (let [buffer-queue (LinkedBlockingDeque.)]
@@ -1860,7 +1862,7 @@
   See comment 'Connection lifecycle'."
   [{:keys [server-state, port, allocator] :as server} ^NetSocket conn-socket]
   (let [close-promise (promise)
-        {:keys [cid !closing?] :as conn} (util/with-close-on-catch [_ conn-socket]
+        {:keys [cid !closing?] :as conn} (try ;; NetSocket doesn't implement AutoCloseable
                                            (let [cid (:next-cid (swap! server-state update :next-cid (fnil inc 0)))
                                                  !conn-state (atom {:close-promise close-promise
                                                                     :session {:access-mode :read-only
@@ -1874,11 +1876,15 @@
                                                                      :allocator (util/->child-allocator allocator (str "pg-conn-" cid))
                                                                      :conn-state !conn-state})
                                                    (cmd-startup))
-                                               (catch EOFException _
-                                                 (reset! !closing? true))
-                                               (catch Throwable t
-                                                 (log/warn t "error on conn startup")
-                                                 (throw t)))))]
+                                               (catch EOFException e
+                                                 (reset! !closing? true)
+                                                 (throw e))))
+                                           (catch EOFException _
+                                             (.close conn-socket))
+                                           (catch Throwable t
+                                             (log/warn t "error on conn startup")
+                                             (.close conn-socket)
+                                             (throw t)))]
 
     (try
       ;; the connection loop only gets initialized if we are not closing
@@ -1916,8 +1922,16 @@
         (when-not (realized? close-promise)
           (deliver close-promise true))))))
 
-(def ^:private net-server-opts (doto (NetServerOptions.)
-                                 (.setTcpNoDelay true)))
+
+(defn ->net-server-opts [^JksOptions vertx-ssl-ctx]
+  (cond-> (doto (NetServerOptions.)
+            (.setTcpNoDelay true))
+    vertx-ssl-ctx (-> (.setSsl true)
+                      (.setKeyCertOptions vertx-ssl-ctx))))
+
+(defn ->blocking-executor [^Vertx vertx]
+  (fn [^Callable f]
+    (.executeBlocking vertx f)))
 
 (defn serve
   "Creates and starts a PostgreSQL wire-compatible server.
@@ -1930,7 +1944,7 @@
   :num-threads (bounds the number of client connections, default 42)
   "
   (^Server [node] (serve node {}))
-  (^Server [node {:keys [allocator port num-threads drain-wait ssl-ctx authn]
+  (^Server [node {:keys [allocator port num-threads drain-wait ssl-ctx vertx-ssl-ctx authn]
                   :or {port 5432
                        num-threads 42
                        drain-wait 5000}}]
@@ -1938,7 +1952,7 @@
          !tmp-nodes (when-not node
                       (ConcurrentHashMap.))
          vertx (Vertx/vertx)
-         net-server (.createNetServer vertx net-server-opts)
+         net-server (.createNetServer vertx (->net-server-opts vertx-ssl-ctx))
          server (map->Server {:allocator allocator
                               :thread-pool (Executors/newFixedThreadPool num-threads (util/->prefix-thread-factory "pgwire-connection-"))
                               :port port
@@ -1957,6 +1971,7 @@
                                                                   "integer_datetimes" "on"}}))
 
                               :ssl-ctx ssl-ctx
+                              :vertx-ssl-ctx vertx-ssl-ctx
                               :authn authn
 
                               :!tmp-nodes !tmp-nodes
@@ -1966,12 +1981,18 @@
                                           (= db-name "xtdb") node))
                               :net-server net-server})]
 
-     (.connectHandler net-server (fn [^NetSocket socket]
-                                   (connect server socket)))
-
      ;; server wide connections
      (.exceptionHandler net-server (fn [e]
-                                     (log/error e "A vert.x server error occurred")))
+                                     (log/error e "A vertx server error occurred")))
+
+     (.connectHandler net-server (fn [^NetSocket socket]
+                                   (.executeBlocking vertx ^Callable (fn [] (connect server socket))
+                                                     false
+                                                     (fn [^AsyncResult res]
+                                                       (if (.succeeded res)
+                                                         (log/info "Connection established")
+                                                         (log/error (.cause res) "A vertx server connection error occurred"))))))
+
 
      (.listen net-server ^int port (fn [^AsyncResult ar]
                                      (if (.succeeded ar)
@@ -1999,11 +2020,18 @@
     (doto (SSLContext/getInstance "TLS")
       (.init (.getKeyManagers kmf) nil nil))))
 
+(defn- ->vertx-ssl-ctx [^Path ks-path, ^String ks-password]
+  (-> (JksOptions.)
+      (.setPath (.toString ks-path))
+      (.setPassword ks-password)))
+
 (defn- <-config [^ServerConfig config]
   {:port (.getPort config)
    :num-threads (.getNumThreads config)
    :ssl-ctx (when-let [ssl (.getSsl config)]
-              (->ssl-ctx (.getKeyStore ssl) (.getKeyStorePassword ssl)))})
+              (->ssl-ctx (.getKeyStore ssl) (.getKeyStorePassword ssl)))
+   :vertx-ssl-ctx (when-let [ssl (.getSsl config)]
+                    (->vertx-ssl-ctx (.getKeyStore ssl) (.getKeyStorePassword ssl)))})
 
 (defmethod ig/prep-key ::server [_ config]
   (into {:node (ig/ref :xtdb/node)
