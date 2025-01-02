@@ -30,6 +30,7 @@
            (xtdb.api.storage ObjectStore Storage Storage$Factory Storage$LocalStorageFactory Storage$RemoteStorageFactory)
            xtdb.api.Xtdb$Config
            (xtdb.arrow ArrowUtil Relation)
+           (xtdb.buffer_pool MemoryBufferPool)
            (xtdb.cache DiskCache DiskCache$Entry MemoryCache PathSlice)
            (xtdb.multipart IMultipartUpload SupportsMultipart)))
 
@@ -58,86 +59,9 @@
     (.get bb ba)
     ba))
 
-(defrecord MemoryBufferPool [allocator, ^NavigableMap memory-store]
-  IBufferPool
-  (getByteArray [_ path]
-    (let [^ArrowBuf arrow-buf (or (locking memory-store
-                                    (some-> (.get memory-store path)))
-                                  (throw (os/obj-missing-exception path)))]
-      (arrow-buf->ba arrow-buf)))
-
-  (getFooter [_ path]
-    (let [arrow-buf (or (locking memory-store
-                          (some-> (.get memory-store path)))
-                        (throw (os/obj-missing-exception path)))]
-      (util/read-arrow-footer arrow-buf)))
-
-  (getRecordBatch [_ path block-idx]
-    (try
-      (let [arrow-buf (or (locking memory-store
-                            (some-> (.get memory-store path)))
-                          (throw (os/obj-missing-exception path)))
-            footer (util/read-arrow-footer arrow-buf)
-            blocks (.getRecordBatches footer)
-            block (nth blocks block-idx nil)]
-        (if-not block
-          (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
-          (util/->arrow-record-batch-view block arrow-buf)))
-      (catch Exception e
-        (throw (ex-info (format "Failed opening record batch '%s'" path) {:path path :block-idx block-idx} e)))))
-
-  (putObject [_ k buffer]
-    (locking memory-store
-      (.put memory-store k (util/->arrow-buf-view allocator buffer))))
-
-  (listAllObjects [_]
-    (locking memory-store (vec (.keySet ^NavigableMap memory-store))))
-
-  (listObjects [_ dir]
-    (locking memory-store
-      (let [dir-depth (.getNameCount dir)]
-        (->> (.keySet (.tailMap ^NavigableMap memory-store dir))
-             (take-while #(.startsWith ^Path % dir))
-             (keep (fn [^Path path]
-                     (when (> (.getNameCount path) dir-depth)
-                       (.subpath path 0 (inc dir-depth)))))
-             (distinct)
-             (vec)))))
-
-  (objectSize [_ k]
-    (.capacity ^ArrowBuf (.get memory-store k)))
-
-  (openArrowWriter [this k rel]
-    (let [baos (ByteArrayOutputStream.)]
-      (util/with-close-on-catch [write-ch (Channels/newChannel baos)
-                                 unl (.startUnload rel write-ch)]
-
-        (reify ArrowWriter
-          (writeBatch [_] (.writeBatch unl))
-
-          (end [_]
-            (.end unl)
-            (.close write-ch)
-            (.putObject this k (ByteBuffer/wrap (.toByteArray baos))))
-
-          (close [_]
-            (util/close unl)
-            (when (.isOpen write-ch)
-              (.close write-ch)))))))
-
-  EvictBufferTest
-  (evict-cached-buffer! [_ _k])
-
-  Closeable
-  (close [_]
-    (locking memory-store
-      (run! util/close (.values memory-store))
-      (.clear memory-store))
-    (util/close allocator)))
-
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-in-memory-storage ^xtdb.IBufferPool [^BufferAllocator allocator, ^MeterRegistry metrics-registry]
-  (->MemoryBufferPool (->buffer-pool-child-allocator allocator metrics-registry) (TreeMap.)))
+  (MemoryBufferPool. (->buffer-pool-child-allocator allocator metrics-registry) (TreeMap.)))
 
 (defn- create-tmp-path ^Path [^Path disk-store]
   (Files/createTempFile (doto (.resolve disk-store ".tmp") util/mkdirs)

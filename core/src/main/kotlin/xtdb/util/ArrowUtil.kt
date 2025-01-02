@@ -1,0 +1,126 @@
+package xtdb.util
+
+import io.netty.buffer.Unpooled
+import org.apache.arrow.memory.ArrowBuf
+import org.apache.arrow.memory.util.ByteFunctionHelpers
+import org.apache.arrow.vector.ipc.message.ArrowFooter
+import org.apache.arrow.flatbuf.Footer
+import org.apache.arrow.flatbuf.Message
+import org.apache.arrow.flatbuf.RecordBatch
+import org.apache.arrow.memory.BufferAllocator
+import org.apache.arrow.memory.ForeignAllocation
+import org.apache.arrow.vector.ipc.message.ArrowBlock
+import org.apache.arrow.vector.ipc.message.ArrowRecordBatch
+import org.apache.arrow.vector.ipc.message.MessageSerializer
+import xtdb.IllegalArgumentException
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+
+object ArrowUtil {
+    private val ARROW_MAGIC = "ARROW1".toByteArray(StandardCharsets.UTF_8)
+
+    /**
+     * Validates the Arrow magic bytes at the end of the buffer
+     */
+    @Throws(IllegalArgumentException::class)
+    private fun validateArrowMagic(ipcFileFormatBuffer: ArrowBuf) {
+        val capacity = ipcFileFormatBuffer.capacity()
+        val magicLength = ARROW_MAGIC.size
+
+        val isValid = ByteFunctionHelpers.compare(
+            ipcFileFormatBuffer,
+            (capacity - magicLength).toInt(),
+            capacity.toInt(),
+            ARROW_MAGIC,
+            0,
+            magicLength
+        ) == 0
+
+        if (!isValid) {
+            throw IllegalArgumentException.createNoKey("invalid Arrow IPC file format", emptyMap<String, String>())
+        }
+    }
+
+    /**
+     * Reads the Arrow footer from the given buffer
+     */
+    fun readArrowFooter(ipcFileFormatBuffer: ArrowBuf): ArrowFooter {
+        validateArrowMagic(ipcFileFormatBuffer)
+
+        val capacity = ipcFileFormatBuffer.capacity()
+        val magicLength = ARROW_MAGIC.size
+
+        // Calculate positions
+        val footerSizeOffset = capacity - (Integer.BYTES + magicLength)
+        val footerSize = ipcFileFormatBuffer.getInt(footerSizeOffset)
+        val footerPosition = footerSizeOffset - footerSize
+
+        // Get footer buffer and create Arrow Footer
+        val footerBuffer = ipcFileFormatBuffer.nioBuffer(footerPosition, footerSize)
+        return ArrowFooter(Footer.getRootAsFooter(footerBuffer))
+    }
+
+
+
+    /**
+     * Creates an Arrow record batch view from the given block and buffer
+     */
+    fun toArrowRecordBatchView(block: ArrowBlock, buffer: ArrowBuf): ArrowRecordBatch {
+        // Determine prefix size based on continuation token
+        val prefixSize = if (buffer.getInt(block.offset) == MessageSerializer.IPC_CONTINUATION_TOKEN) {
+            8
+        } else {
+            4
+        }
+
+        // Create message buffer and get record batch header
+        val messageBuffer = buffer.nioBuffer(
+            block.offset + prefixSize,
+            block.metadataLength - prefixSize
+        )
+
+        val batch  = RecordBatch()
+        Message.getRootAsMessage(messageBuffer).header(batch)
+
+        // Create and retain body buffer
+        val bodyBuffer = buffer.slice(
+            block.offset + block.metadataLength,
+            block.bodyLength
+        ).apply {
+            referenceManager.retain()
+        }
+
+        // Deserialize the record batch
+        return MessageSerializer.deserializeRecordBatch(batch, bodyBuffer)
+    }
+
+    @JvmOverloads
+    fun toArrowBufView(
+        allocator: BufferAllocator,
+        nioBuffer: ByteBuffer,
+        releaseCallback: (() -> Unit)? = null
+    ): ArrowBuf {
+        val nettyBuf = if (nioBuffer.isDirect && nioBuffer.position() == 0) {
+            // Use the buffer directly if it's a direct buffer with position 0
+            Unpooled.wrappedBuffer(nioBuffer)
+        } else {
+            // Create a new direct buffer and copy the content
+            val size = nioBuffer.remaining()
+            val newBuffer = Unpooled.directBuffer(size)
+            val bb = newBuffer.nioBuffer(0, size)
+            bb.put(nioBuffer.duplicate())
+            bb.clear()
+            newBuffer
+        }
+
+        // Create a custom ForeignAllocation object
+        val foreignAllocation = object : ForeignAllocation(nettyBuf.capacity().toLong(), nettyBuf.memoryAddress()) {
+            override fun release0() {
+                nettyBuf.release()
+                releaseCallback?.invoke()
+            }
+        }
+
+        return allocator.wrapForeignAllocation(foreignAllocation)
+    }
+}

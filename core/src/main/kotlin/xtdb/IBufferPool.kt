@@ -1,6 +1,5 @@
 package xtdb
 
-import org.apache.arrow.memory.ArrowBuf
 import org.apache.arrow.vector.ipc.message.ArrowFooter
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch
 import xtdb.arrow.Relation
