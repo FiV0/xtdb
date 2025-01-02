@@ -73,7 +73,7 @@
           (when-not (.join accept-thread (Duration/ofSeconds 5))
             (log/error "Could not shut down accept-thread gracefully" {:port port, :thread (.getName accept-thread)})))
 
-      (let [drain-wait (:drain-wait @server-state 5000)]
+      (let [drain-wait 500 #_(:drain-wait @server-state 5000)]
         (when-not (contains? #{0, nil} drain-wait)
           (log/trace "Server draining connections")
           (let [wait-until (+ (System/currentTimeMillis) drain-wait)]
@@ -89,6 +89,7 @@
                 :else (do (Thread/sleep 10) (recur))))))
 
         ;; force stopping conns
+        (log/warn "Force closing connections" {:connections (:connections @server-state)})
         (util/try-close (vals (:connections @server-state)))
 
         (when-not (.isShutdown thread-pool)
@@ -229,17 +230,24 @@
   (host-address [_] (.host (.remoteAddress socket)))
 
   (upgrade-to-ssl [this ssl-ctx]
-    (throw (UnsupportedOperationException.))
-    #_(if (and ssl-ctx (not (.isSSL socket)))
-        ;; upgrade the socket, then wait for the client's next startup message
+    #_(throw (UnsupportedOperationException.))
+    (log/info "isSSL" (.isSsl  socket))
+    (if (and ssl-ctx (not (.isSsl socket)))
+      ;; upgrade the socket, then wait for the client's next startup message
 
-        (do
-          (log/trace "upgrading to SSL")
+      (do
+        (log/trace "upgrading to SSL")
 
-          (.write socket (doto (Buffer/buffer 1)
-                           (.setByte (byte \S))))
+        (.write socket (doto (Buffer/buffer 1)
+                         (.setByte 0 (byte \S))))
 
-          (let [^SSLSocket ssl-socket (-> (.getSocketFactory ^SSLContext ssl-ctx)
+        (Future/await (.upgradeToSsl socket))
+        ;; (.upgradeToSsl socket)
+        (log/info "isSSL" (.isSsl  socket))
+
+        this
+
+        #_(let [^SSLSocket ssl-socket (-> (.getSocketFactory ^SSLContext ssl-ctx)
                                           (.createSocket socket
                                                          (-> (.getInetAddress socket)
                                                              (.getHostAddress))
@@ -255,11 +263,11 @@
 
             (->socket-frontend ssl-socket)))
 
-        ;; unsupported - recur and give the client another chance to say hi
-        (do
-          (.write socket (doto (Buffer/buffer 1)
-                           (.setByte 0 (byte \N))))
-          this)))
+      ;; unsupported - recur and give the client another chance to say hi
+      (do
+        (.write socket (doto (Buffer/buffer 1)
+                         (.setByte 0 (byte \N))))
+        this)))
 
   (flush! [_] (.flush out))
 
@@ -270,11 +278,15 @@
     (.close socket)))
 
 (defn ->socket-frontend [^NetSocket socket]
-  (let [buffer-queue (LinkedBlockingDeque.)]
-    (.handler socket (fn [^Buffer buffer]
-                       (log/info "Incoming buffer" (.length buffer))
-                       (.add buffer-queue buffer)))
-    (->SocketFrontend socket buffer-queue nil)))
+  (try
+    (let [buffer-queue (LinkedBlockingDeque.)]
+      (.handler socket (fn [^Buffer buffer]
+                         (log/info "Incoming buffer" (.length buffer))
+                         (.add buffer-queue buffer)))
+      (->SocketFrontend socket buffer-queue nil))
+    (catch Throwable t
+      (log/error t "Error creating socket frontend")
+      (throw t))))
 
 (defrecord Connection [^BufferAllocator allocator
                        ^Server server, frontend, node
@@ -1146,6 +1158,7 @@
         user (get startup-opts "user")
         db-name (get startup-opts "database")
         {:keys [node] :as conn} (assoc conn :node (->node db-name))]
+    (prn startup-opts)
     (letfn [(killed-conn [err]
               (doto conn
                 (cmd-send-error err)
@@ -1217,6 +1230,7 @@
 (defn cmd-startup [conn]
   (loop [{{:keys [buffer-queue]} :frontend, :keys [server], :as conn} conn]
     (let [{:keys [version msg-in]} (read-version buffer-queue)]
+      (log/info "Startup version" version)
       (case version
         :gssenc (doto conn
                   (cmd-startup-err (err-protocol-violation "GSSAPI is not supported")))
