@@ -12,19 +12,12 @@ import java.nio.ByteBuffer
 import java.nio.channels.Channels
 import java.nio.file.Path
 import java.util.*
-import xtdb.util.ArrowUtil
+import xtdb.arrow.ArrowUtil
 
 class MemoryBufferPool(
     private val allocator: BufferAllocator,
     private val memoryStore: NavigableMap<Path, ArrowBuf> = TreeMap()
 ) : IBufferPool, IEvictBufferTest {
-
-    private fun arrowBufToByteArray(arrowBuf: ArrowBuf): ByteArray {
-        val bb = arrowBuf.nioBuffer(0, arrowBuf.capacity().toInt())
-        val ba = ByteArray(bb.remaining())
-        bb.get(ba)
-        return ba
-    }
 
     private fun objectMissingExcepiton(path: Path): IllegalStateException {
         return IllegalStateException("Object $path doesn't exist.")
@@ -35,7 +28,7 @@ class MemoryBufferPool(
             memoryStore[key]
         } ?: throw objectMissingExcepiton(key)
 
-        return arrowBufToByteArray(arrowBuf)
+        return ArrowUtil.arrowBufToByteArray(arrowBuf)
     }
 
     override fun getFooter(key: Path): ArrowFooter {
@@ -63,9 +56,9 @@ class MemoryBufferPool(
         }
     }
 
-    override fun putObject(k: Path, buffer: ByteBuffer) {
+    override fun putObject(key: Path, buffer: ByteBuffer) {
         synchronized(memoryStore) {
-            memoryStore[k] = ArrowUtil.toArrowBufView(allocator, buffer)
+            memoryStore[key] = ArrowUtil.toArrowBufView(allocator, buffer)
         }
     }
 
@@ -89,11 +82,11 @@ class MemoryBufferPool(
         }
     }
 
-    override fun objectSize(k: Path): Long {
-        return memoryStore[k]?.capacity() ?: 0
+    override fun objectSize(key: Path): Long {
+        return memoryStore[key]?.capacity() ?: 0
     }
 
-    override fun openArrowWriter(k: Path, rel: Relation): xtdb.ArrowWriter {
+    override fun openArrowWriter(key: Path, rel: Relation): xtdb.ArrowWriter {
         val baos = ByteArrayOutputStream()
         val writeChannel = Channels.newChannel(baos)
         val unloader = rel.startUnload(writeChannel)
@@ -106,7 +99,7 @@ class MemoryBufferPool(
             override fun end() {
                 unloader.end()
                 writeChannel.close()
-                putObject(k, ByteBuffer.wrap(baos.toByteArray()))
+                putObject(key, ByteBuffer.wrap(baos.toByteArray()))
             }
 
             override fun close() {
@@ -118,9 +111,7 @@ class MemoryBufferPool(
         }
     }
 
-    override fun evictCachedBuffer(k: Path) {
-
-    }
+    override fun evictCachedBuffer(key: Path) {}
 
     override fun close() {
         synchronized(memoryStore) {

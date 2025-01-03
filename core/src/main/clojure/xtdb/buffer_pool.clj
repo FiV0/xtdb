@@ -10,14 +10,13 @@
            (com.github.benmanes.caffeine.cache Cache Caffeine)
            [io.micrometer.core.instrument Counter MeterRegistry]
            [io.micrometer.core.instrument.simple SimpleMeterRegistry]
-           [java.io ByteArrayOutputStream Closeable]
+           [java.io Closeable]
            [java.lang AutoCloseable]
            (java.nio ByteBuffer)
-           (java.nio.channels Channels ClosedByInterruptException)
+           (java.nio.channels ClosedByInterruptException)
            [java.nio.file FileVisitOption Files LinkOption OpenOption Path StandardOpenOption]
            [java.nio.file.attribute FileAttribute]
-           [java.util NavigableMap SortedMap TreeMap]
-           (java.util NavigableMap)
+           [java.util SortedMap TreeMap]
            [java.util.concurrent CompletableFuture ConcurrentSkipListMap]
            kotlin.Pair
            [org.apache.arrow.memory ArrowBuf BufferAllocator]
@@ -30,7 +29,7 @@
            (xtdb.api.storage ObjectStore Storage Storage$Factory Storage$LocalStorageFactory Storage$RemoteStorageFactory)
            xtdb.api.Xtdb$Config
            (xtdb.arrow ArrowUtil Relation)
-           (xtdb.buffer_pool MemoryBufferPool)
+           (xtdb.buffer_pool MemoryBufferPool LocalBufferPool)
            (xtdb.cache DiskCache DiskCache$Entry MemoryCache PathSlice)
            (xtdb.multipart IMultipartUpload SupportsMultipart)))
 
@@ -63,11 +62,6 @@
 (defn open-in-memory-storage ^xtdb.IBufferPool [^BufferAllocator allocator, ^MeterRegistry metrics-registry]
   (MemoryBufferPool. (->buffer-pool-child-allocator allocator metrics-registry) (TreeMap.)))
 
-(defn- create-tmp-path ^Path [^Path disk-store]
-  (Files/createTempFile (doto (.resolve disk-store ".tmp") util/mkdirs)
-                        "upload" ".arrow"
-                        (make-array FileAttribute 0)))
-
 (defn ->arrow-footer-cache ^Cache [^long max-entries]
   (-> (Caffeine/newBuilder)
       (.maximumSize max-entries)
@@ -81,129 +75,17 @@
 (defn ->resolved-path-slice ^PathSlice [^PathSlice path-slice ^Path new-path]
   (PathSlice. new-path (.getOffset path-slice) (.getLength path-slice)))
 
-(defrecord LocalBufferPool [allocator, ^MemoryCache memory-cache, ^Path disk-store, ^Cache arrow-footer-cache
-                            ^Counter record-batch-requests ^Counter mem-cache-misses]
-  IBufferPool
-  (getByteArray [_ k]
-    (when k
-      (util/with-open [arrow-buf (.get memory-cache (PathSlice. k)
-                                       (fn [^PathSlice path-slice]
-                                         (.increment mem-cache-misses)
-                                         (let [buffer-cache-path (.resolve disk-store (.getPath path-slice))]
-                                           (when-not (util/path-exists buffer-cache-path)
-                                             (throw (os/obj-missing-exception k)))
-
-                                           (CompletableFuture/completedFuture
-                                            (Pair. (->resolved-path-slice path-slice buffer-cache-path) nil)))))]
-        (arrow-buf->ba arrow-buf))))
-
-  (getFooter [_ k]
-    (let [path (.resolve disk-store k)]
-      (when-not (util/path-exists path)
-        (throw (os/obj-missing-exception path)))
-
-      (.get arrow-footer-cache k (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))))
-
-  (getRecordBatch [_ k block-idx]
-    (.increment record-batch-requests)
-    (let [path (.resolve disk-store k)]
-      (when-not (util/path-exists path)
-        (throw (os/obj-missing-exception path)))
-
-      (let [^ArrowFooter footer (.get arrow-footer-cache k
-                                      (fn [_] (Relation/readFooter (path->seekable-byte-channel path))))
-            blocks (.getRecordBatches footer)
-            ^ArrowBlock block (nth blocks block-idx nil)]
-        (if-not block
-          (throw (IndexOutOfBoundsException. "Record batch index out of bounds of arrow file"))
-          (util/with-open [arrow-buf (.get memory-cache (PathSlice. k (.getOffset block)
-                                                                    (+ (.getMetadataLength block) (.getBodyLength block)))
-                                           (fn [^PathSlice path-slice]
-                                             (.increment mem-cache-misses)
-                                             (let [buffer-cache-path (.resolve disk-store (.getPath path-slice))]
-                                               (when-not (util/path-exists buffer-cache-path)
-                                                 (throw (os/obj-missing-exception k)))
-
-                                               (CompletableFuture/completedFuture
-                                                (Pair. (->resolved-path-slice path-slice buffer-cache-path) nil)))))]
-            (ArrowUtil/arrowBufToRecordBatch arrow-buf 0 (.getMetadataLength block) (.getBodyLength block)
-                                             (format "Failed opening record batch '%s' at block-idx %d" path block-idx)))))))
-
-  (putObject [_ k buffer]
-    (try
-      (let [tmp-path (create-tmp-path disk-store)]
-        (util/write-buffer-to-path buffer tmp-path)
-
-        (let [file-path (.resolve disk-store k)]
-          (util/create-parents file-path)
-          (util/atomic-move tmp-path file-path)))
-      (catch ClosedByInterruptException _
-        (throw (InterruptedException.)))))
-
-  (listAllObjects [_]
-    (util/with-open [dir-stream (Files/walk disk-store (make-array FileVisitOption 0))]
-      (vec (sort (for [^Path path (iterator-seq (.iterator dir-stream))
-                       :let [relativized (.relativize disk-store path)]
-                       :when (and (Files/isRegularFile path (make-array LinkOption 0))
-                                  (not (.startsWith relativized ".tmp")))]
-                   relativized)))))
-
-  (listObjects [_ dir]
-    (let [dir (.resolve disk-store dir)]
-      (if (Files/exists dir (make-array LinkOption 0))
-        (util/with-open [dir-stream (Files/newDirectoryStream dir)]
-          (vec (sort (for [^Path path dir-stream]
-                       (.relativize disk-store path)))))
-        [])))
-
-  (objectSize [_ k] (Files/size (.resolve disk-store k)))
-
-  (openArrowWriter [_ k rel]
-    (let [^Path tmp-path (create-tmp-path disk-store)]
-      (util/with-close-on-catch [file-ch (util/->file-channel tmp-path util/write-truncate-open-opts)
-                                 unl (.startUnload rel file-ch)]
-        (reify ArrowWriter
-          (writeBatch [_]
-            (try
-              (.writeBatch unl)
-              (catch ClosedByInterruptException _
-                (throw (InterruptedException.)))))
-
-          (end [_]
-            (.end unl)
-            (.close file-ch)
-
-            (let [file-path (.resolve disk-store k)]
-              (util/create-parents file-path)
-              (util/atomic-move tmp-path file-path)))
-
-          (close [_]
-            (util/close unl)
-            (when (.isOpen file-ch)
-              (.close file-ch))
-            ;; If tmp path still present/hasn't been atomic moved, delete it on close
-            (Files/deleteIfExists tmp-path))))))
-
-  EvictBufferTest
-  (evict-cached-buffer! [_ k]
-    (.invalidate memory-cache (PathSlice. k)))
-
-  Closeable
-  (close [_]
-    (util/close memory-cache)
-    (util/close allocator)))
-
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-local-storage ^xtdb.IBufferPool [^BufferAllocator allocator, ^Storage$LocalStorageFactory factory, ^MeterRegistry metrics-registry]
   (let [max-cache-bytes (or (.getMaxCacheBytes factory) (quot (util/max-direct-memory) 2))
         memory-cache (MemoryCache. allocator max-cache-bytes)]
     (metrics/add-mem-cache-gauges metrics-registry "memorycache" (util/throttle #(.getStats memory-cache) 2000))
-    (->LocalBufferPool (->buffer-pool-child-allocator allocator metrics-registry)
-                       memory-cache
-                       (doto (-> (.getPath factory) (.resolve storage-root)) util/mkdirs)
-                       (->arrow-footer-cache 1024)
-                       (metrics/add-counter metrics-registry "record-batch-requests")
-                       (metrics/add-counter metrics-registry "memory-cache-misses"))))
+    (LocalBufferPool. (->buffer-pool-child-allocator allocator metrics-registry)
+                      memory-cache
+                      (doto (-> (.getPath factory) (.resolve storage-root)) util/mkdirs)
+                      (->arrow-footer-cache 1024)
+                      (metrics/add-counter metrics-registry "record-batch-requests")
+                      (metrics/add-counter metrics-registry "memory-cache-misses"))))
 
 (defn dir->buffer-pool
   "Creates a local storage buffer pool from the given directory."
