@@ -30,6 +30,8 @@
            (org.pg.codec CodecParams)
            (org.pg.enums OID)
            (org.pg.error PGErrorResponse)
+           (org.postgresql PGConnection)
+           (org.postgresql.copy CopyManager)
            (org.postgresql.util PGInterval PGobject PSQLException)
            xtdb.JsonSerde
            xtdb.pgwire.Server))
@@ -2324,4 +2326,27 @@ ORDER BY t.oid DESC LIMIT 1"
                    :xt/valid-from #inst "2021", :xt/valid-to #inst "2022"}
                   {:xt/id 1, :patched 2021, :version 2,
                    :xt/valid-from #inst "2022-01-01T00:00:00.000000000-00:00"}]
-             (q conn ["SELECT *, _valid_from, _valid_to FROM baz FOR ALL VALID_TIME ORDER BY _valid_from"])))))))
+                 (q conn ["SELECT *, _valid_from, _valid_to FROM baz FOR ALL VALID_TIME ORDER BY _valid_from"])))))))
+
+(deftest copy-test
+  (with-open [^PGConnection conn (jdbc-conn)]
+    (let [^CopyManager copy-manager (.getCopyAPI conn)]
+        (.copyIn  copy-manager "COPY user(name, email) FROM STDIN WITH (FORMAT arrow)"
+                  (io/input-stream (io/resource "users.arrow")))
+        )
+
+    (t/is (= nil
+             (q conn ["SELECT * FROM user"])))))
+
+
+(comment
+  (require 'dev)
+
+  (dev/write-arrow-file (.toPath (io/file "src/test/resources/users.arrow"))
+                        [{:name "Alice", :email "alice@xtdb.com"}
+                         {:name "Bob", :email "bob@xtdb.com"}])
+
+  (->> (.toPath (io/file (io/resource "users.arrow")))
+       (dev/read-arrow-file)
+       (into [] cat))
+  )
