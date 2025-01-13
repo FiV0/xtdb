@@ -110,7 +110,7 @@
 
 (defn tables-with-cols [^IWatermarkSource wm-src]
   (with-open [^Watermark wm (.openWatermark wm-src)]
-    (.schema wm)))
+    (update-keys (.schema wm) (comp #(vary-meta % assoc :column? true) symbol))))
 
 (defn temporal-column? [col-name]
   (contains? #{"_system_from" "_system_to" "_valid_from" "_valid_to"}

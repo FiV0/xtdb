@@ -2811,11 +2811,10 @@
   (visitExecuteStmt [this ctx]
     (.accept (.executeStatement ctx) this)))
 
-(defn xform-table-info [table-info]
+(def ^:private static-table-info
   (into {}
         (for [[tn cns] (merge info-schema/table-info
-                              '{xt/txs #{_id committed error system_time}}
-                              table-info)]
+                              '{xt/txs #{_id committed error system_time}})]
           [(symbol tn) (->> cns
                             (map ->col-sym)
                             ^Collection
@@ -2825,6 +2824,9 @@
                                                   (= '_id s2) 1
                                                   :else (compare s1 s2))))
                             ->insertion-ordered-set)])))
+
+(defn xform-table-info [table-info]
+  (merge static-table-info table-info))
 
 (defn log-warnings [!warnings]
   (doseq [warning @!warnings]
