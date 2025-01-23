@@ -126,6 +126,8 @@ allprojects {
             }
 
             tasks.clojureRepl {
+                layout.buildDirectory.set(layout.projectDirectory.dir("buildRepl"))
+
                 forkOptions.run {
                     val jvmArgs = defaultJvmArgs.toMutableList()
 
