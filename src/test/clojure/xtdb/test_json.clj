@@ -30,18 +30,19 @@
 (defn- file->json-file ^java.nio.file.Path [^Path file]
   (.resolve (.getParent file) (format "%s.json" (.getFileName file))))
 
-(defn write-arrow-json-file ^java.nio.file.Path [^Path file]
-  (let [json-file (file->json-file file)]
-    (with-open [file-ch (FileChannel/open file (into-array OpenOption #{StandardOpenOption/READ}))
-                file-reader (ArrowFileReader. file-ch tu/*allocator*)
-                file-writer (JsonFileWriter. (.toFile json-file)
-                                             (.. (JsonFileWriter/config) (pretty true)))]
-      (let [root (.getVectorSchemaRoot file-reader)]
-        (.start file-writer (.getSchema root) nil)
-        (while (.loadNextBatch file-reader)
-          (.write file-writer root)))
+(defn write-arrow-json-file
+  (^java.nio.file.Path [^Path file] (write-arrow-json-file file (file->json-file file)))
+  (^java.nio.file.Path [^Path source ^Path dest]
+   (with-open [file-ch (FileChannel/open source (into-array OpenOption #{StandardOpenOption/READ}))
+               file-reader (ArrowFileReader. file-ch tu/*allocator*)
+               file-writer (JsonFileWriter. (.toFile dest)
+                                            (.. (JsonFileWriter/config) (pretty true)))]
+     (let [root (.getVectorSchemaRoot file-reader)]
+       (.start file-writer (.getSchema root) nil)
+       (while (.loadNextBatch file-reader)
+         (.write file-writer root)))
 
-      json-file)))
+     dest)))
 
 (comment
   (with-open [al (RootAllocator.)]
