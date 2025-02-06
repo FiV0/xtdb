@@ -3,7 +3,7 @@ package xtdb.arrow
 import java.nio.ByteBuffer
 import java.nio.channels.SeekableByteChannel
 
-private class ByteBufferChannel(private val buf: ByteBuffer) : SeekableByteChannel {
+class ByteBufferChannel(private val buf: ByteBuffer) : SeekableByteChannel {
     override fun read(dst: ByteBuffer): Int {
         val src = buf.slice().limit(dst.remaining())
         dst.put(src)
