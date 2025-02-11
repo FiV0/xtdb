@@ -1,6 +1,5 @@
 package xtdb.vector
 
-import clojure.lang.Keyword
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.RootAllocator
 import org.apache.arrow.vector.types.Types.MinorType
@@ -10,6 +9,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import xtdb.arrow.VectorIndirection
 
 class DenseUnionVectorWriterTest {
     private lateinit var al: BufferAllocator
@@ -61,6 +61,54 @@ class DenseUnionVectorWriterTest {
             )
 
             assertEquals(listOf(12.3, null, 18.9), destWriter.toReader().toList())
+        }
+    }
+
+
+    @Test
+    fun `testing copying from live-index while also promoting at the same time, #4153 `() {
+        val fooField = Field("foo", FieldType.nullable(MinorType.INT.type), emptyList())
+        val barField = Field("bar", FieldType.nullable(MinorType.VARCHAR.type), emptyList())
+        val duvField = Field( "duv", UNION_FIELD_TYPE,
+            listOf(
+                Field("put", FieldType.nullable(MinorType.STRUCT.type), listOf(fooField, barField)),
+            )
+        )
+
+        duvField.createVector(al).use { duvVec ->
+            val duvWriter = writerFor(duvVec)
+            duvWriter.writeObject(mapOf("foo" to 42, "bar" to "hello"))
+            duvWriter.writeObject(mapOf("foo" to 43))
+
+            val foo2Field = Field("foo", FieldType.nullable(MinorType.FLOAT8.type), emptyList())
+            val structField = Field("put", FieldType.nullable(MinorType.STRUCT.type), listOf(foo2Field, barField))
+
+            structField.createVector(al).use { structVec ->
+                val structWriter = writerFor(structVec)
+                structWriter.writeObject(mapOf("foo" to 42.0, "bar" to "hello"))
+                structWriter.writeObject(mapOf("foo" to 43.0))
+
+                val multiVectorReader = IndirectMultiVectorReader(
+                    listOf(from(duvVec).legReader("put"), from(structVec)),
+                    VectorIndirection.selection(intArrayOf(0, 1, 0, 1)),
+                    VectorIndirection.selection(intArrayOf(0, 0, 1, 1))
+                )
+
+                multiVectorReader.rowCopier(duvWriter.legWriter("put")).apply {
+                    copyRow(1)
+                    copyRow(3)
+                }
+
+                assertEquals(
+                    listOf(
+                        mapOf("foo" to 42, "bar" to "hello"),
+                        mapOf("foo" to 43),
+                        mapOf("foo" to 42.0, "bar" to "hello"),
+                        mapOf("foo" to 43.0),
+                    ),
+                    duvWriter.toReader().toList()
+                )
+            }
         }
     }
 }

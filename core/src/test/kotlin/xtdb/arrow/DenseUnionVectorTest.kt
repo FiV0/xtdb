@@ -2,11 +2,16 @@ package xtdb.arrow
 
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.RootAllocator
+import org.apache.arrow.vector.types.Types.MinorType
+import org.apache.arrow.vector.types.pojo.ArrowType.Struct.INSTANCE
+import org.apache.arrow.vector.types.pojo.Field
+import org.apache.arrow.vector.types.pojo.FieldType
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import xtdb.arrow.StructVector
 
 class DenseUnionVectorTest {
     private lateinit var allocator: BufferAllocator
@@ -115,4 +120,44 @@ class DenseUnionVectorTest {
         }
     }
 
+    @Test
+    fun `testing copying from live-index while also promoting at the same time, #4153`() {
+        DenseUnionVector( allocator, "duv",
+            listOf(
+                StructVector(allocator, "put", false, linkedMapOf<String, Vector>(
+                    "foo" to IntVector(allocator, "foo", true),
+                    "bar" to Utf8Vector(allocator, "bar", true)
+                ))
+            )
+        ).use { duv ->
+            duv.writeObject(mapOf("foo" to 42, "bar" to "hello"))
+            duv.writeObject(mapOf("foo" to 43))
+
+            //  Double instead of Int for 'foo'
+            StructVector(allocator,"putOnDisk", false, linkedMapOf<String, Vector>(
+                "foo" to DoubleVector(allocator, "foo", true),
+                "bar" to Utf8Vector(allocator, "bar", true)
+            )).use { putVec ->
+                putVec.writeObject(mapOf("foo" to 42.0, "bar" to "hello"))
+                putVec.writeObject(mapOf("foo" to 43.0))
+
+                val multiReader = MultiVectorReader(
+                    listOf(duv.legReader("put"), putVec),
+                    VectorIndirection.selection(intArrayOf(0, 1, 0, 1)),
+                    VectorIndirection.selection(intArrayOf(0, 0, 1, 1))
+                )
+
+                multiReader.rowCopier(duv.legWriter("put")).run {
+                    copyRow(1)
+                    copyRow(3)
+                }
+            }
+
+
+
+
+
+
+        }
+    }
 }

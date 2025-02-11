@@ -2,6 +2,8 @@ package xtdb.vector
 
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.RootAllocator
+import org.apache.arrow.vector.VarBinaryVector
+import org.apache.arrow.vector.complex.DenseUnionVector
 import org.apache.arrow.vector.complex.StructVector
 import org.apache.arrow.vector.types.Types.MinorType
 import org.apache.arrow.vector.types.pojo.Field
@@ -126,4 +128,36 @@ class StructVectorWriterTest {
             assertEquals(aField, nnWriter.field)
         }
     }
+
+    @Test
+    fun `test row copying from RelationReader to Struct with nulls`() {
+        val aField = Field("a", FieldType.nullable(MinorType.BIGINT.type), emptyList())
+
+        aField.createVector(al).use { a ->
+            writerFor(a).apply {
+                writeLong(12L)
+                writeNull()
+            }
+
+            val rel = RelationReader.from(listOf(ValueVectorReader.from(a)), 2)
+
+            StructVector.empty("dest", al).use { structVec ->
+                val structWriter = writerFor(structVec)
+
+                val rowCopier = structWriter.rowCopier(rel)
+                rowCopier.copyRow(0)
+                rowCopier.copyRow(1)
+
+                val structReader = ValueVectorReader.from(structVec)
+
+                assertEquals(mapOf("a" to 12L)  ,structReader.getObject(0))
+                assertEquals(emptyMap<String, Long>(), structReader.getObject(1))
+            }
+        }
+    }
+
+
+
+
+
 }
