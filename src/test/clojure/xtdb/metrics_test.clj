@@ -5,7 +5,7 @@
             [xtdb.test-util :as tu]
             [xtdb.types])
   (:import io.micrometer.core.instrument.composite.CompositeMeterRegistry
-           io.micrometer.core.instrument.Counter))
+           (io.micrometer.core.instrument Counter Gauge)))
 
 (t/use-fixtures :each tu/with-mock-clock tu/with-node tu/with-simple-registry)
 
@@ -22,3 +22,11 @@
     (t/is (= 4.0 (.count ^Counter (.counter (.find registry "query.error")))))
 
     (t/is (= 2.0 (.count ^Counter (.counter (.find registry "query.warning")))))))
+
+(t/deftest test-total-and-active-connections
+  (let [registry ^CompositeMeterRegistry (tu/component tu/*node* :xtdb.metrics/registry)]
+    ;; (jdbc/execute! tu/*conn* ["SELECT 1"])
+    ;; (jdbc/execute! tu/*conn* ["SELECT 1"])
+
+    (t/is (= 1.0 (.value ^Gauge (.gauge (.find registry "pgwire.active-connections")))))
+    (t/is (= 2.0 (.count ^Counter (.counter (.find registry "pgwire.test")))))))
