@@ -384,7 +384,8 @@
    :config config})
 
 (defmethod ig/init-key :xtdb.indexer/live-index [_ {:keys [allocator buffer-pool metadata-mgr log trie-catalog compactor ^IndexerConfig config metrics-registry]}]
-  (let [{:keys [latest-completed-tx next-block-idx], :or {next-block-idx 0}} (meta/latest-block-metadata metadata-mgr)]
+  (let [{:keys [latest-completed-tx block-idx]} (meta/latest-block-metadata metadata-mgr)
+        next-block-idx (or (some-> block-idx inc) 0)]
     (util/with-close-on-catch [allocator (util/->child-allocator allocator "live-index")]
       (metrics/add-allocator-gauge metrics-registry "live-index.allocator.allocated_memory" allocator)
       (let [tables (HashMap.)]
