@@ -1895,11 +1895,15 @@
                                                  (throw t)))))
         conn (assoc conn :query-error-counter query-error-counter)]
 
+    (println "connect")
     (try
       ;; the connection loop only gets initialized if we are not closing
       (when (not @!closing?)
         (when total-connections-counter
-          (.increment total-connections-counter))
+          (println "when total-connections-counter")
+          (prn 'total-connections-counter total-connections-counter)
+          (.increment total-connections-counter)
+          (prn 'total-connections-counter-count (.count total-connections-counter)))
         (swap! server-state assoc-in [:connections cid] conn)
 
         (log/trace "Starting connection loop" {:port port, :cid cid})
@@ -1981,7 +1985,8 @@
    (util/with-close-on-catch [accept-socket (ServerSocket. port)]
      (let [port (.getLocalPort accept-socket)
            query-error-counter (when metrics-registry (metrics/add-counter metrics-registry "query.error"))
-           total-connections-counter (when metrics-registry (metrics/add-counter metrics-registry "pgwire.total-connections"))
+           _ (prn 'metrics-registry metrics-registry)
+           total-connections-counter (when metrics-registry (metrics/add-counter metrics-registry "pgwire.total_connections"))
            !tmp-nodes (when-not node
                         (ConcurrentHashMap.))
            server (map->Server {:allocator allocator
@@ -2025,8 +2030,11 @@
            server (assoc server :accept-thread accept-thread)]
 
        (when metrics-registry
-         (metrics/add-gauge metrics-registry "pgwire.active-connections" (fn []
-                                                                           (count (:connections @(:server-state server))))))
+         (metrics/add-gauge metrics-registry "pgwire.active_connections"
+                            (fn []
+                              (println 'pgwire.active-connections (count (:connections @(:server-state server))))
+                              (prn 'connections (:connections @(:server-state server)))
+                              (count (:connections @(:server-state server))))))
        (.start accept-thread)
        server))))
 
