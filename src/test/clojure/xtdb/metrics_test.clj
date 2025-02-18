@@ -30,13 +30,14 @@
 
 (t/deftest test-total-and-active-connections
   (let [node (xtn/start-node tu/*node-opts*)
-        conn1 (jdbc/get-connection node)
-        conn2 (jdbc/get-connection node)
         registry ^CompositeMeterRegistry (tu/component node :xtdb.metrics/registry)]
     (.add registry (SimpleMeterRegistry.))
-    (jdbc/execute! conn1 ["SELECT 1"])
-    (.close conn1)
 
+    (let [conn1 (jdbc/get-connection node)
+          conn2 (jdbc/get-connection node)]
+
+      (jdbc/execute! conn1 ["SELECT 1"])
+      (.close conn1))
 
     ;; We have a connection open so this should be equal to 1.0
     (t/is (= 1.0 (.value ^Gauge (.gauge (.find registry "pgwire.active_connections")))))
