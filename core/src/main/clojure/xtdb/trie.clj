@@ -70,6 +70,19 @@
                         :table-block-paths table-block-paths}))
     (ByteBuffer/wrap (.toByteArray os))))
 
+(def ^:private table-block-path-regex
+  #"tables\/([\w$]+)\/blocks\/(?:b(\p{XDigit}+))(\.binpb)$")
+
+(declare table-dir->table-name)
+
+(defn parse-table-block-key [^Path table-block-path]
+  (when-let [[_ table-name block-idx-str] (re-find table-block-path-regex (str table-block-path))]
+    {:table-name (table-dir->table-name table-name)
+     :block-idx  (util/<-lex-hex-string block-idx-str)}))
+
+(comment
+  (parse-table-block-key "tables/xt$txs/blocks/b00.binpb"))
+
 ;; Trie parts
 
 (defn ->l0-l1-trie-key [^long level, ^long block-idx]

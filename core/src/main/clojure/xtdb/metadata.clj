@@ -43,16 +43,6 @@
 (definterface IMetadataPredicate
   (^java.util.function.IntPredicate build [^xtdb.metadata.ITableMetadata tableMetadata]))
 
-(def ^:private table-block-path-regex
-  #"tables\/([\w$]+)\/blocks\/(?:b(\p{XDigit}+))(\.binpb)$")
-
-(defn parse-table-block-key [^Path table-block-path]
-  (when-let [[_ table-name block-idx-str] (re-find table-block-path-regex (str table-block-path))]
-    {:table-name (trie/table-dir->table-name table-name)
-     :block-idx  (util/<-lex-hex-string block-idx-str)}))
-
-(comment
-  (parse-table-block-key "tables/xt$txs/blocks/b00.binpb"))
 
 (defn- ->table-block-metadata-obj-key [^Path table-path block-idx]
   (.resolve (.resolve table-path trie/block-table-metadata-path)
@@ -429,7 +419,7 @@
       {:block-idx (trie/obj-key->block-idx bm-obj-key)
        :latest-completed-tx latest-completed-tx
        :tables (->> (for [table-block-path table-block-paths
-                          :let [{:keys [table-name]} (parse-table-block-key table-block-path)
+                          :let [{:keys [table-name]} (trie/parse-table-block-key table-block-path)
                                 table-block (TableBlock/parseFrom (.getByteArray buffer-pool table-block-path))]]
                       (MapEntry/create table-name (<-table-block table-block)))
                     (into {}))})))
