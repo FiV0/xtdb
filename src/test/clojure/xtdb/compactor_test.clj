@@ -465,6 +465,10 @@
              (->> (xt/q node "SELECT foo FROM foo")
                   (into #{} (map :foo)))))))
 
+(require '[xtdb.logging :as l])
+
+(l/set-log-level! "xtdb.compactor" :trace)
+
 (t/deftest test-compaction-with-erase-4017
   (let [node-dir (util/->path "target/compactor/compaction-with-erase")]
     (util/delete-dir node-dir)
@@ -498,6 +502,8 @@
 
       (tj/check-json (.toPath (io/as-file (io/resource "xtdb/compactor-test/compaction-with-erase")))
                      (.resolve node-dir (tables-key "public$foo")) #"l01-(.+)\.arrow"))))
+
+(l/set-log-level! "xtdb.compactor" :info)
 
 (t/deftest recency-bucketing-bug
   (let [node-dir (util/->path "target/compactor/recency-bucketing-bug")]
