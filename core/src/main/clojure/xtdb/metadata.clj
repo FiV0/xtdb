@@ -6,14 +6,12 @@
             [xtdb.expression.comparator :as expr.comp]
             xtdb.expression.temporal
             [xtdb.object-store :as os]
-            [xtdb.serde :as serde]
             [xtdb.trie :as  trie]
             [xtdb.types :as types]
             [xtdb.util :as util])
   (:import (clojure.lang MapEntry)
            (com.github.benmanes.caffeine.cache Cache Caffeine)
            (com.google.protobuf ByteString)
-           (java.io ByteArrayInputStream ByteArrayOutputStream)
            java.lang.AutoCloseable
            java.nio.ByteBuffer
            (java.nio.file Path)
@@ -21,7 +19,7 @@
            (java.util.function Function IntPredicate)
            (java.util.stream IntStream)
            (org.apache.arrow.memory ArrowBuf)
-           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Binary ArrowType$Bool ArrowType$Date ArrowType$FixedSizeBinary ArrowType$FloatingPoint ArrowType$Int ArrowType$Interval ArrowType$List ArrowType$Null ArrowType$Struct ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union ArrowType$Utf8 Field FieldType Schema)
+           (org.apache.arrow.vector.types.pojo ArrowType$Binary ArrowType$Bool ArrowType$Date ArrowType$FixedSizeBinary ArrowType$FloatingPoint ArrowType$Int ArrowType$Interval ArrowType$List ArrowType$Null ArrowType$Struct ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union ArrowType$Utf8 Field FieldType Schema)
            xtdb.BufferPool
            (xtdb.arrow Relation Vector VectorReader VectorWriter)
            (xtdb.block.proto TableBlock)
@@ -30,29 +28,6 @@
            (xtdb.util TemporalBounds TemporalDimension)
            (xtdb.vector IVectorReader)
            (xtdb.vector.extensions KeywordType SetType TransitType TsTzRangeType UriType UuidType)))
-
-(def metadata-read-handler-map
-  (transit/read-handler-map
-   (into {"xtdb/arrow-type" (transit/read-handler types/->arrow-type)
-          "xtdb/field-type" (transit/read-handler (fn [[arrow-type nullable?]]
-                                                    (if nullable?
-                                                      (FieldType/nullable arrow-type)
-                                                      (FieldType/notNullable arrow-type))))
-          "xtdb/field" (transit/read-handler (fn [[name field-type children]]
-                                               (Field. name field-type children)))}
-         serde/transit-read-handlers)))
-
-(def metadata-write-handler-map
-  (transit/write-handler-map
-   (into {ArrowType (transit/write-handler "xtdb/arrow-type" #(types/<-arrow-type %))
-          ;; beware that this currently ignores dictionary encoding and metadata of FieldType's
-          FieldType (transit/write-handler "xtdb/field-type"
-                                           (fn [^FieldType field-type]
-                                             [(.getType field-type) (.isNullable field-type)]))
-          Field (transit/write-handler "xtdb/field"
-                                       (fn [^Field field]
-                                         [(.getName field) (.getFieldType field) (.getChildren field)]))}
-         serde/transit-write-handlers)))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -68,32 +43,6 @@
 (definterface IMetadataPredicate
   (^java.util.function.IntPredicate build [^xtdb.metadata.ITableMetadata tableMetadata]))
 
-(defn- obj-key->block-idx [^Path obj-key]
-  (some->> (.getFileName obj-key)
-           (str)
-           (re-matches #"b(\p{XDigit}+).transit.json")
-           (second)
-           (util/<-lex-hex-string)))
-
-(def ^Path block-metadata-path (util/->path "blocks"))
-
-(defn- ->block-metadata-obj-key [block-idx]
-  (.resolve block-metadata-path (format "b%s.transit.json" (util/->lex-hex-string block-idx))))
-
-(def ^Path block-table-metadata-path (util/->path "blocks"))
-
-(defn- write-block-metadata ^java.nio.ByteBuffer [latest-completed-tx table-block-paths]
-  (with-open [os (ByteArrayOutputStream.)]
-    (let [w (transit/writer os :json {:handlers metadata-write-handler-map})]
-      (transit/write w {:latest-completed-tx latest-completed-tx
-                        :table-block-paths table-block-paths}))
-    (ByteBuffer/wrap (.toByteArray os))))
-
-(defn- bytes->clj [^bytes bytes]
-  (with-open [is (ByteArrayInputStream. bytes)]
-    (let [rdr (transit/reader is :json {:handlers metadata-read-handler-map})]
-      (transit/read rdr))))
-
 (def ^:private table-block-path-regex
   #"tables\/([\w$]+)\/blocks\/(?:b(\p{XDigit}+))(\.binpb)$")
 
@@ -106,7 +55,7 @@
   (parse-table-block-key "tables/xt$txs/blocks/b00.binpb"))
 
 (defn- ->table-block-metadata-obj-key [^Path table-path block-idx]
-  (.resolve (.resolve table-path block-table-metadata-path)
+  (.resolve (.resolve table-path trie/block-table-metadata-path)
             (format "b%s.binpb" (util/->lex-hex-string block-idx))))
 
 (defn- write-table-block-data ^java.nio.ByteBuffer [^Schema table-schema ^long row-count]
@@ -449,8 +398,8 @@
             (.add table-block-paths table-block-path)
             (.putObject buffer-pool table-block-path
                         (write-table-block-data (Schema. fields) row-count))))
-        (.putObject buffer-pool (->block-metadata-obj-key block-idx)
-                    (write-block-metadata latest-completed-tx table-block-paths))
+        (.putObject buffer-pool (trie/->block-metadata-obj-key block-idx)
+                    (trie/write-block-metadata latest-completed-tx table-block-paths))
         (set! (.table->fields this) new-table->fields)
         (set! (.last-block-metadata this) new-block-metadata))))
 
@@ -474,10 +423,10 @@
 
 (defn- load-latest-block-metadata ^java.util.Map [{:keys [^BufferPool buffer-pool]}]
   ;; TODO is it ok here to only get the last one?
-  (when-let [bm-obj (last (.listAllObjects buffer-pool block-metadata-path))]
+  (when-let [bm-obj (last (.listAllObjects buffer-pool trie/block-metadata-path))]
     (let [{bm-obj-key :key} (os/<-StoredObject bm-obj)
-          {:keys [latest-completed-tx table-block-paths]} (bytes->clj (.getByteArray buffer-pool bm-obj-key))]
-      {:block-idx (obj-key->block-idx bm-obj-key)
+          {:keys [latest-completed-tx table-block-paths]} (trie/read-block-metadata-file (.getByteArray buffer-pool bm-obj-key))]
+      {:block-idx (trie/obj-key->block-idx bm-obj-key)
        :latest-completed-tx latest-completed-tx
        :tables (->> (for [table-block-path table-block-paths
                           :let [{:keys [table-name]} (parse-table-block-key table-block-path)
@@ -489,7 +438,7 @@
   (require '[clojure.java.io :as io])
 
   (with-open [is (io/input-stream "src/test/resources/xtdb/indexer-test/can-build-live-index/v06/blocks/b00.transit.json")]
-    (let [rdr (transit/reader is :json {:handlers metadata-read-handler-map})]
+    (let [rdr (transit/reader is :json {:handlers trie/metadata-read-handler-map})]
       (transit/read rdr)))
 
   )

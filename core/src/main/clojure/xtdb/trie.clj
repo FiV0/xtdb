@@ -1,20 +1,76 @@
 (ns xtdb.trie
   (:require [clojure.string :as str]
+            [cognitect.transit :as transit]
             [xtdb.buffer-pool]
+            [xtdb.serde :as serde]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.writer :as vw])
-  (:import (java.lang AutoCloseable)
+  (:import [java.io ByteArrayInputStream ByteArrayOutputStream]
+           (java.lang AutoCloseable)
            (java.nio.file Path)
            (java.util ArrayList Arrays List)
+           java.nio.ByteBuffer
            (org.apache.arrow.memory ArrowBuf BufferAllocator)
            (org.apache.arrow.vector VectorSchemaRoot)
-           (org.apache.arrow.vector.types.pojo ArrowType$Union Field Schema)
+           (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Union Field FieldType Schema)
            org.apache.arrow.vector.types.UnionMode
            (xtdb.arrow Relation)
            xtdb.BufferPool
            (xtdb.trie ArrowHashTrie$Leaf HashTrie$Node ISegment MemoryHashTrie MemoryHashTrie$Leaf MergePlanNode TrieWriter)
            (xtdb.util TemporalBounds TemporalDimension)))
+
+;; Metadata parts
+
+(def metadata-read-handler-map
+  (transit/read-handler-map
+   (into {"xtdb/arrow-type" (transit/read-handler types/->arrow-type)
+          "xtdb/field-type" (transit/read-handler (fn [[arrow-type nullable?]]
+                                                    (if nullable?
+                                                      (FieldType/nullable arrow-type)
+                                                      (FieldType/notNullable arrow-type))))
+          "xtdb/field" (transit/read-handler (fn [[name field-type children]]
+                                               (Field. name field-type children)))}
+         serde/transit-read-handlers)))
+
+(def metadata-write-handler-map
+  (transit/write-handler-map
+   (into {ArrowType (transit/write-handler "xtdb/arrow-type" #(types/<-arrow-type %))
+          ;; beware that this currently ignores dictionary encoding and metadata of FieldType's
+          FieldType (transit/write-handler "xtdb/field-type"
+                                           (fn [^FieldType field-type]
+                                             [(.getType field-type) (.isNullable field-type)]))
+          Field (transit/write-handler "xtdb/field"
+                                       (fn [^Field field]
+                                         [(.getName field) (.getFieldType field) (.getChildren field)]))}
+         serde/transit-write-handlers)))
+
+(def ^java.nio.file.Path block-metadata-path (util/->path "blocks"))
+(def ^java.nio.file.Path block-table-metadata-path (util/->path "blocks"))
+
+(defn obj-key->block-idx [^Path obj-key]
+  (some->> (.getFileName obj-key)
+           (str)
+           (re-matches #"b(\p{XDigit}+).transit.json")
+           (second)
+           (util/<-lex-hex-string)))
+
+(defn ->block-metadata-obj-key [block-idx]
+  (.resolve block-metadata-path (format "b%s.transit.json" (util/->lex-hex-string block-idx))))
+
+(defn read-block-metadata-file [^bytes bytes]
+  (with-open [is (ByteArrayInputStream. bytes)]
+    (let [rdr (transit/reader is :json {:handlers metadata-read-handler-map})]
+      (transit/read rdr))))
+
+(defn write-block-metadata ^java.nio.ByteBuffer [latest-completed-tx table-block-paths]
+  (with-open [os (ByteArrayOutputStream.)]
+    (let [w (transit/writer os :json {:handlers metadata-write-handler-map})]
+      (transit/write w {:latest-completed-tx latest-completed-tx
+                        :table-block-paths table-block-paths}))
+    (ByteBuffer/wrap (.toByteArray os))))
+
+;; Trie parts
 
 (defn ->l0-l1-trie-key [^long level, ^long block-idx]
   (assert (<= 0 level 1))
