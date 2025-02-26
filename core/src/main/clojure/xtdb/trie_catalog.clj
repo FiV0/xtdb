@@ -1,6 +1,7 @@
 (ns xtdb.trie-catalog
   (:require [integrant.core :as ig]
             [xtdb.metadata :as meta]
+            [xtdb.object-store :as os]
             [xtdb.trie :as trie]
             [xtdb.util :as util])
   (:import [java.util Map]
@@ -178,14 +179,21 @@
 
   (trie-state [_ table-name] (.get !table-tries table-name)))
 
+(defn get-table-names [^BufferPool buffer-pool]
+  (when-let [bm-obj (last (.listAllObjects buffer-pool trie/block-metadata-path))]
+    (let [{bm-obj-key :key} (os/<-StoredObject bm-obj)
+          {:keys [table-block-paths]} (trie/read-block-metadata-file (.getByteArray buffer-pool bm-obj-key))]
+      (vec (for [table-block-path table-block-paths
+                 :let [{:keys [table-name]} (trie/parse-table-block-key table-block-path)]]
+             table-name)))))
+
 (defmethod ig/prep-key :xtdb/trie-catalog [_ opts]
-  (into {:buffer-pool (ig/ref :xtdb/buffer-pool)
-         :metadata-mgr (ig/ref ::meta/metadata-manager)}
+  (into {:buffer-pool (ig/ref :xtdb/buffer-pool)}
         opts))
 
-(defmethod ig/init-key :xtdb/trie-catalog [_ {:keys [^BufferPool buffer-pool, ^IMetadataManager metadata-mgr]}]
+(defmethod ig/init-key :xtdb/trie-catalog [_ {:keys [^BufferPool buffer-pool]}]
   (doto (TrieCatalog. (ConcurrentHashMap.) *l1-size-limit*)
-    (.addTries (for [table-name (.allTableNames metadata-mgr)
+    (.addTries (for [table-name (get-table-names buffer-pool)
                      ^ObjectStore$StoredObject obj (.listAllObjects buffer-pool (trie/->table-meta-dir table-name))]
                  (->added-trie table-name
                                (str (.getFileName (.getKey obj)))
