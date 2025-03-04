@@ -16,13 +16,6 @@
 
 (def ^:dynamic *l1-size-limit* (* 100 1024 1024))
 
-(defn ->added-trie ^xtdb.log.proto.AddedTrie [table-name, trie-key, ^long data-file-size]
-  (.. (AddedTrie/newBuilder)
-      (setTableName table-name)
-      (setTrieKey trie-key)
-      (setDataFileSize data-file-size)
-      (build)))
-
 (defn- superseded-l0-trie? [{:keys [l0-tries l1-tries]} {:keys [block-idx]}]
   (or (when-let [{l0-block-idx :block-idx} (first l0-tries)]
         (>= l0-block-idx block-idx))
@@ -190,7 +183,7 @@
                      :let [file-name (str (.getFileName (.getKey obj)))
                            [_ trie-key] (re-matches #"(.+)\.arrow" file-name)]
                      :when trie-key]
-                 (->added-trie table-name trie-key (.getSize obj))))))
+                 (trie/->added-trie table-name trie-key (.getSize obj))))))
 
 (defn trie-catalog ^xtdb.trie.TrieCatalog [node]
   (util/component node :xtdb/trie-catalog))
