@@ -170,7 +170,7 @@
             val-sym (gensym 'val)
 
             {:keys [continue] :as emitted-expr}
-            (expr/codegen-expr {:op :call, :f :boolean
+            (expr/codegen-expr {:op   :call, :f :boolean
                                 :args [{:op :if-some, :local val-sym, :expr {:op :variable, :variable col-sym}
                                         :then {:op :call, :f f
                                                :args [{:op :local, :local val-sym}, value-expr]}
