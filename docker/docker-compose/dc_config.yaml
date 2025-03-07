@@ -1,0 +1,19 @@
+server:
+  port: 5432
+
+log: !Kafka
+  bootstrapServers: !Env KAFKA_BOOTSTRAP_SERVERS
+  topic: !Env XTDB_LOG_TOPIC
+
+storage: !Remote
+  objectStore: !S3
+    bucket: !Env XTDB_MINIO_BUCKET
+    prefix: "xtdb-object-store"
+  localDiskCache: /var/lib/xtdb/buffers
+
+healthz:
+  port: 8080
+
+modules:
+- !HttpServer
+  port: 3000
