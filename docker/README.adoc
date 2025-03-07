@@ -12,3 +12,7 @@
 
 If you wish to build the local image with a different default configuration included, you can change the content of the `standalone/local_config.edn` file prior to building, or create a new file and replace references to `local_config.edn` with the new config file.
 The created uberjar should have all XTDB modules included, so the node can be configured however you wish.
+
+== Docker compose setup
+
+There is a docker compose setup under link:docker-compose[docker-compose]. It uses https://min.io/[minio] for object storage and confluence kafka (with KRaft, so no Zookeper needed). You need to run `./bin/build-docker-compose-image.sh` once so that the proper docker image gets build. The image contains the aws xtdb jar, but has some config tweaked especially for `minio`. It should then be as simple as running `docker-compose up` in the `docker-compose` folder.
