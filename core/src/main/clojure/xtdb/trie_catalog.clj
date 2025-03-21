@@ -197,12 +197,10 @@
 (defn current-tries [{:keys [tries]}]
   (->> tries
        (into [] (comp (mapcat val)
-                      (filter #(= (:state %) :live))))
-       (sort-by :block-idx)))
+                      (filter #(= (:state %) :live))))))
 
 (defn all-tries [{:keys [tries]}]
-  (->> (into [] (mapcat val) tries)
-       (sort-by :block-idx)))
+  (into [] (mapcat val) tries))
 
 (defn <-trie-metadata [^TrieMetadata trie-metadata]
   (when (.hasTemporalMetadata trie-metadata)
