@@ -126,11 +126,12 @@ internal class SegmentMerge(private val al: BufferAllocator) {
         segments: List<ISegment<*, *>>,
         pathFilter: ByteArray?,
         recencyPartitioning: RecencyPartitioning,
+        recencyPartition: RecencyPartition?
     ): Results {
         val schema = logDataRelSchema(segments.map { it.dataRel!!.schema })
 
         val outWriter = when(recencyPartitioning) {
-            RecencyPartitioning.Partition -> outWriters.PartitionedOutWriter(schema)
+            RecencyPartitioning.Partition -> outWriters.PartitionedOutWriter(schema, recencyPartition)
             is RecencyPartitioning.Preserve -> outWriters.OutRel(schema, recency = recencyPartitioning.recency)
         }
 
