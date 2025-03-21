@@ -243,8 +243,11 @@
                                                                                                                 (.build metadata-pred page-metadata)
                                                                                                                 col-names)
                                                                                          :page-metadata page-metadata})))
-                                                                              (-> (cat/trie-state trie-catalog table-name)
-                                                                                  (cat/current-tries)))
+                                                                              (let [res (-> (cat/trie-state trie-catalog table-name)
+                                                                                         (cat/current-tries)
+                                                                                         reverse)]
+                                                                                (prn (map :trie-key res))
+                                                                                res))
 
                                                                   live-table-wm (conj (-> (trie/->Segment (.getLiveTrie live-table-wm))
                                                                                           (assoc :memory-rel (.getLiveRelation live-table-wm))))

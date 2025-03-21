@@ -1104,3 +1104,69 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
   (doseq [batch (partition-all 1000 (range 400000))]
     (xt/submit-tx tu/*node* [(into [:put-docs :docs] (map (fn [idx] {:xt/id idx})) batch)]))
   (t/is (= [{:v 1 }] (xt/q tu/*node* "SELECT 1 AS v"))))
+
+(t/deftest test-same-entity-same-transaction
+  ;; depends on historical coming before historical
+  (t/testing "same st, vt"
+    (with-open [node (xtn/start-node)]
+      (xt/execute-tx node [[:put-docs :docs {:xt/id 1, :version 1} {:xt/id 1, :vervsion 2}]])
+
+      (t/is (= [{:xt/id 1, :vervsion 2}] (xt/q node "SELECT * FROM docs")))
+
+      (tu/finish-block! node)
+      (c/compact-all! node)
+
+      (t/is (= [{:xt/id 1, :vervsion 2}] (xt/q node "SELECT * FROM docs")))))
+
+  ;; depends on current coming before historical
+  (t/testing "overridden in valid-time"
+    (with-open [node (xtn/start-node (merge tu/*node-opts* {:log [:in-memory {:instant-src (tu/->mock-clock (tu/->instants :year))}]}))]
+      (xt/execute-tx node [[:put-docs {:into :docs :valid-from #inst "2023" :valid-to #inst "2024"}
+                            {:xt/id 1, :version 1}]
+                           [:put-docs {:into :docs :valid-from #inst "2022" :valid-to #inst "2025"}
+                            {:xt/id 1, :version 2}]])
+
+      (t/is (= [{:xt/id 1, :version 2}] (xt/q node "SELECT *, FROM docs FOR ALL VALID_TIME")))
+
+      (tu/finish-block! node)
+
+      (c/compact-all! node)
+
+      (t/is (= [{:xt/id 1, :version 2}] (xt/q node "SELECT * FROM docs FOR ALL VALID_TIME")))))
+
+
+  ;; depends on current coming before historical
+  (t/testing "split in valid-time"
+    (with-open [node (xtn/start-node {:log [:in-memory {:instant-src (tu/->mock-clock (tu/->instants :year))}]})]
+      (xt/execute-tx node [[:put-docs {:into :docs :valid-from #inst "2022" :valid-to #inst "2025"}
+                            {:xt/id 1, :version 2}]
+                           [:put-docs {:into :docs :valid-from #inst "2023" :valid-to #inst "2024"}
+                            {:xt/id 1, :version 1}]])
+
+      (t/is (= [{:xt/id 1, :version 1} {:xt/id 1, :version 2} {:xt/id 1, :version 2}]
+               (xt/q node "SELECT * FROM docs FOR ALL VALID_TIME")))
+
+      (tu/finish-block! node)
+
+      (c/compact-all! node)
+
+      (t/is (= [{:xt/id 1, :version 1} {:xt/id 1, :version 2} {:xt/id 1, :version 2}]
+               (xt/q node "SELECT * FROM docs FOR ALL VALID_TIME")))))
+
+  ;; depends on current coming before historical
+  (t/testing "overlapping valid-time"
+    (with-open [node (xtn/start-node {:log [:in-memory {:instant-src (tu/->mock-clock (tu/->instants :year))}]})]
+      (xt/execute-tx node [[:put-docs {:into :docs :valid-from #inst "2022" :valid-to #inst "2025"}
+                            {:xt/id 1, :version 2}]
+                           [:put-docs {:into :docs :valid-from #inst "2023" :valid-to #inst "2026"}
+                            {:xt/id 1, :version 1}]])
+
+      (t/is (= nil
+               (xt/q node "SELECT *, _valid_from, _valid_to FROM docs FOR ALL VALID_TIME")))
+
+      (tu/finish-block! node)
+
+      (c/compact-all! node)
+
+      (t/is (= nil
+               (xt/q node "SELECT *, _valid_from, _valid_to FROM docs FOR ALL VALID_TIME"))))))
