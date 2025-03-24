@@ -10,6 +10,7 @@ interface EventRowPointer {
     val index: Int
 
     val systemFrom: Long
+    val txIndex: Long
     val validFrom: Long
     val validTo: Long
     val op: String
@@ -22,6 +23,7 @@ interface EventRowPointer {
         private val iidReader: VectorReader = relReader["_iid"]
 
         private val sysFromReader: VectorReader = relReader["_system_from"]
+        private val txIndexReader: VectorReader = relReader["_tx_index"]
         private val validFromReader: VectorReader = relReader["_valid_from"]
         private val validToReader: VectorReader = relReader["_valid_to"]
 
@@ -46,6 +48,7 @@ interface EventRowPointer {
         override fun getIidPointer(reuse: ArrowBufPointer) = iidReader.getPointer(index, reuse)
 
         override val systemFrom get() = sysFromReader.getLong(index)
+        override val txIndex get() = txIndexReader.getLong(index)
         override val validFrom get() = validFromReader.getLong(index)
         override val validTo get() = validToReader.getLong(index)
         override val op get() = opReader.getLeg(index)!!
@@ -58,6 +61,7 @@ interface EventRowPointer {
         private val iidReader = relReader["_iid"]
 
         private val sysFromReader = relReader["_system_from"]
+        private val txIndexReader = relReader["_tx_index"]
         private val validFromReader = relReader["_valid_from"]
         private val validToReader = relReader["_valid_to"]
 
@@ -82,6 +86,7 @@ interface EventRowPointer {
         override fun getIidPointer(reuse: ArrowBufPointer) = iidReader.getPointer(index, reuse)
 
         override val systemFrom get() = sysFromReader.getLong(index)
+        override val txIndex get() = txIndexReader.getLong(index)
         override val validFrom get() = validFromReader.getLong(index)
         override val validTo get() = validToReader.getLong(index)
         override val op get() = opReader.getLeg(index)!!
@@ -97,8 +102,11 @@ interface EventRowPointer {
             val rightCmp = ArrowBufPointer()
 
             return Comparator { l, r ->
-                val cmp = l.getIidPointer(leftCmp).compareTo(r.getIidPointer(rightCmp))
-                if (cmp != 0) cmp else r.systemFrom.compareTo(l.systemFrom)
+                l.getIidPointer(leftCmp).compareTo(r.getIidPointer(rightCmp))
+                    .takeIf { it != 0 }
+                    ?: r.systemFrom.compareTo(l.systemFrom)
+                        .takeIf { it != 0 }
+                    ?: l.txIndex.compareTo(r.txIndex)
             }
         }
     }

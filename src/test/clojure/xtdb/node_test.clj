@@ -909,11 +909,11 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
             (let [{:keys [tx-id]} (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :bar}]])]
               (reset! !skiptxid tx-id))
             (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :baz}]]))
-          
+
           (t/testing "Can query three back out"
             (t/is (= (set [{:xt/id :foo} {:xt/id :bar} {:xt/id :baz}])
                      (set (xt/q node "SELECT * from xt_docs")))))))
-      
+
       (t/testing "node with txs to skip"
         (with-open [node (xtn/start-node {:log [:local {:path (str path "/log")}]
                                           :storage [:local {:path (str path "/storage")}]
@@ -921,10 +921,10 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
           (t/testing "Can query two back out - skipped one"
             (t/is (= (set [{:xt/id :foo} {:xt/id :baz}])
                      (set (xt/q node "SELECT * from xt_docs")))))
-          
+
           ;; Call finish-block! to write files
           (tu/finish-block! node)))
-      
+
       (t/testing "node can remove 'txs to skip' after block finished"
         (with-open [node (xtn/start-node {:log [:local {:path (str path "/log")}]
                                           :storage [:local {:path (str path "/storage")}]})]
@@ -954,8 +954,8 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
                                           :compactor {:threads 0}})]
           (t/testing "Can query one back out - skipped one"
             (t/is (= (set [{:xt/id :foo}]) (set (xt/q node "SELECT * from xt_docs")))))
-          
-          (t/testing "Latest submitted tx id should be the one that was skipped" 
+
+          (t/testing "Latest submitted tx id should be the one that was skipped"
             (t/is (= @!skiptxid (:tx-id (:latest-completed-tx (xt/status node))))))
 
           ;; Call finish-block! to write files
@@ -965,10 +965,10 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
         (with-open [node (xtn/start-node {:log [:local {:path (str path "/log")}]
                                           :storage [:local {:path (str path "/storage")}]
                                           :compactor {:threads 0}})]
-          
-          (t/testing "Latest submitted tx id should still be the one that was skipped" 
+
+          (t/testing "Latest submitted tx id should still be the one that was skipped"
             (t/is (= @!skiptxid (:tx-id (:latest-completed-tx (xt/status node))))))
-          
+
           (t/testing "Can send a new transaction after skipping one"
             (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :baz}]])
             (t/is (= (set [{:xt/id :foo} {:xt/id :baz}])
@@ -1104,3 +1104,73 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
   (doseq [batch (partition-all 1000 (range 400000))]
     (xt/submit-tx tu/*node* [(into [:put-docs :docs] (map (fn [idx] {:xt/id idx})) batch)]))
   (t/is (= [{:v 1 }] (xt/q tu/*node* "SELECT 1 AS v"))))
+
+(t/deftest test-same-entity-same-transaction
+  ;; depends on historical coming before historical
+  (t/testing "same st, vt"
+    (with-open [node (xtn/start-node)]
+      (xt/execute-tx node [[:put-docs :docs {:xt/id 1, :version 1} {:xt/id 1, :version 2}]])
+
+      (t/is (= [{:xt/id 1, :version 2}] (xt/q node "SELECT * FROM docs")))
+
+      (tu/finish-block! node)
+      (c/compact-all! node)
+
+      (t/is (= [{:xt/id 1, :version 2}] (xt/q node "SELECT * FROM docs")))))
+
+  #_#_#_
+  ;; depends on current coming before historical
+  (t/testing "overridden in valid-time"
+    (with-open [node (xtn/start-node (merge tu/*node-opts* {:log [:in-memory {:instant-src (tu/->mock-clock (tu/->instants :year))}]}))]
+      (xt/execute-tx node [[:put-docs {:into :docs :valid-from #inst "2023" :valid-to #inst "2024"}
+                            {:xt/id 1, :version 1}]
+                           [:put-docs {:into :docs :valid-from #inst "2022" :valid-to #inst "2025"}
+                            {:xt/id 1, :version 2}]])
+
+      (t/is (= [{:xt/id 1, :version 2}] (xt/q node "SELECT *, FROM docs FOR ALL VALID_TIME")))
+
+      (tu/finish-block! node)
+
+      (c/compact-all! node)
+
+      ;; v2 split by v1
+      (t/is (= [{:xt/id 1, :version 2}] (xt/q node "SELECT * FROM docs FOR ALL VALID_TIME")))))
+
+
+  ;; depends on current coming before historical
+  (t/testing "split in valid-time"
+    (with-open [node (xtn/start-node {:log [:in-memory {:instant-src (tu/->mock-clock (tu/->instants :year))}]})]
+      (xt/execute-tx node [[:put-docs {:into :docs :valid-from #inst "2022" :valid-to #inst "2025"}
+                            {:xt/id 1, :version 2}]
+                           [:put-docs {:into :docs :valid-from #inst "2023" :valid-to #inst "2024"}
+                            {:xt/id 1, :version 1}]])
+
+      (t/is (= [{:xt/id 1, :version 1} {:xt/id 1, :version 2} {:xt/id 1, :version 2}]
+               (xt/q node "SELECT * FROM docs FOR ALL VALID_TIME")))
+
+      (tu/finish-block! node)
+
+      (c/compact-all! node)
+
+      ;; only version 2 is visible
+      (t/is (= [{:xt/id 1, :version 1} {:xt/id 1, :version 2} {:xt/id 1, :version 2}]
+               (xt/q node "SELECT * FROM docs FOR ALL VALID_TIME")))))
+
+  (t/testing "overlapping valid-time"
+    (with-open [node (xtn/start-node {:log [:in-memory {:instant-src (tu/->mock-clock (tu/->instants :year))}]})]
+      (xt/execute-tx node [[:put-docs {:into :docs :valid-from #inst "2022" :valid-to #inst "2025"}
+                            {:xt/id 1, :version 2}]
+                           [:put-docs {:into :docs :valid-from #inst "2023" :valid-to #inst "2026"}
+                            {:xt/id 1, :version 1}]])
+
+      ;; v2 cut of by v1
+      (t/is (= nil
+               (xt/q node "SELECT *, _valid_from, _valid_to FROM docs FOR ALL VALID_TIME")))
+
+      (tu/finish-block! node)
+
+      (c/compact-all! node)
+
+      ;; v1 cut of by v2
+      (t/is (= nil
+               (xt/q node "SELECT *, _valid_from, _valid_to FROM docs FOR ALL VALID_TIME"))))))

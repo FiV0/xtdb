@@ -35,6 +35,7 @@ constructor(
 
     private val iidWtr = liveRelation.vectorFor("_iid")
     private val systemFromWtr = liveRelation.vectorFor("_system_from")
+    private val txIndexWtr = liveRelation.vectorFor("_tx_index")
     private val validFromWtr = liveRelation.vectorFor("_valid_from")
     private val validToWtr = liveRelation.vectorFor("_valid_to")
 
@@ -78,12 +79,14 @@ constructor(
         val liveRelation: IRelationWriter = this@LiveTable.liveRelation
 
         private val startPos = liveRelation.rowCount
+        private var txIndexCnt = 0L
 
         fun logPut(iid: ByteBuffer, validFrom: Long, validTo: Long, writeDocFun: Runnable) {
             val pos = liveRelation.rowCount
 
             iidWtr.writeBytes(iid)
             systemFromWtr.writeLong(systemFrom)
+            txIndexWtr.writeLong(txIndexCnt++)
             validFromWtr.writeLong(validFrom)
             validToWtr.writeLong(validTo)
 
@@ -100,6 +103,7 @@ constructor(
 
             iidWtr.writeBytes(iid)
             systemFromWtr.writeLong(systemFrom)
+            txIndexWtr.writeLong(txIndexCnt++)
             validFromWtr.writeLong(validFrom)
             validToWtr.writeLong(validTo)
             deleteWtr.writeNull()
@@ -114,6 +118,7 @@ constructor(
 
             iidWtr.writeBytes(iid)
             systemFromWtr.writeLong(systemFrom)
+            txIndexWtr.writeLong(txIndexCnt++)
             validFromWtr.writeLong(MIN_LONG)
             validToWtr.writeLong(MAX_LONG)
             eraseWtr.writeNull()

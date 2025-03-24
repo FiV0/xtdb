@@ -292,14 +292,16 @@
   (util/with-close-on-catch [out-rel-writer (Trie/openLogDataWriter allocator (Trie/dataRelSchema pg-user-field))]
     (let [{^VectorWriter iid-wrt "_iid",
            ^VectorWriter sys-wrt "_system_from"
+           ^VectorWriter tx-index-wrt "_tx_index"
            ^VectorWriter vf-wrt "_valid_from",
            ^VectorWriter vt-wrt "_valid_to"} out-rel-writer
 
           ^VectorWriter put-wrt (get-in out-rel-writer ["op" "put"])]
 
-      (doseq [user initial-user-data]
+      (doseq [[i user] (map-indexed vector initial-user-data)]
         (.writeObject iid-wrt (util/->iid (:_id user)))
         (.writeLong sys-wrt 0)
+        (.writeLong tx-index-wrt i)
         (.writeLong vf-wrt 0)
         (.writeLong vt-wrt Long/MAX_VALUE)
         (.writeObject put-wrt user)

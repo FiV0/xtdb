@@ -115,6 +115,7 @@ object Trie {
         Schema(
             "_iid" to Fields.IID,
             "_system_from" to Fields.TEMPORAL,
+            "_tx_index" to Fields.I64,
             "_valid_from" to Fields.TEMPORAL,
             "_valid_to" to Fields.TEMPORAL,
             "op" to Fields.Union(
