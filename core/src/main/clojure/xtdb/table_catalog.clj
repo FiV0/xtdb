@@ -34,16 +34,13 @@
   (.resolve (.resolve table-path block-table-metadata-path)
             (format "b%s.binpb" (util/->lex-hex-string block-idx))))
 
-(defn- byte-buf->nio-buf ^ByteBuffer [^ByteBuf byte-buf]
-  (.nioBuffer byte-buf 0 (.capacity byte-buf)))
-
 (defn write-table-block-data ^java.nio.ByteBuffer [^Schema table-schema ^long row-count
                                                    current-tries hlls]
   (ByteBuffer/wrap (-> (doto (TableBlock/newBuilder)
                          (.setArrowSchema (ByteString/copyFrom (.serializeAsMessage table-schema)))
                          (.setRowCount row-count)
                          (.addAllCurrentTries current-tries)
-                         (.putAllColumnNameToHll ^Map (update-vals hlls #(ByteString/copyFrom (byte-buf->nio-buf %)))))
+                         (.putAllColumnNameToHll ^Map (update-vals hlls #(ByteString/copyFrom ^ByteBuffer %))))
                        (.build)
                        (.toByteArray))))
 
