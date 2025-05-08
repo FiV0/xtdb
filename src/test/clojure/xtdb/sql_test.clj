@@ -2038,15 +2038,6 @@
     (t/is (= [{:xt/id 1, :value 4}]
              (xt/q tu/*node* "SELECT * FROM readings")))))
 
-(t/deftest test-disallow-col-refs-in-period-specs-3447
-  (t/is (thrown-with-msg? IllegalArgumentException
-                          #"line 1:41 mismatched input 'foo' expecting"
-                          (xt/q tu/*node* "SELECT * FROM docs FOR SYSTEM_TIME AS OF foo")))
-
-  (t/is (thrown-with-msg? IllegalArgumentException
-                          #"line 1:42 mismatched input 'bar' expecting"
-                          (xt/q tu/*node* "SELECT * FROM docs FOR VALID_TIME BETWEEN bar AND baz"))))
-
 (t/deftest test-portion-of-valid-time-boundary
   (xt/submit-tx tu/*node* [[:sql "
 INSERT INTO system_active_power (_id, value, _valid_from, _valid_to)
@@ -2916,7 +2907,7 @@ UNION ALL
 
 (t/deftest iseq-from-symbol-bug-4378
   (t/is (thrown-with-msg? IllegalArgumentException #"Subquery arity error"
-         (sql/plan "
+                          (sql/plan "
 WITH dates AS (
   SELECT TIMESTAMP '2023-01-01T00:00:00Z' AS d
   UNION ALL
@@ -2965,3 +2956,22 @@ FROM dates"))))
              (xt/q tu/*node* [(format "FROM (XTQL $$ %s $$) t SELECT *, ? AS x"
                                       (pr-str '#(from :bar [{:xt/id %} *])))
                               2 "x"])))))
+
+(t/deftest temporal-filter-expressions-3306
+  (xt/execute-tx tu/*node* [[:put-docs :docs {:xt/id 1 :xt/valid-from #inst "2000-01-01" :xt/valid-to #inst "2100-01-01"}]])
+
+  (t/is (= [#:xt{:id 1}]
+           (xt/q tu/*node* "SELECT * FROM docs FOR VALID_TIME AS OF (CURRENT_TIMESTAMP - INTERVAL 'PT1M')")))
+
+  (t/is (= [#:xt{:id 1}]
+           (xt/q tu/*node* ["SELECT * FROM docs FOR VALID_TIME AS OF (? - INTERVAL 'PT1M')" #inst "2020"])))
+
+  (t/is (= [#:xt{:id 1}]
+           (xt/q tu/*node* "SELECT * FROM docs FOR VALID_TIME FROM (CURRENT_TIMESTAMP - INTERVAL 'P1Y') TO CURRENT_TIMESTAMP")))
+
+  (t/is (= [#:xt{:id 1}]
+           (xt/q tu/*node* "SELECT * FROM docs FOR VALID_TIME BETWEEN CURRENT_TIMESTAMP AND (CURRENT_TIMESTAMP + INTERVAL 'P1Y')")))
+
+  (t/is (= []
+           (xt/q tu/*node* "SELECT * FROM docs FOR VALID_TIME FROM (CURRENT_TIMESTAMP + INTERVAL 'P100Y') TO (CURRENT_TIMESTAMP + INTERVAL 'P200Y')"))
+        "Interval outside period"))

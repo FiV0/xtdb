@@ -273,8 +273,7 @@
      (-> ctx (.periodSpecificationExpr 0) (.accept this))
      (-> ctx (.periodSpecificationExpr 1) (.accept this))])
 
-  (visitPeriodSpecLiteral [_ ctx] (-> (.literal ctx) (.accept expr-visitor)))
-  (visitPeriodSpecParam [_ ctx] (-> (.parameterSpecification ctx) (.accept expr-visitor)))
+  (visitPeriodSpecExpr [_ ctx] (-> (.expr ctx) (.accept expr-visitor)))
   (visitPeriodSpecNow [_ _] :now))
 
 (defrecord MultipleTimePeriodSpecifications []

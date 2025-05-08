@@ -170,3 +170,26 @@
                 (period ~f1 ~t1)
                 ~(sql/->col-sym 'col1)))))
        "not possible to tell if col1 is a period or a scalar temporal value (timestamp etc.)"))))
+
+(t/deftest test-wrap-temporal-scan-expressions
+  (t/is
+   (=plan-file
+    "test-wrap-temporal-scan-expressions-valid-time-at"
+    (lp/wrap-temporal-scan-expressions
+     '[:scan {:table public/docs :for-valid-time [:at (+ (current-timestamp) #xt/interval "P12M")]} [_id]])))
+
+  (t/is
+   (=plan-file
+    "test-wrap-temporal-scan-expressions-system-time-in"
+    (lp/wrap-temporal-scan-expressions
+     '[:scan {:table public/docs :for-system-time [:in (current-timestamp) (+ (current-timestamp) #xt/interval "P12M")]} [_id]])))
+
+  (t/is
+   (=plan-file
+    "test-wrap-temporal-scan-expressions-valid-time-and-system-time"
+    (lp/wrap-temporal-scan-expressions
+     '[:scan
+       {:table public/docs
+        :for-system-time [:between (current-timestamp) (+ (current-timestamp) #xt/interval "P12M")]
+        :for-valid-time [:in (current-timestamp) (+ (current-timestamp) #xt/interval "P12M")]}
+       [_id]]))))

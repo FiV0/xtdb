@@ -48,7 +48,8 @@
 (s/def ::temporal-filter-value
   (s/or :now #{:now '(current-timestamp)}
         :literal (some-fn util-date? temporal?)
-        :param simple-symbol?))
+        :param simple-symbol?
+        :expr ::expression))
 
 (defmethod temporal-filter-spec :at [_]
   (s/tuple #{:at} ::temporal-filter-value))
@@ -1307,6 +1308,51 @@
                                    (:rel %)) indexed-rels)]
           [:mega-join output-join-conditions output-rels])))))
 
+(defn temporal-expression? [constraint]
+  (letfn [(temporal-expr-filter? [[tag _arg]] (= :expr tag))]
+    (when-let [[tag & args] constraint]
+      (case tag
+        (:at :in :between)
+        (some temporal-expr-filter? args)
+
+        :all-time false))))
+
+(defn constraint->predicates [constraint [from-col to-col]]
+  (when-let [[tag & args] constraint]
+    (case tag
+      :at (let [[_tag arg] (first args)]
+            (xt/template (and (<= ~from-col ~arg) (< ~arg ~to-col))))
+
+      :in (let [[[_ from-arg] [_ to-arg]] args]
+            (xt/template (and (< ~from-col ~to-arg) (< ~from-arg ~to-col))))
+
+      ;; [from-col to-col) ∧ [from-arg to-arg]
+      :between (let [[[_ from-arg] [_ to-arg]] args]
+                 (xt/template (and (<= ~from-col ~to-arg) (< ~from-arg ~to-col)))))))
+
+(defn wrap-temporal-scan-expressions [z]
+  (r/zmatch z
+    [:scan scan-opts scan-columns]
+    ;;=>
+    (let [{:keys [for-valid-time for-system-time]} scan-opts
+          for-valid-time (some->> for-valid-time (s/conform ::for-valid-time))
+          for-system-time (some->> for-system-time (s/conform ::for-system-time))
+          vt-temporal-expression? (temporal-expression? for-valid-time)
+          st-temporal-expression? (temporal-expression? for-system-time)]
+      (when (or vt-temporal-expression? st-temporal-expression?)
+        [:project scan-columns
+         (let [scan-opts (cond-> scan-opts
+                           vt-temporal-expression? (assoc :for-valid-time :all-time)
+                           st-temporal-expression? (assoc :for-system-time :all-time))
+               scan-columns (cond-> (into #{} scan-columns)
+                              vt-temporal-expression? (conj '_valid_from '_valid_to)
+                              st-temporal-expression? (conj '_system_from '_system_to)
+                              :always vec)]
+           (cond->> [:scan scan-opts scan-columns]
+             vt-temporal-expression? (conj [:select (constraint->predicates for-valid-time '[_valid_from _valid_to])])
+             st-temporal-expression? (conj [:select (constraint->predicates for-system-time '[_system_from _system_to])])))]))))
+
+
 (def ^:private push-correlated-selection-down-past-join (partial push-selection-down-past-join true))
 (def ^:private push-correlated-selection-down-past-rename (partial push-selection-down-past-rename true))
 (def ^:private push-correlated-selection-down-past-project (partial push-selection-down-past-project true))
@@ -1395,7 +1441,8 @@
                       %))
                   (r/innermost (r/mono-tp (instrument-rules optimise-plan-rules)))
                   (r/topdown (r/adhoc-tp r/id-tp (instrument-rules [#'rewrite-equals-predicates-in-join-as-equi-join-map])))
-                  (r/innermost (r/mono-tp (instrument-rules [#'merge-joins-to-mega-join])))
+                  (r/innermost (r/mono-tp (instrument-rules [#'merge-joins-to-mega-join
+                                                             #'wrap-temporal-scan-expressions])))
                   (r/node))))))))
 
 (defn validate-plan [plan]

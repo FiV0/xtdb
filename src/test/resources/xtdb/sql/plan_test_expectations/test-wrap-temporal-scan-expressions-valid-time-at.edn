@@ -1,0 +1,9 @@
+[:project
+ [_id]
+ [:select
+  (and
+   (<= _valid_from (+ (current-timestamp) #xt/interval "P12M"))
+   (< (+ (current-timestamp) #xt/interval "P12M") _valid_to))
+  [:scan
+   {:table public/docs, :for-valid-time :all-time}
+   [_valid_from _id _valid_to]]]]

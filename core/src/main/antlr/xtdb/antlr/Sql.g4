@@ -595,10 +595,10 @@ tableTimePeriodSpecification
 
 // replace usages of this with dateTimeExpr when possible - #3306
 periodSpecificationExpr
-    : literal #PeriodSpecLiteral
-    | parameterSpecification #PeriodSpecParam
+    : expr #PeriodSpecExpr
     | ('NOW' | 'CURRENT_TIMESTAMP') #PeriodSpecNow
     ;
+
 
 tableOrQueryName : tableName ;
 
