@@ -318,7 +318,7 @@
 
 (defn with-xtdb [f]
   (require 'xtdb.sql.logic-test.xtdb-engine)
-  (binding [*db-engine* tu/*node*]
+  (binding [*db-engine* (.getConnection tu/*node*)]
     (f)))
 
 (defn with-jdbc [url f]
