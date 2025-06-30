@@ -350,7 +350,8 @@
         clock (tu/->mock-clock (tu/->instants :year))]
     (util/delete-dir node-dir)
 
-    (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0 :instant-src clock})]
+    (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0 :instant-src clock
+                                       :instant-source-for-non-tx-msgs? true})]
       (let [cat (cat/trie-catalog node)]
         (xt/execute-tx node [[:put-docs :foo {:xt/id 1}]])
         (tu/finish-block! node)
@@ -410,7 +411,8 @@
   (binding [c/*ignore-signal-block?* true]
     (let [node-dir (util/->path "target/trie-catalog-test/test-trie-garbage-collection")
           clock (tu/->mock-clock (tu/->instants :year))
-          opts {:node-dir node-dir, :compactor-threads 1 :instant-src clock :gc? false}]
+          opts {:node-dir node-dir, :compactor-threads 1 :instant-src clock :gc? false
+                :instant-source-for-non-tx-msgs? true}]
       (util/delete-dir node-dir)
 
       (t/testing "without gcing"
@@ -475,7 +477,8 @@
     (let [node-dir (util/->path "target/trie-catalog-test/test-default-garbage-collection")
           clock (tu/->mock-clock (tu/->instants :hour))
           opts {:node-dir node-dir, :compactor-threads 1 :instant-src clock
-                :gc? false :blocks-to-keep 2 :garbage-lifetime (Duration/ofHours 0)}]
+                :gc? false :blocks-to-keep 2 :garbage-lifetime (Duration/ofHours 0)
+                :instant-source-for-non-tx-msgs? true}]
       (util/delete-dir node-dir)
 
       (with-open [node (tu/->local-node opts)]
