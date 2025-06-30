@@ -173,11 +173,10 @@
                                                             (throw (.exception ^StructuredTaskScope$Subtask %)))))))
                                    (util/rethrowing-cause))]
             (let [added-tries (for [[table-name {:keys [trie-key data-file-size trie-metadata state]}] table-metadata]
-                                (trie/->trie-details table-name trie-key data-file-size trie-metadata state))
-                  ;; TODO this will halt the indexer again so needs to be changes
-                  ^Log$MessageMetadata message-metadata @(.appendMessage log (Log$Message$TriesAdded. Storage/VERSION added-tries))]
+                                (trie/->trie-details table-name trie-key data-file-size trie-metadata state))]
+              (.appendMessage log (Log$Message$TriesAdded. Storage/VERSION added-tries))
               (doseq [^TrieDetails added-trie added-tries]
-                (.addTries trie-cat (.getTableName added-trie) [added-trie] (.getLogTimestamp message-metadata))))
+                (.addTries trie-cat (.getTableName added-trie) [added-trie] (.getSystemTime latest-completed-tx))))
             (let [all-tables (set (concat (keys table-metadata) (.getAllTableNames block-cat)))
                   table->all-tries (->> all-tables
                                         (map (fn [table-name]

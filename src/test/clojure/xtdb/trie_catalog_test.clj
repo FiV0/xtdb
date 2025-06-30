@@ -359,9 +359,10 @@
         (xt/execute-tx node [[:put-docs :foo {:xt/id 2}]])
         (tu/finish-block! node)
 
+        ;; L0 files get the as-of time of the latest-completed-tx when the block finishes
         (t/is (= #{"public/foo" "xt/txs"} (.getTableNames cat)))
-        (t/is (= #{["l00-rc-b01" #xt/instant "2023-01-01T00:00:00Z"]
-                   ["l00-rc-b00" #xt/instant "2021-01-01T00:00:00Z"]}
+        (t/is (= #{["l00-rc-b01" #xt/instant "2022-01-01T00:00:00Z"]
+                   ["l00-rc-b00" #xt/instant "2020-01-01T00:00:00Z"]}
                  (->> (cat/current-tries (cat/trie-state cat "public/foo"))
                       (into #{} (map (juxt :trie-key :as-of))))))))
 
@@ -369,8 +370,8 @@
     (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0})]
       (let [cat (cat/trie-catalog node)]
         (t/is (= #{"public/foo" "xt/txs"} (.getTableNames cat)))
-        (t/is (= #{["l00-rc-b01" #xt/instant "2023-01-01T00:00:00Z"]
-                   ["l00-rc-b00" #xt/instant "2021-01-01T00:00:00Z"]}
+        (t/is (= #{["l00-rc-b01" #xt/instant "2022-01-01T00:00:00Z"]
+                   ["l00-rc-b00" #xt/instant "2020-01-01T00:00:00Z"]}
                  (->> (cat/current-tries (cat/trie-state cat "public/foo"))
                       (into #{} (map (juxt :trie-key :as-of))))))))
 
