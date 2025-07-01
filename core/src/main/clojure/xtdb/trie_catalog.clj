@@ -238,7 +238,7 @@
 
 (defn garbage-fn [as-of]
   (fn [{:keys [level] other-as-of :as-of}]
-    (when (not= level 1)
+    (when (not= level 0)
       (<= (compare other-as-of as-of) 0))))
 
 (defn garbage-tries [{:keys [tries]} as-of]

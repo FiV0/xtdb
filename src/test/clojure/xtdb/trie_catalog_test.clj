@@ -433,8 +433,7 @@
           (tu/finish-block! node)
           (c/compact-all! node #xt/duration "PT1S")
 
-          (t/is (= [
-                    ["l00-rc-b00" :garbage #xt/instant "2025-01-01T00:00:00Z"]
+          (t/is (= [["l00-rc-b00" :garbage #xt/instant "2025-01-01T00:00:00Z"]
                     ["l00-rc-b01" :garbage #xt/instant "2027-01-01T00:00:00Z"]
                     ["l01-rc-b00" :garbage #xt/instant "2027-01-01T00:00:00Z"]
                     ["l01-rc-b01" :live #xt/instant "2027-01-01T00:00:00Z"]]
@@ -444,13 +443,15 @@
         (with-open [node (tu/->local-node opts)]
           (let [gc (gc/garbage-collector node)]
             (.garbageCollect gc #xt/instant "2025-01-01T00:00:00Z")
-            (t/is (= [["l00-rc-b01" :garbage #xt/instant "2027-01-01T00:00:00Z"]
+            (t/is (= [["l00-rc-b00" :garbage #xt/instant "2025-01-01T00:00:00Z"]
+                      ["l00-rc-b01" :garbage #xt/instant "2027-01-01T00:00:00Z"]
                       ["l01-rc-b00" :garbage #xt/instant "2027-01-01T00:00:00Z"]
                       ["l01-rc-b01" :live #xt/instant "2027-01-01T00:00:00Z"]]
                      (all-tries node)))
 
             (.garbageCollect gc #xt/instant "2027-01-01T00:00:00Z")
-            (t/is (= [["l01-rc-b00" :garbage #xt/instant "2027-01-01T00:00:00Z"]
+            (t/is (= [["l00-rc-b00" :garbage #xt/instant "2025-01-01T00:00:00Z"]
+                      ["l00-rc-b01" :garbage #xt/instant "2027-01-01T00:00:00Z"]
                       ["l01-rc-b01" :live #xt/instant "2027-01-01T00:00:00Z"]]
                      (all-tries node))))))
 
@@ -471,16 +472,16 @@
 
             (t/is (= (->> [["l00-rc-b00" :garbage #xt/instant "2025-01-01T00:00:00Z"]
                            ["l00-rc-b01" :garbage #xt/instant "2027-01-01T00:00:00Z"]
-                           ["l00-rc-b02" :garbage #xt/instant "2030-01-01T00:00:00Z"]
-                           ["l00-rc-b03" :live #xt/instant "2030-01-01T00:00:00Z"]
+                           ["l00-rc-b02" :garbage #xt/instant "2032-01-01T00:00:00Z"]
+                           ["l00-rc-b03" :live #xt/instant "2032-01-01T00:00:00Z"]
                            ["l01-rc-b00" :garbage #xt/instant "2027-01-01T00:00:00Z"]
-                           ["l01-rc-b01" :garbage #xt/instant "2030-01-01T00:00:00Z"]
-                           ["l01-rc-b02" :live #xt/instant "2030-01-01T00:00:00Z"]
-                           ["l02-rc-p0-b01" :live #xt/instant "2030-01-01T00:00:00Z"]
-                           ["l02-rc-p1-b01" :live #xt/instant "2030-01-01T00:00:00Z"]
-                           ["l02-rc-p2-b01" :live #xt/instant "2030-01-01T00:00:00Z"]
-                           ["l02-rc-p3-b01" :live #xt/instant "2030-01-01T00:00:00Z"]]
-                          (remove (every-pred (comp #(not (str/starts-with? % "l01")) first) (comp #{:garbage} second))))
+                           ["l01-rc-b01" :garbage #xt/instant "2032-01-01T00:00:00Z"]
+                           ["l01-rc-b02" :live #xt/instant "2032-01-01T00:00:00Z"]
+                           ["l02-rc-p0-b01" :live #xt/instant "2032-01-01T00:00:00Z"]
+                           ["l02-rc-p1-b01" :live #xt/instant "2032-01-01T00:00:00Z"]
+                           ["l02-rc-p2-b01" :live #xt/instant "2032-01-01T00:00:00Z"]
+                           ["l02-rc-p3-b01" :live #xt/instant "2032-01-01T00:00:00Z"]]
+                          (remove (every-pred (comp #(not (str/starts-with? % "l00")) first) (comp #{:garbage} second))))
                      (all-tries node)))))))))
 
 (t/deftest test-dry-trie-catalog-gc
@@ -529,9 +530,8 @@
                 ["l02-rc-p3-b01" :live #xt/instant "2002-01-01T00:00:00Z"]]
                (all-tries)))
 
-      (t/is (= [["l00-rc-b02" :garbage #xt/instant "2002-01-01T00:00:00Z"]
-                ["l00-rc-b01" :garbage #xt/instant "2001-01-01T00:00:00Z"]
-                ["l00-rc-b00" :garbage #xt/instant "2000-01-01T00:00:00Z"]]
+      (t/is (= [["l01-rc-b01" :garbage #xt/instant "2002-01-01T00:00:00Z"]
+                ["l01-rc-b00" :garbage #xt/instant "2001-01-01T00:00:00Z"]]
                (garbage-tries #xt/instant "2003-01-01T00:00:00Z"))))))
 
 
@@ -554,11 +554,12 @@
 
           (.garbageCollectFromOldestToKeep gc)
 
-          ;; we keep block 02 and 03
-          ;; the 02 latest-complete-tx is cutoff (no garbage lifetime), i.e. the level 0 block 02 file is also gone
-          (t/is (= [["l00-rc-b02" :garbage #xt/instant "2020-01-01T11:00:00Z"]
+          ;; we keep block 01 and 02
+          ;; the 01 latest-complete-tx is cutoff (no garbage lifetime), i.e. the level 1 block 01 remains as it is compacted later
+          (t/is (= [["l00-rc-b00" :garbage #xt/instant "2020-01-01T03:00:00Z"]
+                    ["l00-rc-b01" :garbage #xt/instant "2020-01-01T07:00:00Z"]
+                    ["l00-rc-b02" :garbage #xt/instant "2020-01-01T11:00:00Z"]
                     ["l00-rc-b03" :garbage #xt/instant "2020-01-01T15:00:00Z"]
-                    ["l01-rc-b00" :garbage #xt/instant "2020-01-01T07:00:00Z"]
                     ["l01-rc-b01" :garbage #xt/instant "2020-01-01T11:00:00Z"]
                     ["l01-rc-b02" :garbage #xt/instant "2020-01-01T15:00:00Z"]
                     ["l01-rc-b03" :live #xt/instant "2020-01-01T15:00:00Z"]]
@@ -567,15 +568,17 @@
           ;; all l1 files are present
           (t/is (= ["tables/public$foo/blocks/b02.binpb"
                     "tables/public$foo/blocks/b03.binpb"
+                    "tables/public$foo/data/l00-rc-b00.arrow"
+                    "tables/public$foo/data/l00-rc-b01.arrow"
                     "tables/public$foo/data/l00-rc-b02.arrow"
                     "tables/public$foo/data/l00-rc-b03.arrow"
-                    "tables/public$foo/data/l01-rc-b00.arrow"
                     "tables/public$foo/data/l01-rc-b01.arrow"
                     "tables/public$foo/data/l01-rc-b02.arrow"
                     "tables/public$foo/data/l01-rc-b03.arrow"
+                    "tables/public$foo/meta/l00-rc-b00.arrow"
+                    "tables/public$foo/meta/l00-rc-b01.arrow"
                     "tables/public$foo/meta/l00-rc-b02.arrow"
                     "tables/public$foo/meta/l00-rc-b03.arrow"
-                    "tables/public$foo/meta/l01-rc-b00.arrow"
                     "tables/public$foo/meta/l01-rc-b01.arrow"
                     "tables/public$foo/meta/l01-rc-b02.arrow"
                     "tables/public$foo/meta/l01-rc-b03.arrow"]
