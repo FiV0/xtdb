@@ -2,15 +2,22 @@
   (:require [clojure.string :as str]
             [clojure.test :as t]
             [xtdb.api :as xt]
+            [xtdb.buffer-pool :as bp]
             [xtdb.compactor :as c]
             [xtdb.garbage-collector :as gc]
             [xtdb.test-util :as tu]
             [xtdb.trie :as trie]
             [xtdb.trie-catalog :as cat]
-            [xtdb.util :as util])
+            [xtdb.util :as util]
+            [xtdb.buffer-pool-test :as bpt])
   (:import (java.time Duration Instant)
+           (java.util.concurrent ConcurrentHashMap)
+           (xtdb.api.storage ObjectStore$StoredObject)
            (xtdb.operator.scan Metadata)
+           (xtdb.trie_catalog TrieCatalog)
            (xtdb.util TemporalBounds)))
+
+(t/use-fixtures :once tu/with-allocator)
 
 (defn- apply-msgs [& trie-keys]
   (-> trie-keys
@@ -426,7 +433,8 @@
           (tu/finish-block! node)
           (c/compact-all! node #xt/duration "PT1S")
 
-          (t/is (= [["l00-rc-b00" :garbage #xt/instant "2025-01-01T00:00:00Z"]
+          (t/is (= [
+                    ["l00-rc-b00" :garbage #xt/instant "2025-01-01T00:00:00Z"]
                     ["l00-rc-b01" :garbage #xt/instant "2027-01-01T00:00:00Z"]
                     ["l01-rc-b00" :garbage #xt/instant "2027-01-01T00:00:00Z"]
                     ["l01-rc-b01" :live #xt/instant "2027-01-01T00:00:00Z"]]
@@ -475,6 +483,58 @@
                           (remove (every-pred (comp #(not (str/starts-with? % "l01")) first) (comp #{:garbage} second))))
                      (all-tries node)))))))))
 
+(t/deftest test-dry-trie-catalog-gc
+  (let [bp (bpt/remote-test-buffer-pool)
+        cat (TrieCatalog. bp (ConcurrentHashMap.) 20)] ;file-size-target
+    (letfn [(add-tries [tries inst]
+              (.addTries cat "public/foo"
+                         (map #(apply trie/->trie-details "public/foo" %) tries)
+                         inst))
+            (all-tries []
+              (->> (cat/all-tries (cat/trie-state cat "public/foo"))
+                   (map (juxt :trie-key :state :as-of))
+                   (sort-by (juxt :trie-key :state))))
+
+            (garbage-tries [as-of]
+              (->> (cat/garbage-tries (cat/trie-state cat "public/foo") as-of)
+                   (map (juxt :trie-key :state :as-of))
+                   (sort-by (juxt :trie-key :state))))]
+
+      (add-tries [["l00-rc-b00" 1] ["l01-rc-b00" 1]]
+                 #xt/instant "2000-01-01T00:00:00Z")
+      (add-tries [["l00-rc-b01" 1] ["l01-rc-b01" 1]]
+                 #xt/instant "2001-01-01T00:00:00Z")
+
+      (t/is (= [["l00-rc-b00" :garbage #xt/instant "2000-01-01T00:00:00Z"]
+                ["l00-rc-b01" :garbage #xt/instant "2001-01-01T00:00:00Z"]
+                ["l01-rc-b00" :garbage #xt/instant "2001-01-01T00:00:00Z"]
+                ["l01-rc-b01" :live #xt/instant "2001-01-01T00:00:00Z"]]
+               (all-tries)))
+
+      (add-tries [["l00-rc-b02" 1] ["l00-rc-b03" 1]
+                  ["l01-rc-b02" 2]
+                  ["l02-rc-p0-b01" 4] ["l02-rc-p1-b01" 4] ["l02-rc-p2-b01" 4] ["l02-rc-p3-b01"4]]
+                 #xt/instant "2002-01-01T00:00:00Z")
+
+      (t/is (= [["l00-rc-b00" :garbage #xt/instant "2000-01-01T00:00:00Z"]
+                ["l00-rc-b01" :garbage #xt/instant "2001-01-01T00:00:00Z"]
+                ["l00-rc-b02" :garbage #xt/instant "2002-01-01T00:00:00Z"]
+                ["l00-rc-b03" :live #xt/instant "2002-01-01T00:00:00Z"]
+                ["l01-rc-b00" :garbage #xt/instant "2001-01-01T00:00:00Z"]
+                ["l01-rc-b01" :garbage #xt/instant "2002-01-01T00:00:00Z"]
+                ["l01-rc-b02" :live #xt/instant "2002-01-01T00:00:00Z"]
+                ["l02-rc-p0-b01" :live #xt/instant "2002-01-01T00:00:00Z"]
+                ["l02-rc-p1-b01" :live #xt/instant "2002-01-01T00:00:00Z"]
+                ["l02-rc-p2-b01" :live #xt/instant "2002-01-01T00:00:00Z"]
+                ["l02-rc-p3-b01" :live #xt/instant "2002-01-01T00:00:00Z"]]
+               (all-tries)))
+
+      (t/is (= [["l00-rc-b02" :garbage #xt/instant "2002-01-01T00:00:00Z"]
+                ["l00-rc-b01" :garbage #xt/instant "2001-01-01T00:00:00Z"]
+                ["l00-rc-b00" :garbage #xt/instant "2000-01-01T00:00:00Z"]]
+               (garbage-tries #xt/instant "2003-01-01T00:00:00Z"))))))
+
+
 (t/deftest test-default-garbage-collection
   (binding [c/*ignore-signal-block?* true]
     (let [node-dir (util/->path "target/trie-catalog-test/test-default-garbage-collection")
@@ -485,21 +545,42 @@
       (util/delete-dir node-dir)
 
       (with-open [node (tu/->local-node opts)]
-        (let [gc (gc/garbage-collector node)]
-          (doseq [i (range 5)]
+        (let [gc (gc/garbage-collector node)
+              bp (bp/<-node node)]
+          (doseq [i (range 4)]
             (xt/execute-tx node [[:put-docs :foo {:xt/id i}]])
             (tu/finish-block! node)
             (c/compact-all! node #xt/duration "PT1S"))
 
-          (.garbageCollectFromOldestToKeep gc))
+          (.garbageCollectFromOldestToKeep gc)
 
-        ;; we keep block 02 and 03
-        ;; the 02 latest-complete-tx is cutoff (no garbage lifetime), i.e. the level 0 block 02 file is also gone
-        (t/is (= [["l00-rc-b03" :garbage #xt/instant "2020-01-01T15:00:00Z"]
-                  ["l00-rc-b04" :garbage #xt/instant "2020-01-01T19:00:00Z"]
-                  ["l01-rc-b00" :garbage #xt/instant "2020-01-01T07:00:00Z"]
-                  ["l01-rc-b01" :garbage #xt/instant "2020-01-01T11:00:00Z"]
-                  ["l01-rc-b02" :garbage #xt/instant "2020-01-01T15:00:00Z"]
-                  ["l01-rc-b03" :garbage #xt/instant "2020-01-01T19:00:00Z"]
-                  ["l01-rc-b04" :live #xt/instant "2020-01-01T19:00:00Z"]]
-                 (all-tries node)))))))
+          ;; we keep block 02 and 03
+          ;; the 02 latest-complete-tx is cutoff (no garbage lifetime), i.e. the level 0 block 02 file is also gone
+          (t/is (= [["l00-rc-b02" :garbage #xt/instant "2020-01-01T11:00:00Z"]
+                    ["l00-rc-b03" :garbage #xt/instant "2020-01-01T15:00:00Z"]
+                    ["l01-rc-b00" :garbage #xt/instant "2020-01-01T07:00:00Z"]
+                    ["l01-rc-b01" :garbage #xt/instant "2020-01-01T11:00:00Z"]
+                    ["l01-rc-b02" :garbage #xt/instant "2020-01-01T15:00:00Z"]
+                    ["l01-rc-b03" :live #xt/instant "2020-01-01T15:00:00Z"]]
+                   (all-tries node)))
+
+          ;; all l1 files are present
+          (t/is (= ["tables/public$foo/blocks/b02.binpb"
+                    "tables/public$foo/blocks/b03.binpb"
+                    "tables/public$foo/data/l00-rc-b02.arrow"
+                    "tables/public$foo/data/l00-rc-b03.arrow"
+                    "tables/public$foo/data/l01-rc-b00.arrow"
+                    "tables/public$foo/data/l01-rc-b01.arrow"
+                    "tables/public$foo/data/l01-rc-b02.arrow"
+                    "tables/public$foo/data/l01-rc-b03.arrow"
+                    "tables/public$foo/meta/l00-rc-b02.arrow"
+                    "tables/public$foo/meta/l00-rc-b03.arrow"
+                    "tables/public$foo/meta/l01-rc-b00.arrow"
+                    "tables/public$foo/meta/l01-rc-b01.arrow"
+                    "tables/public$foo/meta/l01-rc-b02.arrow"
+                    "tables/public$foo/meta/l01-rc-b03.arrow"]
+
+                   (->>
+                    (.listAllObjects bp)
+                    (map #(str (.getKey ^ObjectStore$StoredObject %)) )
+                    (filter #(str/starts-with? % "tables/public$foo"))))))))))

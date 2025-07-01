@@ -298,7 +298,8 @@
 
   (garbageCollectTries [_ table-name as-of]
     (doseq [{:keys [trie-key]} (garbage-tries (.get !table-cats table-name) as-of)]
-      (.deleteIfExists buffer-pool (Trie/dataFilePath table-name trie-key)))
+      (.deleteIfExists buffer-pool (Trie/dataFilePath table-name trie-key))
+      (.deleteIfExists buffer-pool (Trie/metaFilePath table-name trie-key)))
     (.compute !table-cats table-name
               (fn [_table-name tries]
                 (remove-garbage tries as-of))))
