@@ -236,16 +236,21 @@
        ;; the sort is needed as the table blocks need the current tries to be in the total order for restart
        (sort-by (juxt :level :block-idx #(or (:recency %) LocalDate/MAX)))))
 
+(defn garbage-fn [as-of]
+  (fn [{:keys [level] other-as-of :as-of}]
+    (when (not= level 1)
+      (<= (compare other-as-of as-of) 0))))
+
 (defn garbage-tries [{:keys [tries]} as-of]
   (->> (mapcat (comp  :garbage val) tries)
-       (filter (fn [{other-as-of :as-of}] (<= (compare other-as-of as-of) 0)))))
+       (filter (garbage-fn as-of))))
 
 (defn remove-garbage [table-cat as-of]
   (update table-cat :tries
           (fn [trie-levels]
             (update-vals trie-levels
                          (fn [{:keys [garbage] :as tries}]
-                           (assoc tries :garbage (remove (fn [{other-as-of :as-of}] (<= (compare other-as-of as-of) 0)) garbage)))))))
+                           (assoc tries :garbage (remove (garbage-fn as-of) garbage)))))))
 
 (defrecord CatalogEntry [^LocalDate recency ^TrieMetadata trie-metadata ^TemporalBounds query-bounds]
   Metadata

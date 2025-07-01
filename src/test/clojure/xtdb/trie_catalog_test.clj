@@ -1,13 +1,14 @@
 (ns xtdb.trie-catalog-test
-  (:require [clojure.test :as t]
+  (:require [clojure.string :as str]
+            [clojure.test :as t]
             [xtdb.api :as xt]
             [xtdb.compactor :as c]
+            [xtdb.garbage-collector :as gc]
             [xtdb.test-util :as tu]
             [xtdb.trie :as trie]
             [xtdb.trie-catalog :as cat]
-            [xtdb.util :as util]
-            [xtdb.garbage-collector :as gc])
-  (:import (java.time Instant Duration)
+            [xtdb.util :as util])
+  (:import (java.time Duration Instant)
            (xtdb.operator.scan Metadata)
            (xtdb.util TemporalBounds)))
 
@@ -441,7 +442,8 @@
                      (all-tries node)))
 
             (.garbageCollect gc #xt/instant "2027-01-01T00:00:00Z")
-            (t/is (= [["l01-rc-b01" :live #xt/instant "2027-01-01T00:00:00Z"]]
+            (t/is (= [["l01-rc-b00" :garbage #xt/instant "2027-01-01T00:00:00Z"]
+                      ["l01-rc-b01" :live #xt/instant "2027-01-01T00:00:00Z"]]
                      (all-tries node))))))
 
       (t/testing "artifically adding tries"
@@ -470,7 +472,7 @@
                            ["l02-rc-p1-b01" :live #xt/instant "2030-01-01T00:00:00Z"]
                            ["l02-rc-p2-b01" :live #xt/instant "2030-01-01T00:00:00Z"]
                            ["l02-rc-p3-b01" :live #xt/instant "2030-01-01T00:00:00Z"]]
-                          (remove (comp #{:garbage} second)))
+                          (remove (every-pred (comp #(not (str/starts-with? % "l01")) first) (comp #{:garbage} second))))
                      (all-tries node)))))))))
 
 (t/deftest test-default-garbage-collection
@@ -495,6 +497,8 @@
         ;; the 02 latest-complete-tx is cutoff (no garbage lifetime), i.e. the level 0 block 02 file is also gone
         (t/is (= [["l00-rc-b03" :garbage #xt/instant "2020-01-01T15:00:00Z"]
                   ["l00-rc-b04" :garbage #xt/instant "2020-01-01T19:00:00Z"]
+                  ["l01-rc-b00" :garbage #xt/instant "2020-01-01T07:00:00Z"]
+                  ["l01-rc-b01" :garbage #xt/instant "2020-01-01T11:00:00Z"]
                   ["l01-rc-b02" :garbage #xt/instant "2020-01-01T15:00:00Z"]
                   ["l01-rc-b03" :garbage #xt/instant "2020-01-01T19:00:00Z"]
                   ["l01-rc-b04" :live #xt/instant "2020-01-01T19:00:00Z"]]
