@@ -92,7 +92,10 @@
 (defn- filter-garbage [tries]
   ((juxt filter remove) #(= (:state %) :garbage) tries))
 
-(defn- supersede-partial-tries [{:keys [live+nascent garbage] :as tries} {:keys [^long block-idx as-of]} {:keys [^long file-size-target]}]
+(defn- supersede-partial-tries [{:keys [live+nascent garbage] :as tries}
+                                {:keys [^long block-idx] :as _trie}
+                                {:keys [^long file-size-target]}
+                                as-of]
   (let [[new-garbage live+nascent] (->> live+nascent
                                         (map (fn [{^long other-block-idx :block-idx, ^long other-size :data-file-size, other-state :state, :as other-trie}]
                                                (cond-> other-trie
@@ -100,7 +103,7 @@
                                                       (< other-size file-size-target)
                                                       (<= other-block-idx block-idx))
                                                  (-> (assoc :state :garbage
-                                                            :as-of as-of)
+                                                            :garbage-as-of as-of)
                                                      (dissoc :trie-metadata)))))
                                         filter-garbage)]
     (-> tries
@@ -115,9 +118,9 @@
       (:live :nascent) (assoc tries :live+nascent (conj live+nascent trie))
       :garbage (assoc tries :garbage (conj garbage trie)))))
 
-(defn- insert-levelled-trie [tries trie trie-cat]
+(defn- insert-levelled-trie [tries trie trie-cat as-of]
   (-> tries
-      (supersede-partial-tries trie trie-cat)
+      (supersede-partial-tries trie trie-cat as-of)
       (conj-trie trie :live)))
 
 (defn- supersede-by-block-idx [{:keys [live+nascent garbage] :as tries}, ^long block-idx as-of]
@@ -125,7 +128,7 @@
                                         (map (fn [{^long other-block-idx :block-idx, :as trie}]
                                                (cond-> trie
                                                  (<= other-block-idx block-idx) (-> (assoc :state :garbage
-                                                                                           :as-of as-of)
+                                                                                           :garbage-as-of as-of)
                                                                                     (dissoc :trie-metadata)))))
                                         filter-garbage)]
     (-> tries
@@ -144,27 +147,26 @@
                    (or (> ln-block-idx block-idx)
                        (= :nascent ln-state)))))))
 
-(defn- mark-block-idx-live [tries ^long block-idx as-of]
+(defn- mark-block-idx-live [tries ^long block-idx]
   (update tries :live+nascent
           #(doall (map (fn [{trie-state :state, trie-block-idx :block-idx, :as trie}]
                          (cond-> trie
                            (and (= trie-state :nascent)
                                 (= trie-block-idx block-idx))
-                           (assoc :state :live
-                                  :as-of as-of)))
+                           (assoc :state :live)))
                        %))))
 
-(defn- mark-part-group-live [table-tries {:keys [block-idx level recency part as-of]}]
+(defn- mark-part-group-live [table-tries {:keys [block-idx level recency part]}]
   (->> (let [pop-part (pop part)]
          (for [p (range branch-factor)]
            [level recency (conj pop-part p)]))
 
        (reduce (fn [table-tries shard-key]
                  (-> table-tries
-                     (update shard-key mark-block-idx-live block-idx as-of)))
+                     (update shard-key mark-block-idx-live block-idx)))
                table-tries)))
 
-(defn- insert-trie [table-cat {:keys [^long level, recency, part, ^long block-idx, as-of] :as trie} trie-cat]
+(defn- insert-trie [table-cat {:keys [^long level, recency, part, ^long block-idx] :as trie} trie-cat as-of]
   (case (long level)
     0 (-> table-cat
           (update-in [:tries [0 recency part]] conj-trie trie :live))
@@ -187,12 +189,12 @@
 
                           ;; mark L1H files live
                           (as-> table-tries (reduce (fn [acc recency]
-                                                      (-> acc (update [1 recency []] mark-block-idx-live block-idx as-of)))
+                                                      (-> acc (update [1 recency []] mark-block-idx-live block-idx)))
                                                     table-tries
                                                     (get-in table-cat [:l1h-recencies block-idx])))
 
                           ;; L1C files are levelled, so this supersedes any previous partial files
-                          (update [1 nil []] insert-levelled-trie trie trie-cat)
+                          (update [1 nil []] insert-levelled-trie trie trie-cat as-of)
 
                           ;; and supersede L0 files
                           (update [0 nil []] supersede-by-block-idx block-idx as-of))))
@@ -206,7 +208,7 @@
                   (fn [tries]
                     (-> tries
                         ;; L2H files are levelled, so this supersedes any previous partial files
-                        (update [2 recency part] insert-levelled-trie trie trie-cat)
+                        (update [2 recency part] insert-levelled-trie trie trie-cat as-of)
 
                         ;; we supersede any L1H files that we've incorporated into this L2H
                         (update [1 recency []] supersede-by-block-idx block-idx as-of)))))
@@ -221,10 +223,13 @@
                       (-> (mark-part-group-live trie)
                           (update [(dec level) recency (when (seq part) (pop part))] supersede-by-block-idx block-idx as-of)))))))))
 
-(defn apply-trie-notification [trie-cat table-cat trie]
-  (let [trie (-> trie (update :part vec))]
-    (cond-> table-cat
-      (not (stale-msg? table-cat trie)) (insert-trie trie trie-cat))))
+(defn apply-trie-notification
+  ([trie-cat table-cat trie]
+   (apply-trie-notification trie-cat table-cat trie nil))
+  ([trie-cat table-cat trie as-of]
+   (let [trie (-> trie (update :part vec))]
+     (cond-> table-cat
+       (not (stale-msg? table-cat trie)) (insert-trie trie trie-cat as-of)))))
 
 (defn current-tries [{:keys [tries]}]
   (->> tries
@@ -237,9 +242,9 @@
        (sort-by (juxt :level :block-idx #(or (:recency %) LocalDate/MAX)))))
 
 (defn garbage-fn [as-of]
-  (fn [{:keys [level] other-as-of :as-of}]
+  (fn [{:keys [level garbage-as-of]}]
     (when (not= level 0)
-      (<= (compare other-as-of as-of) 0))))
+      (<= (compare garbage-as-of as-of) 0))))
 
 (defn garbage-tries [{:keys [tries]} as-of]
   (->> (mapcat (comp  :garbage val) tries)
@@ -288,8 +293,8 @@
                             (apply-trie-notification this table-cat
                                                      (-> parsed-key
                                                          (assoc :data-file-size (.getDataFileSize added-trie)
-                                                                :trie-metadata (.getTrieMetadata added-trie)
-                                                                :as-of as-of)))
+                                                                :trie-metadata (.getTrieMetadata added-trie)))
+                                                     as-of)
                             table-cat))
                         (or tries {})
                         added-tries))))
