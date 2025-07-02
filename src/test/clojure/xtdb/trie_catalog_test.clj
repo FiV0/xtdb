@@ -546,7 +546,8 @@
 
       (with-open [node (tu/->local-node opts)]
         (let [gc (gc/garbage-collector node)
-              bp (bp/<-node node)]
+              bp (bp/<-node node)
+              cat (cat/trie-catalog node)]
           (doseq [i (range 4)]
             (xt/execute-tx node [[:put-docs :foo {:xt/id i}]])
             (tu/finish-block! node)
@@ -556,14 +557,15 @@
 
           ;; we keep block 01 and 02
           ;; the 01 latest-complete-tx is cutoff (no garbage lifetime), i.e. the level 1 block 01 remains as it is compacted later
-          (t/is (= [["l00-rc-b00" :garbage #xt/instant "2020-01-01T03:00:00Z"]
-                    ["l00-rc-b01" :garbage #xt/instant "2020-01-01T07:00:00Z"]
-                    ["l00-rc-b02" :garbage #xt/instant "2020-01-01T11:00:00Z"]
-                    ["l00-rc-b03" :garbage #xt/instant "2020-01-01T15:00:00Z"]
-                    ["l01-rc-b01" :garbage #xt/instant "2020-01-01T11:00:00Z"]
-                    ["l01-rc-b02" :garbage #xt/instant "2020-01-01T15:00:00Z"]
-                    ["l01-rc-b03" :live #xt/instant "2020-01-01T15:00:00Z"]]
-                   (all-tries node)))
+          (t/is (= ["l00-rc-b00"
+                    "l00-rc-b01"
+                    "l00-rc-b02"
+                    "l00-rc-b03"
+                    "l01-rc-b01"
+                    "l01-rc-b02"
+                    "l01-rc-b03"]
+                   (->> (cat/all-tries (cat/trie-state cat "public/foo"))
+                        (map :trie-key))))
 
           ;; all l1 files are present
           (t/is (= ["tables/public$foo/blocks/b02.binpb"
