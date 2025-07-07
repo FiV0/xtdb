@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+set -e
+
+if [[ "$#" -eq 0 ]]; then 
+    echo "Usage: $0 <branch-name>"
+    echo "Creates a git worktree under trees/ directory for the specified branch"
+    exit 1
+fi
+
+BRANCH_NAME=$1
+XTDB_PATH=$(realpath $(dirname $0)/..)
+TREES_PATH="$XTDB_PATH/trees"
+WORKTREE_PATH="$TREES_PATH/$BRANCH_NAME"
+
+# Create trees directory if it doesn't exist
+if [[ ! -d "$TREES_PATH" ]]; then
+    echo "Creating trees directory..."
+    mkdir -p "$TREES_PATH"
+fi
+
+# Check if worktree already exists
+if [[ -d "$WORKTREE_PATH" ]]; then
+    echo "Worktree already exists at $WORKTREE_PATH"
+    echo "To work in this worktree, run: cd $WORKTREE_PATH"
+    exit 0
+fi
+
+# Pull claude branch and ensure it's up to date
+echo "Updating claude branch..."
+git checkout claude
+git pull origin claude
+
+# Check if branch exists locally
+if git rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
+    echo "Branch $BRANCH_NAME already exists locally"
+    # Check if it exists on remote
+    if git rev-parse --verify "origin/$BRANCH_NAME" >/dev/null 2>&1; then
+        echo "Creating worktree from existing remote branch..."
+        git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
+    else
+        echo "Creating worktree from existing local branch..."
+        git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
+    fi
+else
+    # Check if branch exists on remote
+    if git rev-parse --verify "origin/$BRANCH_NAME" >/dev/null 2>&1; then
+        echo "Creating worktree from remote branch..."
+        git worktree add "$WORKTREE_PATH" "origin/$BRANCH_NAME"
+    else
+        echo "Creating new branch $BRANCH_NAME from claude..."
+        git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" claude
+    fi
+fi
+
+# Create symlink to CLAUDE.md from main directory
+if [[ -f "$XTDB_PATH/CLAUDE.md" ]]; then
+    echo "Creating symlink to CLAUDE.md..."
+    ln -sf "$XTDB_PATH/CLAUDE.md" "$WORKTREE_PATH/CLAUDE.md"
+fi
+
+echo "Worktree created successfully at $WORKTREE_PATH"
+echo "To work in this worktree, run: cd $WORKTREE_PATH"

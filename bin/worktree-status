@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+set -e
+
+XTDB_PATH=$(realpath $(dirname $0)/..)
+TREES_PATH="$XTDB_PATH/trees"
+
+# Check if trees directory exists
+if [[ ! -d "$TREES_PATH" ]]; then
+    echo "No trees directory found. No worktrees to manage."
+    exit 0
+fi
+
+# Get list of worktrees in trees directory
+WORKTREES=($(ls -1 "$TREES_PATH" 2>/dev/null || true))
+
+if [[ ${#WORKTREES[@]} -eq 0 ]]; then
+    echo "No worktrees found in trees directory."
+    exit 0
+fi
+
+echo "Current worktrees:"
+echo "=================="
+for i in "${!WORKTREES[@]}"; do
+    worktree_path="$TREES_PATH/${WORKTREES[$i]}"
+    if [[ -d "$worktree_path" ]]; then
+        # Get current branch in worktree
+        current_branch=$(cd "$worktree_path" && git branch --show-current 2>/dev/null || echo "unknown")
+        echo "$((i+1)). ${WORKTREES[$i]} (branch: $current_branch)"
+    fi
+done
+
+echo ""
+echo "Enter numbers to delete (space-separated, e.g., '1 3 5'), or press Enter to exit:"
+read -r selection
+
+if [[ -z "$selection" ]]; then
+    echo "No selection made. Exiting."
+    exit 0
+fi
+
+# Parse selection
+selected_numbers=($selection)
+worktrees_to_delete=()
+
+# Validate selections and collect worktrees to delete
+for num in "${selected_numbers[@]}"; do
+    if [[ "$num" =~ ^[0-9]+$ ]] && [[ "$num" -ge 1 ]] && [[ "$num" -le ${#WORKTREES[@]} ]]; then
+        worktree_name="${WORKTREES[$((num-1))]}"
+        worktrees_to_delete+=("$worktree_name")
+    else
+        echo "Invalid selection: $num (must be between 1 and ${#WORKTREES[@]})"
+        exit 1
+    fi
+done
+
+# Confirm deletion
+echo ""
+echo "About to delete the following worktrees:"
+for worktree in "${worktrees_to_delete[@]}"; do
+    echo "  - $worktree"
+done
+echo ""
+echo "Are you sure? (y/N)"
+read -r confirm
+
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+    echo "Deletion cancelled."
+    exit 0
+fi
+
+# Delete selected worktrees
+for worktree in "${worktrees_to_delete[@]}"; do
+    worktree_path="$TREES_PATH/$worktree"
+    echo "Deleting worktree: $worktree"
+    
+    # Remove the worktree using git
+    if git worktree remove "$worktree_path" 2>/dev/null; then
+        echo "  Successfully removed: $worktree"
+    else
+        echo "  Failed to remove with git worktree remove, trying force removal..."
+        if git worktree remove --force "$worktree_path" 2>/dev/null; then
+            echo "  Force removed: $worktree"
+        else
+            echo "  Git worktree remove failed, manually removing directory..."
+            rm -rf "$worktree_path"
+            echo "  Manually removed directory: $worktree"
+        fi
+    fi
+done
+
+echo ""
+echo "Cleanup complete!"
