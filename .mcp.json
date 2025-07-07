@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "clojure-mcp": {
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "PORT=$(cat .repl-port 2>/dev/null); clojure -X:mcp :port $PORT"
+      ]
+    }
+  }
+}

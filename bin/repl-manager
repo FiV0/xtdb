@@ -1,0 +1,164 @@
+#!/bin/bash
+set -e
+
+XTDB_PATH=$(realpath $(dirname $0)/..)
+PID_FILE="$XTDB_PATH/.repl-pid"
+PORT_FILE="$XTDB_PATH/.repl-port"
+
+case "$1" in
+    start)
+        # Kill existing REPL if PID file exists
+        if [ -f "$PID_FILE" ]; then
+            OLD_PID=$(cat "$PID_FILE")
+            if kill -0 $OLD_PID 2>/dev/null; then
+                echo "Killing existing REPL (PID: $OLD_PID)"
+                kill $OLD_PID 2>/dev/null || true
+                sleep 1
+            fi
+        fi
+        
+        # Find a free port for REPL
+        PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+        echo "Starting Clojure REPL on port $PORT"
+        echo $PORT > "$PORT_FILE"
+        
+        # Start REPL in background, capturing output to temp file
+        TEMP_LOG=$(mktemp)
+        ./gradlew :clojureRepl --port=$PORT > "$TEMP_LOG" 2>&1 &
+        REPL_PID=$!
+        echo $REPL_PID > "$PID_FILE"
+        
+        # Start tailing the log file in background
+        tail -f "$TEMP_LOG" &
+        TAIL_PID=$!
+        
+        # Wait for nREPL server to start (max 2 minutes)
+        for i in {1..120}; do
+            if grep -q "nREPL server started on port $PORT" "$TEMP_LOG"; then
+                # Kill the tail process
+                kill $TAIL_PID 2>/dev/null || true
+                wait $TAIL_PID 2>/dev/null || true
+                echo "REPL started with PID $REPL_PID on port $PORT"
+                rm -f "$TEMP_LOG"
+                exit 0
+            fi
+            if ! kill -0 $REPL_PID 2>/dev/null; then
+                # Kill the tail process
+                kill $TAIL_PID 2>/dev/null || true
+                wait $TAIL_PID 2>/dev/null || true
+                echo "REPL process died during startup"
+                rm -f "$TEMP_LOG" "$PID_FILE" "$PORT_FILE"
+                exit 1
+            fi
+            
+            sleep 1
+        done
+        
+        # Kill the tail process on timeout
+        kill $TAIL_PID 2>/dev/null || true
+        wait $TAIL_PID 2>/dev/null || true
+        echo "Timeout waiting for nREPL server to start"
+        kill $REPL_PID 2>/dev/null || true
+        rm -f "$TEMP_LOG" "$PID_FILE" "$PORT_FILE"
+        exit 1
+        ;;
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE")
+            echo "Stopping Clojure REPL (PID: $PID)"
+            kill $PID 2>/dev/null || true
+            echo "REPL stopped"
+        else
+            echo "No REPL running"
+        fi
+        # Always clean up files on stop
+        rm -f "$PID_FILE" "$PORT_FILE"
+        ;;
+    restart)
+        echo "Restarting REPL..."
+        # Save the current port if it exists
+        SAVED_PORT=""
+        if [ -f "$PORT_FILE" ]; then
+            SAVED_PORT=$(cat "$PORT_FILE")
+        fi
+        
+        $0 stop
+        sleep 2
+        
+        # Restore the saved port if it existed
+        if [ -n "$SAVED_PORT" ]; then
+            echo "Reusing port $SAVED_PORT"
+            echo $SAVED_PORT > "$PORT_FILE"
+            
+            # Kill existing REPL if PID file exists
+            if [ -f "$PID_FILE" ]; then
+                OLD_PID=$(cat "$PID_FILE")
+                if kill -0 $OLD_PID 2>/dev/null; then
+                    echo "Killing existing REPL (PID: $OLD_PID)"
+                    kill $OLD_PID 2>/dev/null || true
+                    sleep 1
+                fi
+            fi
+            
+            # Start REPL in background, capturing output to temp file
+            TEMP_LOG=$(mktemp)
+            ./gradlew :clojureRepl --port=$SAVED_PORT > "$TEMP_LOG" 2>&1 &
+            REPL_PID=$!
+            echo $REPL_PID > "$PID_FILE"
+            
+            # Start tailing the log file in background
+            tail -f "$TEMP_LOG" &
+            TAIL_PID=$!
+            
+            # Wait for nREPL server to start (max 2 minutes)
+            for i in {1..120}; do
+                if grep -q "nREPL server started on port $SAVED_PORT" "$TEMP_LOG"; then
+                    # Kill the tail process
+                    kill $TAIL_PID 2>/dev/null || true
+                    wait $TAIL_PID 2>/dev/null || true
+                    echo "REPL started with PID $REPL_PID on port $SAVED_PORT"
+                    rm -f "$TEMP_LOG"
+                    exit 0
+                fi
+                if ! kill -0 $REPL_PID 2>/dev/null; then
+                    # Kill the tail process
+                    kill $TAIL_PID 2>/dev/null || true
+                    wait $TAIL_PID 2>/dev/null || true
+                    echo "REPL process died during startup"
+                    rm -f "$TEMP_LOG" "$PID_FILE" "$PORT_FILE"
+                    exit 1
+                fi
+                
+                sleep 1
+            done
+            
+            # Kill the tail process on timeout
+            kill $TAIL_PID 2>/dev/null || true
+            wait $TAIL_PID 2>/dev/null || true
+            echo "Timeout waiting for nREPL server to start"
+            kill $REPL_PID 2>/dev/null || true
+            rm -f "$TEMP_LOG" "$PID_FILE" "$PORT_FILE"
+            exit 1
+        else
+            $0 start
+        fi
+        ;;
+    status)
+        if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE")
+            PORT=$(cat "$PORT_FILE" 2>/dev/null || echo "unknown")
+            if kill -0 $PID 2>/dev/null; then
+                echo "REPL running with PID $PID on port $PORT"
+            else
+                echo "REPL not running (stale PID file)"
+                rm -f "$PID_FILE" "$PORT_FILE"
+            fi
+        else
+            echo "REPL not running"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac

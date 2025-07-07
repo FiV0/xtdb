@@ -18,7 +18,6 @@ buildRepl
 .lsp/.cache/
 /_manifest
 .DS_Store
-.claude
 .kotlin
 
 /.calva/
@@ -37,3 +36,9 @@ terraform.tfstate.backup
 
 # This directory should only contain data not checked in
 src/test/resources/data/
+
+# Claude related ignores
+.claude
+trees
+.repl-port
+.repl-pid
