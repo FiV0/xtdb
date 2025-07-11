@@ -24,7 +24,7 @@
            (xtdb ICursor)
            (xtdb.arrow RelationReader)
            (xtdb.bloom BloomUtils)
-           (xtdb.expression.map IRelationMap)
+           (xtdb.expression.map RelationMap)
            (xtdb.operator ProjectionSpec)))
 
 (defmethod lp/ra-expr :cross-join [_]
@@ -159,7 +159,7 @@
 (defmethod lp/emit-expr :cross-join [join-expr args]
   (emit-cross-join (emit-join-children join-expr args)))
 
-(defn- build-phase [^ICursor build-cursor, ^IRelationMap rel-map, pushdown-blooms]
+(defn- build-phase [^ICursor build-cursor, ^RelationMap rel-map, pushdown-blooms]
   (.forEachRemaining build-cursor
                      (fn [^RelationReader build-rel]
                        (let [rel-map-builder (.buildFromRelation rel-map build-rel)
@@ -186,7 +186,7 @@
   The selections represent matched rows in both underlying relations.
 
   The selections will have the same size."
-  [^RelationReader probe-rel ^IRelationMap rel-map]
+  [^RelationReader probe-rel ^RelationMap rel-map]
   (let [rel-map-prober (.probeFromRelation rel-map probe-rel)
         matching-build-idxs (IntStream/builder)
         matching-probe-idxs (IntStream/builder)]
@@ -203,7 +203,7 @@
 (defn- join-rels
   "Takes a relation (probe-rel) and its mapped relation (via rel-map) and returns a relation with the columns of both."
   [^RelationReader probe-rel
-   ^IRelationMap rel-map
+   ^RelationMap rel-map
    [^ints probe-sel, ^ints build-sel :as _selection-pair]]
   (let [built-rel (.getBuiltRelation rel-map)]
     (vr/rel-reader (concat (.select built-rel build-sel)
@@ -211,7 +211,7 @@
 
 (defn- probe-semi-join-select
   "Returns a single selection of the probe relation, that represents matches for a semi-join."
-  ^ints [^RelationReader probe-rel, ^IRelationMap rel-map]
+  ^ints [^RelationReader probe-rel, ^RelationMap rel-map]
   (let [rel-map-prober (.probeFromRelation rel-map probe-rel)
         matching-probe-idxs (IntStream/builder)]
     (dotimes [probe-idx (.getRowCount probe-rel)]
@@ -222,19 +222,19 @@
 (defmethod probe-phase ::inner-join
   [_join-type
    ^RelationReader probe-rel
-   ^IRelationMap rel-map
+   ^RelationMap rel-map
    _matched-build-idxs]
   (join-rels probe-rel rel-map (probe-inner-join-select probe-rel rel-map)))
 
 (defmethod probe-phase ::semi-join
   [_join-type
    ^RelationReader probe-rel
-   ^IRelationMap rel-map
+   ^RelationMap rel-map
    _matched-build-idxs]
   (.select probe-rel (probe-semi-join-select probe-rel rel-map)))
 
 (defmethod probe-phase ::anti-semi-join
-  [_join-type, ^RelationReader probe-rel, ^IRelationMap rel-map, _matched-build-idxs]
+  [_join-type, ^RelationReader probe-rel, ^RelationMap rel-map, _matched-build-idxs]
   (let [rel-map-prober (.probeFromRelation rel-map probe-rel)
         matching-probe-idxs (IntStream/builder)]
     (dotimes [probe-idx (.getRowCount probe-rel)]
@@ -246,7 +246,7 @@
 (defmethod probe-phase ::mark-join
   [_join-type
    ^RelationReader probe-rel
-   ^IRelationMap rel-map
+   ^RelationMap rel-map
    _matched-build-idxs]
   (.select probe-rel (probe-semi-join-select probe-rel rel-map)))
 
@@ -285,7 +285,7 @@
 (defmethod probe-phase ::outer-join
   [_join-type
    ^RelationReader probe-rel
-   ^IRelationMap rel-map
+   ^RelationMap rel-map
    ^RoaringBitmap matched-build-idxs]
   (->> (probe-outer-join-select probe-rel rel-map matched-build-idxs)
        (join-rels probe-rel rel-map)))
@@ -293,7 +293,7 @@
 (defmethod probe-phase ::single-join
   [_join-type
    ^RelationReader probe-rel
-   ^IRelationMap rel-map
+   ^RelationMap rel-map
    _matched-build-idxs]
 
   (let [rel-map-prober (.probeFromRelation rel-map probe-rel)
@@ -322,7 +322,7 @@
 (deftype JoinCursor [^BufferAllocator allocator, ^ICursor build-cursor,
                      ^:unsynchronized-mutable ^ICursor probe-cursor
                      ^IFn ->probe-cursor
-                     ^IRelationMap rel-map
+                     ^RelationMap rel-map
                      ^RoaringBitmap matched-build-idxs
                      pushdown-blooms
                      join-type]
@@ -371,7 +371,7 @@
     (util/try-close build-cursor)
     (util/try-close probe-cursor)))
 
-(defn- mark-join-probe-phase [^IRelationMap rel-map, ^RelationReader probe-rel, ^BitVector mark-col]
+(defn- mark-join-probe-phase [^RelationMap rel-map, ^RelationReader probe-rel, ^BitVector mark-col]
   (let [rel-prober (.probeFromRelation rel-map probe-rel)]
     (dotimes [idx (.getRowCount probe-rel)]
       (let [match-res (.matches rel-prober idx)]
@@ -382,7 +382,7 @@
 (deftype MarkJoinCursor [^BufferAllocator allocator ^ICursor build-cursor,
                          ^:unsynchronized-mutable ^ICursor probe-cursor
                          ^IFn ->probe-cursor
-                         ^IRelationMap rel-map
+                         ^RelationMap rel-map
                          ^RoaringBitmap matched-build-idxs
                          mark-col-name
                          pushdown-blooms
