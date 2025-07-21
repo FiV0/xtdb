@@ -12,6 +12,8 @@ import xtdb.arrow.RelationReader
 import xtdb.arrow.RelationWriter
 import xtdb.arrow.VectorReader
 import xtdb.toClojureMap
+import xtdb.toKeyword
+import xtdb.toSymbol
 import xtdb.util.Hasher
 import xtdb.util.requiringResolve
 
@@ -22,18 +24,16 @@ class RelationMap(
     val probeKeyColumnNames:  List<String>,
     private val storeFullBuildRel : Boolean,
     private val relWriter: RelationWriter,
-    private val buildKeyCols: List<VectorReader>, // VectorReader equivalents
-    private val hashToBitmap: IntObjectHashMap<RoaringBitmap>, // IntObjectHashMap equivalent
+    private val buildKeyCols: List<VectorReader>,
+    private val hashToBitmap: IntObjectHashMap<RoaringBitmap>,
     private val nilKeysEqual: Boolean = false,
     private val thetaExpr: Any? = null,
     private val paramTypes: Map<String, Any> = emptyMap(),
     private val args: RelationReader? = null
-
 ) : AutoCloseable {
 
     private val equiComparatorFn = requiringResolve("xtdb.expression.map/->equi-comparator") as IFn
     private val thetaComparatorFn = requiringResolve("xtdb.expression.map/->theta-comparator") as IFn
-
 
     fun andIBO(p1: IntBinaryOperator? = null, p2: IntBinaryOperator? = null): IntBinaryOperator {
         return if (p1 == null && p2 == null) {
@@ -113,7 +113,7 @@ class RelationMap(
                     mapOf(
                         "nil-keys-equal?" to nilKeysEqual,
                         "param-types" to paramTypes
-                    ).toClojureMap()
+                    ).mapKeys { it.key.toKeyword() } .toClojureMap()
                 ) as IntBinaryOperator
             }
             equiComparators.reduce { acc, comp -> andIBO(acc, comp) }
@@ -157,7 +157,7 @@ class RelationMap(
                 mapOf(
                     "nil-keys-equal?" to nilKeysEqual,
                     "param-types" to paramTypes
-                ).toClojureMap()
+                ).mapKeys { it.key.toKeyword() } .toClojureMap()
             ) as IntBinaryOperator
         }
         
@@ -166,10 +166,10 @@ class RelationMap(
             val thetaComparator = thetaComparatorFn.invoke(
                 probeRel, buildRel, thetaExpr, args,
                 mapOf(
-                    "build-fields" to buildFields,
-                    "probe-fields" to probeFields,
-                    "param-types" to paramTypes
-                ).toClojureMap()
+                    "build-fields" to buildFields.mapKeys { it.key.toSymbol() } .toClojureMap() ,
+                    "probe-fields" to probeFields.mapKeys { it.key.toSymbol() } .toClojureMap(),
+                    "param-types" to paramTypes.mapKeys { it.key.toSymbol() } .toClojureMap()
+                ).mapKeys { it.key.toKeyword() } .toClojureMap()
             ) as IntBinaryOperator
             
             (equiComparators + thetaComparator).reduce { acc, comp ->

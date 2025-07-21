@@ -1068,4 +1068,3 @@
                   0 [[:equi-condition {bar biff}]]
                   1]]
                (:join-order (lp/emit-expr (s/conform ::lp/logical-plan plan) {})))))))
-

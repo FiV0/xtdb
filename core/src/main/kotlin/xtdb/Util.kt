@@ -14,6 +14,8 @@ val UUID.asBytes: ByteArray get() = asByteBuffer.array()
 
 fun String.toKeyword(): clojure.lang.Keyword = clojure.lang.Keyword.intern(this)
 
-fun Map<String, *>.toClojureMap(): clojure.lang.IPersistentMap {
-    return clojure.lang.PersistentHashMap.create(this.mapKeys { it.key.toKeyword()})
+fun String.toSymbol(): clojure.lang.Symbol = clojure.lang.Symbol.intern(this)
+
+fun Map<*, *>.toClojureMap(): clojure.lang.IPersistentMap {
+    return clojure.lang.PersistentHashMap.create(this)
 }
