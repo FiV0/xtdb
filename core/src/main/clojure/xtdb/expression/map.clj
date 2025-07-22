@@ -112,7 +112,8 @@
             (.copyRow 0)))
 
         (let [build-key-cols (mapv #(vw/vec-wtr->rdr (.vectorFor rel-writer (str %))) build-key-col-names)]
-          (RelationMap. (update-keys build-fields str)
+          (RelationMap. allocator
+                        (update-keys build-fields str)
                         (map str build-key-col-names)
                         (update-keys probe-fields str)
                         (map str probe-key-col-names)
