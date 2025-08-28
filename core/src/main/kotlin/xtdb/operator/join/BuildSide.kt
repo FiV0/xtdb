@@ -4,11 +4,10 @@ import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.types.pojo.Schema
 import org.roaringbitmap.RoaringBitmap
 import xtdb.arrow.IntVector
+import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
 import xtdb.arrow.VectorReader
 import xtdb.expression.map.IndexHasher
-import xtdb.trie.MutableMemoryHashTrie
-import xtdb.vector.OldRelationWriter
 import java.util.function.IntConsumer
 import java.util.function.IntUnaryOperator
 
@@ -21,7 +20,7 @@ class BuildSide(
     val matchedBuildIdxs: RoaringBitmap?,
     private val withNilRow: Boolean
 ) : AutoCloseable {
-    private val relWriter = OldRelationWriter(al, schema)
+    private val relWriter = Relation(al, schema)
 
     private val hashColumn: IntVector = IntVector(al, "xt/join-hash", false)
 
