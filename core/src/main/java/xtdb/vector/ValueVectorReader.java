@@ -189,7 +189,10 @@ public class ValueVectorReader implements IVectorReader {
 
     @Override
     public RowCopier rowCopier(VectorWriter writer) {
-        return ((IVectorWriter) writer).rowCopier(vector);
+        return sourceIdx -> {
+            writer.writeObject(getObject(sourceIdx));
+            return writer.getValueCount() - 1;
+        };
     }
 
     class BaseValueReader implements ValueReader {
