@@ -7,7 +7,6 @@ import xtdb.arrow.IntVector
 import xtdb.arrow.RelationReader
 import xtdb.arrow.VectorReader
 import xtdb.expression.map.IndexHasher
-import xtdb.trie.MutableMemoryHashTrie
 import xtdb.vector.OldRelationWriter
 import java.util.function.IntConsumer
 import java.util.function.IntUnaryOperator
@@ -51,7 +50,11 @@ class BuildSide(
         buildMap = BuildSideMap.from(al, hashColumn, if (withNilRow) 1 else 0)
     }
 
-    val builtRel get() = relWriter.asReader
+    internal val builtRel get() = relWriter.asReader
+
+    val rowCount get() = relWriter.rowCount
+
+    fun select(idxs: IntArray): RelationReader = builtRel.select(idxs)
 
     fun addMatch(idx: Int) = matchedBuildIdxs?.add(idx)
 

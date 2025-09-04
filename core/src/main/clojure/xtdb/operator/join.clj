@@ -172,8 +172,8 @@
                                  (.add pushdown-bloom ^ints (BloomUtils/bloomHashes build-col build-idx)))))))))
   (.build build-side))
 
-(defn- join-rels [^JoinType join-type, ^RelationReader build-rel, ^RelationReader probe-rel, [^ints build-sel, ^ints probe-sel]]
-  (let [selected-build-rel (.select build-rel build-sel)
+(defn- join-rels [^JoinType join-type, ^BuildSide build-side, ^RelationReader probe-rel, [^ints build-sel, ^ints probe-sel]]
+  (let [selected-build-rel (.select build-side build-sel)
         selected-probe-rel (.select probe-rel probe-sel)]
     (vr/rel-reader (if (= JoinType$OuterJoinType/LEFT_FLIPPED (.getOuterJoinType join-type))
                      (concat selected-probe-rel selected-build-rel)
@@ -218,10 +218,8 @@
            (aget advanced? 0))
 
          (when-let [matched-build-idxs (.getMatchedBuildIdxs build-side)]
-           (let [build-rel (.getBuiltRel build-side)
-                 build-row-count (long (.getRowCount build-rel))
+           (let [build-row-count (long (.getRowCount build-side))
                  unmatched-build-idxs (RoaringBitmap/flip matched-build-idxs 0 build-row-count)]
-
 
              ;; Only need to remove the nil-row-idx for full outer joins
              (when (= (.getOuterJoinType join-type) JoinType$OuterJoinType/FULL)
@@ -234,7 +232,7 @@
                (let [nil-rel (vw/rel-wtr->rdr nil-rel-writer)
                      build-sel (.toArray unmatched-build-idxs)
                      probe-sel (int-array (alength build-sel))]
-                 (.accept c (join-rels join-type build-rel nil-rel [build-sel probe-sel]))
+                 (.accept c (join-rels join-type build-side nil-rel [build-sel probe-sel]))
                  true)))))))
 
   (close [_]
