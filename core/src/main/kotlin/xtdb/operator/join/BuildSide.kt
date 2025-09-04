@@ -119,7 +119,11 @@ class BuildSide(
             if (withNilRow) 1 else 0)
     }
 
-    val builtRel get() = internalRelToExternalRel(internalRel).asReader
+    internal val builtRel get() = internalRelToExternalRel(internalRel).asReader
+
+    val rowCount get() = internalRel.rowCount
+
+    fun select(idxs: IntArray): RelationReader = builtRel.select(idxs)
 
     fun addMatch(idx: Int) = matchedBuildIdxs?.add(idx)
 
