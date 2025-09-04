@@ -10,13 +10,14 @@ import xtdb.arrow.*
 import xtdb.expression.map.IndexHasher
 import xtdb.util.openReadableChannel
 import xtdb.util.openWritableChannel
+import xtdb.util.useAll
 import xtdb.vector.OldRelationWriter
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.function.IntConsumer
 import java.util.function.IntUnaryOperator
-import kotlin.io.path.createDirectories
-import kotlin.io.path.deleteIfExists
+import kotlin.io.path.ExperimentalPathApi
+import kotlin.io.path.deleteRecursively
 
 internal const val NULL_ROW_IDX = 0
 
@@ -31,9 +32,8 @@ class BuildSide(
 
     internal var toDisk: Boolean = false
     private val diskSchema: Schema =  Schema(schema.fields.plus(HASH_COLUMN_FIELD))
-    private val tmpFile: Path =
-        Files.createTempDirectory("xtdb-build-side-tmp").let { rootPath ->
-            Files.createTempFile(rootPath.createDirectories(), "build-side", ".arrow") }
+    private val tmpDir = Files.createTempDirectory("xtdb-build-side-tmp")
+    private val tmpFile: Path = Files.createTempFile(tmpDir, "build-side", ".arrow")
 
     private fun internalRelToExternalRel(internalRel: OldRelationWriter) =
         OldRelationWriter(al, internalRel.vectors.filter { it.name != HASH_COLUMN_NAME }).also { it.rowCount = internalRel.rowCount }
@@ -112,32 +112,116 @@ class BuildSide(
         buildMap?.close()
         finishBatch()
         unloader.end()
-        readInRels()
-        buildMap = BuildSideMap.from(
-            al,
-            internalRelToHashColumn(internalRel).asReader.let { if (withNilRow) it.select(1, it.valueCount.dec()) else it },
-            if (withNilRow) 1 else 0)
+        if (!toDisk) {
+            buildMap = BuildSideMap.from(
+                al,
+                internalRelToHashColumn(internalRel).asReader.let { if (withNilRow) it.select(1, it.valueCount.dec()) else it },
+                if (withNilRow) 1 else 0)
+        }
+    }
+
+    var nbPartitions: Int = -1
+
+    private fun partitionFile(id: Int) = Files.createTempFile(tmpDir, "build-side-partition-$id", ".arrow")
+
+    fun partition(nbParts: Int) {
+        require(nbParts > 1)
+        require(nbParts and (nbParts - 1) == 0) { "nbPartitions must be a power of 2" }
+        val partitionMask = (1 shl nbParts) - 1
+        (0 until nbParts).map { partitionId ->
+            partitionFile(partitionId).openWritableChannel() }.useAll{ partitionChannels ->
+            partitionChannels.map { Relation(al, diskSchema) }.useAll { rels ->
+                rels.mapIndexed { partitionId, rel -> rel.startUnload(partitionChannels[partitionId])}.useAll { unloaders ->
+                    Relation.loader(al, tmpFile.openReadableChannel()).use { ldr ->
+                        Relation(al, diskSchema).use { inRel ->
+                            while (ldr.loadNextPage(inRel)) {
+                                val hashCol = inRel.vectorFor(HASH_COLUMN_NAME)
+                                val rowCopiers = rels.map { it.rowCopier(inRel) }
+                                repeat(inRel.rowCount) { inIdx ->
+                                    rowCopiers[hashCol.getInt(inIdx) and partitionMask].copyRow(inIdx)
+                                }
+                                unloaders.forEach { it.writePage() }
+                            }
+                        }
+
+                    }
+//                    ArrowFileReader(tmpFile.openReadableChannel(), al).use { rdr ->
+//                        while (rdr.loadNextBatch()) {
+//                            val root = rdr.vectorSchemaRoot
+//                            RelationReader.from(root).use { inRel ->
+//                                val hashCol = inRel.vectorFor(HASH_COLUMN_NAME)
+//                                val rowCopiers = rels.map { it.rowCopier(inRel) }
+//                                repeat(inRel.rowCount) { inIdx ->
+//                                    val partitionId = hashCol.getInt(inIdx) and partitionMask
+//                                    rowCopiers[partitionId].copyRow(inIdx)
+//                                }
+//                            }
+//                            unloaders.forEach { it.writePage() }
+//                        }
+//                    }
+                    unloaders.forEach { it.end() }
+                }
+            }
+        }
+        nbPartitions = nbParts
+    }
+
+    private fun loadPartition(partitionIdx : Int) {
+        internalRel.clear()
+        partitionFile(partitionIdx).openReadableChannel().use{ ch ->
+            ArrowFileReader(ch, al).use { rdr ->
+                while (rdr.loadNextBatch()) {
+                    val root = rdr.vectorSchemaRoot
+                    RelationReader.from(root).use { inRel ->
+                        internalRel.append(inRel)
+                    }
+                }
+            }
+        }
+    }
+
+    internal fun forEachPartition(action: Runnable){
+        (0 until nbPartitions).forEach { partitionIdx ->
+            loadPartition(partitionIdx)
+            buildMap?.close()
+            buildMap = BuildSideMap.from(
+                al,
+                internalRelToHashColumn(internalRel).asReader.let { if (withNilRow) it.select(1, it.valueCount.dec()) else it },
+                if (withNilRow) 1 else 0)
+            action.run()
+        }
     }
 
     internal val builtRel get() = internalRelToExternalRel(internalRel).asReader
 
     val rowCount get() = internalRel.rowCount
 
-    fun select(idxs: IntArray): RelationReader = builtRel.select(idxs)
+    fun select(idxs: IntArray): RelationReader =
+        if (!toDisk) builtRel.select(idxs)
+        else {
+            TODO()
+        }
 
     fun addMatch(idx: Int) = matchedBuildIdxs?.add(idx)
 
     fun indexOf(hashCode: Int, cmp: IntUnaryOperator, removeOnMatch: Boolean): Int =
-        requireNotNull(buildMap).findValue(hashCode, cmp, removeOnMatch)
+        if (!toDisk) requireNotNull(buildMap).findValue(hashCode, cmp, removeOnMatch)
+        else {
+            var maxIndex = -1
+            forEachPartition { maxIndex = maxOf(maxIndex, requireNotNull(buildMap).findValue(hashCode, cmp, removeOnMatch)) }
+            maxIndex
+        }
 
     fun forEachMatch(hashCode: Int, c: IntConsumer) =
-        requireNotNull(buildMap).forEachMatch(hashCode, c)
+        if (!toDisk) requireNotNull(buildMap).forEachMatch(hashCode, c)
+        else forEachPartition {  requireNotNull(buildMap).forEachMatch(hashCode, c) }
 
+    @OptIn(ExperimentalPathApi::class)
     override fun close() {
         buildMap?.close()
         internalRel.close()
         unloader.close()
         unloadChannel.close()
-        tmpFile.deleteIfExists()
+        tmpDir.deleteRecursively()
     }
 }
