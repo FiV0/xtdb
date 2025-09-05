@@ -17,6 +17,8 @@ class ProbeSide(
         fun buildTheta(buildRel: RelationReader, probeRel: RelationReader): IntBinaryOperator?
     }
 
+
+    internal val buildSideNilRowIdx get() = buildSide.nilRowIndex
     internal val buildRel = buildSide.builtRel
     val rowCount = probeRel.rowCount
 

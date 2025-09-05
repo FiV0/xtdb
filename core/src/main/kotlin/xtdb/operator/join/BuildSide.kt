@@ -11,8 +11,6 @@ import xtdb.vector.OldRelationWriter
 import java.util.function.IntConsumer
 import java.util.function.IntUnaryOperator
 
-internal const val NULL_ROW_IDX = 0
-
 class BuildSide(
     val al: BufferAllocator,
     val schema: Schema,
@@ -26,11 +24,7 @@ class BuildSide(
 
     var buildMap: BuildSideMap? = null
 
-    init {
-        if (withNilRow) {
-            relWriter.endRow()
-        }
-    }
+    val nilRowIndex get() = relWriter.rowCount - 1
 
     @Suppress("NAME_SHADOWING")
     fun append(inRel: RelationReader) {
@@ -47,7 +41,10 @@ class BuildSide(
 
     fun build() {
         buildMap?.close()
-        buildMap = BuildSideMap.from(al, hashColumn, if (withNilRow) 1 else 0)
+        if (withNilRow) {
+            relWriter.endRow()
+        }
+        buildMap = BuildSideMap.from(al, hashColumn)
     }
 
     internal val builtRel get() = relWriter.asReader

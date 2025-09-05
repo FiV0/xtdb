@@ -223,7 +223,7 @@
 
              ;; Only need to remove the nil-row-idx for full outer joins
              (when (= (.getOuterJoinType join-type) JoinType$OuterJoinType/FULL)
-               (.remove unmatched-build-idxs emap/nil-row-idx))
+               (.remove unmatched-build-idxs (.getNilRowIndex build-side)))
 
              (when-not (.isEmpty unmatched-build-idxs)
                ;; this means .isEmpty will be true on the next iteration (we flip the bitmap)
