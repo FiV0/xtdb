@@ -268,8 +268,11 @@
                                                          col-names)))
                                scan-opts (-> scan-opts
                                              (update :for-valid-time
-                                                     (fn [fvt]
-                                                       (or fvt [:at [:now]]))))
+                                                     (fn [vt]
+                                                       (or vt [:at [:now]])))
+                                             (update :for-system-time
+                                                     (fn [st]
+                                                       (or st [:at [:now]]))))
                                live-table-snap (some-> (.getLiveIndex snapshot) (.liveTable table))
                                temporal-bounds (->temporal-bounds allocator args scan-opts
                                                                   (-> (basis/<-time-basis-str snapshot-token)
