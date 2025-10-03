@@ -39,6 +39,7 @@ interface Compactor : AutoCloseable {
         val part: ByteArray
         val outputTrieKey: Trie.Key
         val partitionedByRecency: Boolean
+        val inputTries: Any
     }
 
     interface JobCalculator {

@@ -12,29 +12,30 @@
 (def ^:dynamic *ignore-signal-block?* false)
 (def ^:dynamic *recency-partition* nil)
 
-(defrecord Job [table trie-keys part out-trie-key partitioned-by-recency?]
+(defrecord Job [table input-tries part out-trie-key partitioned-by-recency?]
   Compactor$Job
   (getTable [_] table)
-  (getTrieKeys [_] trie-keys)
+  (getTrieKeys [_] (map :trie-key input-tries))
   (getPart [_] part)
   (getOutputTrieKey [_] out-trie-key)
-  (getPartitionedByRecency [_] partitioned-by-recency?))
+  (getPartitionedByRecency [_] partitioned-by-recency?)
+  (getInputTries [_] input-tries))
 
 (defn- l0->l1-compaction-job [table {{l0 :live+nascent} [0 nil []], {l1c :live+nascent} [1 nil []]} {:keys [^long file-size-target]}]
   (when-let [live-l0 (seq (->> l0
                                (take-while #(= :live (:state %)))))]
 
-    (let [{l0-trie-key :trie-key, :keys [block-idx]} (last live-l0)
-          {l1-trie-key :trie-key} (->> l1c
-                                       (take-while #(< (:data-file-size %) file-size-target))
-                                       first)]
-      (->Job table (-> []
-                            (cond-> l1-trie-key (conj l1-trie-key))
-                            (conj l0-trie-key))
+    (let [{:keys [block-idx] :as l0-trie} (last live-l0)
+          l1-trie (->> l1c
+                       (take-while #(< (:data-file-size %) file-size-target))
+                       first)]
+      (->Job table
+             (-> []
+                 (cond-> l1-trie (conj l1-trie))
+                 (conj l0-trie))
              nil ; part
              (Trie$Key. 1 nil nil block-idx)
-             true ; partitioned-by-recency?
-             ))))
+             true)))) ; partitioned-by-recency?
 
 (defn- l2h-input-files
   "if the tries can be compacted to L2H, return the input tries; otherwise nil"
@@ -61,7 +62,7 @@
         :when (and recency (= level 1))
         :let [input-tries (l2h-input-files (get-in table-tries [[2 recency []] :live+nascent]) l1h-tries opts)]
         :when input-tries]
-    (->Job table (mapv :trie-key input-tries) (byte-array 0)
+    (->Job table input-tries (byte-array 0)
            (Trie$Key. 2 recency nil (:block-idx (last input-tries)))
            false ; partitioned-by-recency?
            )))
@@ -87,9 +88,8 @@
               out-part (byte-array out-part)]
 
         :when (= cat/branch-factor (count in-files))
-        :let [trie-keys (mapv :trie-key in-files)
-              out-block-idx (:block-idx (last in-files))]]
-    (->Job table trie-keys out-part
+        :let [out-block-idx (:block-idx (last in-files))]]
+    (->Job table in-files out-part
            (Trie$Key. out-level recency (ByteArrayList/from out-part) out-block-idx)
            false ; partitioned-by-recency?
            )))
