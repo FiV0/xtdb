@@ -22,13 +22,228 @@
       (->> (transduce (map (fn [[trie-key size]]
                              (-> (trie/parse-trie-key trie-key)
                                  (assoc :data-file-size (or size -1)))))
-                      (completing (partial cat/apply-trie-notification {:file-size-target 20}))
+                      (completing (partial cat/apply-trie-notification {:file-size-target cat/*file-size-target*}))
                       {}))))
+
+(defn- apply-msgs2 [cat & trie-keys]
+  (-> trie-keys
+      (->> (transduce (map (fn [[trie-key size]]
+                             (-> (trie/parse-trie-key trie-key)
+                                 (assoc :data-file-size (or size -1)))))
+                      (completing (partial cat/apply-trie-notification (merge cat {:file-size-target cat/*file-size-target*})))
+                      {}))))
+
 
 (defn- curr-tries [& trie-keys]
   (-> (apply apply-msgs trie-keys)
       (cat/current-tries)
       (->> (into #{} (map :trie-key)))))
+
+(comment
+  (require '[xtdb.table-catalog :as tc]
+           '[xtdb.compactor :as c]
+           '[xtdb.util :as util])
+  (import '[java.nio ByteBuffer]
+          '[java.nio.file Files]
+          '(xtdb.block.proto TableBlock))
+
+  (def all-bytes (ByteBuffer/wrap (Files/readAllBytes (util/->path "b32407.binpb"))))
+
+  (def table-block (tc/<-table-block (TableBlock/parseFrom all-bytes)))
+
+  (def tries (map trie/<-trie-details (:tries table-block)))
+
+  (def l0 (filter #(= 0 (:level %)) tries))
+  (def l1 (filter #(= 1 (:level %)) tries))
+  (def l2 (filter #(= 2 (:level %)) tries))
+  (def l3 (filter #(= 3 (:level %)) tries))
+
+  (def l0-cat (apply apply-msgs (map (juxt :trie-key :data-file-size) l0)))
+
+  (defn get-random-job [cat]
+    (trie/parse-trie-key (str (.getOutputTrieKey (rand-nth (c/compaction-jobs "foo" cat cat))))))
+
+  (get-random-job l0-cat)
+
+
+  (c/compaction-jobs "foo" l0-cat l0-cat)
+
+  (->> (map-indexed vector tries)
+       (filter (comp #(= "l02-rc-p0-b2348" (:trie-key %)) second)))
+
+  (take 5 (drop 9248 tries))
+
+  (->> (take 9250 tries)
+       (map (juxt :trie-key :data-file-size))
+       (apply apply-msgs)
+       cat/current-tries
+       count)
+
+  (def l2-subset
+    ["l02-r20250728-b21a6"
+     "l02-rc-p2-b21ab"
+     "l02-rc-p1-b21ab"
+     "l02-rc-p3-b21ab"
+     "l02-rc-p0-b21ab"
+     "l02-rc-p0-b2248"
+     "l02-rc-p1-b2248"
+     "l02-rc-p3-b2248"
+     "l02-rc-p2-b2248"
+     "l02-r20250804-b228e"
+     "l02-rc-p0-b22c8"
+     "l02-rc-p3-b22c8"
+     "l02-rc-p1-b22c8"
+     "l02-rc-p2-b22c8"
+     "l02-rc-p1-b2348"
+     "l02-rc-p3-b2348"
+     "l02-rc-p2-b2348"
+     "l02-rc-p0-b2348"
+     "l02-rc-p1-b2348"
+     "l02-rc-p0-b2348"
+     "l02-rc-p3-b2348"
+     "l02-rc-p2-b2348"
+     "l02-r20250811-b23c6"
+     "l02-rc-p3-b23c8"
+     "l02-rc-p1-b23c8"
+     "l02-rc-p2-b23c8"
+     "l02-rc-p2-b23c8"
+     "l02-rc-p3-b23c8"
+     "l02-rc-p0-b23c8"])
+
+  (->> (map #(vector % 20) l2-subset)
+       (apply apply-msgs)
+       (cat/current-tries)
+       count)
+
+  (->> (map #(vector % 20) l2-subset)
+       (apply apply-msgs)
+       (cat/current-tries)
+       set
+       count)
+
+
+  (count l2-subset)
+
+
+
+  (count l2)
+  ;; => 246
+
+  (count (into #{} (map :trie-key) l2))
+  ;; => 228
+
+  (->> (group-by :trie-key l2)
+       (filter (fn [[_ l]] (< 1 (count l)))))
+
+
+
+  (def cat-after-l0 (->> (sort-by :block-idx l0)
+                         (map (juxt :trie-key :data-file-size))
+                         (apply apply-msgs)))
+
+  (defn current-tries [cat]
+    (into #{} (map :trie-key) (cat/current-tries cat)))
+
+  (= (count l0) (count (current-tries cat-after-l0)))
+
+  (def cat-after-l1 (->> (sort-by :block-idx l1)
+                         (map (juxt :trie-key :data-file-size))
+                         (apply apply-msgs2 cat-after-l0)))
+
+  (= (count l1) (count (current-tries cat-after-l1)))
+
+  (def only-l2 (->> (sort-by :block-idx l2)
+                    (map (juxt :trie-key :data-file-size))
+                    (apply apply-msgs)))
+
+  (count (current-tries only-l2) )
+  ;; => 227
+
+  (count l2)
+  ;; => 246
+
+  (require '[clojure.set :as set])
+
+  (set/difference (into #{} (map :trie-key) l2) (current-tries only-l2) )
+
+  (count (into #{} (map :trie-key) l2))
+
+
+  (->> (sort-by :block-idx l3)
+       (map :trie-key)
+       reverse)
+
+  (-> (filter #(= "l02-rc-p2-b31de0" (:trie-key %)) tries)
+      first
+      (select-keys [:state :data-file-size]))
+  ;; => {:state :live, :data-file-size 106219246}
+
+  ;; state in the file
+  (-> (group-by :state tries)
+      (update-vals count))
+  ;; => {:garbage 9325, :live 277, :nascent 2}
+
+  ;; state after applying all tries from scratch
+  ;; this should match :live unless I am misunderstanding something
+  (->> (sort-by (juxt :block-idx :level) tries)
+       (map (juxt :trie-key :data-file-size))
+       (apply curr-tries)
+       (count))
+  ;; => 118
+
+  ;; l03-rc-p2{0-3}
+  ;; l02-rc-p2
+
+  ;; node 1 b99
+  ;; node 1 b100
+  ;; node 2 b99
+  ;; node 2 b100
+
+  ;; block-idx
+  ;; part
+  ;;
+
+
+  (->> (shuffle tries)
+       (map (juxt :trie-key :data-file-size))
+       (apply curr-tries)
+       (count))
+
+  ;; no more "l02-rc-p2-b31de0" file
+  (->> (sort-by (juxt :level :block-idx) tries)
+       (map (juxt :trie-key :data-file-size) tries)
+       (apply curr-tries)
+       (filter #(= "l02-rc-p2-b31de0" %)))
+  ;; => ()
+  )
+
+(defn- curr-tries2 [& trie-keys]
+  (-> (apply apply-msgs trie-keys)
+      (cat/current-tries)))
+
+(t/deftest test-duplicate-notifications-should-be-ignored
+  (t/is (= nil
+           (curr-tries2
+            ["l02-rc-p0-b21ab"]
+            #_#_#_#_#_["l02-rc-p0-b31de0" 20]
+            ["l02-rc-p1-b31de0" 20]
+            ["l02-rc-p2-b31de0" 20]
+            ["l02-rc-p3-b31de0" 20]
+            ["l02-rc-p0-b31de0" 20])))
+  )
+
+
+(t/deftest test-l3-rc-suppersede-l2-rc
+  (t/is (= #{}
+           (curr-tries
+            ["l02-rc-p0-b31de0" 20]
+            ["l02-rc-p1-b31de0" 20]
+            ["l02-rc-p2-b31de0" 20]
+            ["l02-rc-p3-b31de0" 20]
+            ["l03-rc-p20-b31fde" 20]
+            ["l03-rc-p21-b31fde" 20]
+            ["l03-rc-p22-b31fde" 20]
+            ["l03-rc-p23-b31fde" 20]))))
 
 (t/deftest test-stale-msg
   (letfn [(stale? [tries trie-key]
@@ -272,6 +487,9 @@
                        ["l04-r20200101-p10-b01"] ["l04-r20200101-p12-b01"] ["l04-r20200101-p13-b01"]))
 
         "L4H covered idx 0 but not 1"))
+
+
+
 
 (t/deftest reconstructs-state-on-startup
   (let [node-dir (util/->path "target/trie-catalog-test/reconstructs-state")]

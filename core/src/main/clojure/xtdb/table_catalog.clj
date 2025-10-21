@@ -8,7 +8,7 @@
   (:import (clojure.lang MapEntry)
            (com.google.protobuf ByteString)
            [java.nio ByteBuffer]
-           [java.nio.file Path]
+           [java.nio.file Path Files]
            [java.util ArrayList Map]
            (org.apache.arrow.vector.types.pojo Field Schema)
            (xtdb.block.proto TableBlock)
@@ -16,7 +16,8 @@
            (xtdb.storage BufferPool)
            xtdb.table.TableRef
            xtdb.trie.Trie
-           (xtdb.util HyperLogLog)))
+           (xtdb.util HyperLogLog)
+           ))
 
 (defprotocol PTableCatalog
   (finish-block! [table-cat block-idx delta-tables->metadata table->current-tries]))
@@ -96,6 +97,52 @@
               (MapEntry/create table (<-table-block table-block)))
             (into {}))])))
 
+(comment
+  (require '[xtdb.util :as util])
+
+  (def all-bytes (ByteBuffer/wrap (Files/readAllBytes (util/->path "b32407.binpb"))))
+
+  (def table-block (<-table-block (TableBlock/parseFrom all-bytes)))
+
+  (def tries (map trie/<-trie-details (:tries table-block)))
+
+  (def l2 (filter #(= 2 (:level %)) tries))
+
+  (-> (filter #(= "l02-rc-p2-b31de0" (:trie-key %)) tries)
+      first
+      (select-keys [:state :data-file-size])
+      (update :data-file-size #(int (/ % (* 1000 1000)))))
+
+  (re-find #"l02-rc-p\d-b31de0" "l02-rc-p2-b31de0")
+
+
+  (-> (filter #(re-find #"l02-rc-p\d-b31de0" (:trie-key %)) tries)
+      count)
+
+  (def l3 (filter #(= 3 (:level %)) tries))
+
+  (-> l3 first :part seq)
+
+  (-> (filter #(str/starts-with? w) (= 3 (:level %)) tries)
+      ())
+
+  (map (juxt :trie-key :state) (reverse (sort-by (juxt :block-idx (comp :part seq)) l3)))
+
+  (require '[clojure.string :as str])
+
+  (filter #(str/starts-with? "l03-rc-p2" (:trie-key %)) l3)
+  (filter #(str/starts-with? "l03-rc" (:trie-key %)) l3)
+
+
+
+
+
+
+
+
+  )
+
+
 (deftype TableCatalog [^BufferPool buffer-pool
                        ^:volatile-mutable ^long block-idx
                        ^:volatile-mutable table->metadata]
@@ -136,4 +183,3 @@
   (let [[block-idx table->table-block] (load-tables-to-metadata buffer-pool block-cat)]
     (TableCatalog. buffer-pool (or block-idx -1)
                    (update-vals table->table-block #(dissoc % :tries)))))
-

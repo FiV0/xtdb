@@ -201,4 +201,23 @@
       (get "valueAsUint8Array")
       (->> (map unchecked-byte))
       byte-array
-      byte-array->txs))
+      byte-array->txs)
+
+  (do
+    (halt)
+    (go))
+
+  (require '[xtdb.api :as xt])
+
+  (set-log-level! "xtdb.pgwire" :debug)
+
+  (t/deftest minimal-patch-ingestion-stopped
+    (with-open [node (xtn/start-node {:log [:in-memory {:instant-src (tu/->mock-clock)}]
+                                      :compactor {:threads 0}})]
+
+      (xt/execute-tx node [[:patch-docs :docs {:xt/id 1 :d [(ByteBuffer/allocate 0) false]}]])
+
+      (t/is (= {:a 1, :xt/id 1} (first (xt/q node "SELECT * FROM docs"))))))
+
+
+  )
