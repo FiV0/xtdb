@@ -13,6 +13,7 @@ import xtdb.api.log.Log
 import xtdb.api.log.Log.Message.TriesAdded
 import xtdb.api.storage.Storage
 import xtdb.arrow.Relation
+import xtdb.arrow.unsupported
 import xtdb.compactor.PageTree.Companion.asTree
 import xtdb.database.IDatabase
 import xtdb.log.proto.TrieDetails
@@ -23,6 +24,7 @@ import xtdb.trie.*
 import xtdb.util.*
 import java.nio.channels.ClosedByInterruptException
 import java.time.Duration
+import kotlin.coroutines.suspendCoroutine
 import kotlin.time.Duration.Companion.seconds
 import kotlin.use
 
@@ -64,6 +66,35 @@ interface Compactor : AutoCloseable {
         }
 
         companion object {
+            @JvmStatic
+            fun mocked() =
+                object : Factory {
+                    override fun create(db: Database) = object : Driver {
+                        override suspend fun launchIn(scope: CoroutineScope, f: suspend CoroutineScope.() -> Unit) =
+                            scope.launch(block = f).let { }
+
+                        val jobs = mutableListOf<Job>()
+
+                        override suspend fun executeJob(job: Job): TriesAdded = suspendCoroutine { continuation ->
+
+                        }
+
+                        override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata = suspendCoroutine { continuation ->
+
+                        }
+
+                        override fun onDone(doneCh: Channel<JobKey>): SelectClause1<JobKey> =
+                            unsupported("mocked driver cannot handle done channel")
+
+                        override fun onWakeup(wakeup: Channel<Unit>): SelectClause1<Unit> =
+                            unsupported("mocked driver cannot handle wakeup channel")
+
+                        override fun close() = Unit
+                    }
+                }
+
+
+
             @JvmStatic
             fun real(meterRegistry: MeterRegistry?, pageSize: Int, recencyPartition: RecencyPartition?) =
                 object : Factory {
