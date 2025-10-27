@@ -69,7 +69,7 @@ interface Compactor : AutoCloseable {
             @JvmStatic
             fun mocked() =
                 object : Factory {
-                    override fun create(db: Database) = object : Driver {
+                    override fun create(db: IDatabase) = object : Driver {
                         override suspend fun launchIn(scope: CoroutineScope, f: suspend CoroutineScope.() -> Unit) =
                             scope.launch(block = f).let { }
 
@@ -83,11 +83,17 @@ interface Compactor : AutoCloseable {
 
                         }
 
-                        override fun onDone(doneCh: Channel<JobKey>): SelectClause1<JobKey> =
-                            unsupported("mocked driver cannot handle done channel")
+                        override suspend fun awaitSignal(): JobKey? {
+                            TODO("Not yet implemented")
+                        }
 
-                        override fun onWakeup(wakeup: Channel<Unit>): SelectClause1<Unit> =
-                            unsupported("mocked driver cannot handle wakeup channel")
+                        override suspend fun jobDone(jobKey: JobKey) {
+                            TODO("Not yet implemented")
+                        }
+
+                        override fun wakeup() {
+                            TODO("Not yet implemented")
+                        }
 
                         override fun close() = Unit
                     }
