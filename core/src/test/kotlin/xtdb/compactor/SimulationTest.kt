@@ -223,11 +223,9 @@ private val setLogLevel = requiringResolve("xtdb.logging/set-log-level!")
 private val createJobCalculator = requiringResolve("xtdb.compactor/->JobCalculator")
 private val createTrieCatalog = requiringResolve("xtdb.trie-catalog/->TrieCatalog")
 
-class DeterministicDispatcher(seed: Int) : CoroutineDispatcher() {
+class DeterministicDispatcher(val rand: Random) : CoroutineDispatcher() {
 
     private data class DispatchJob(val context: CoroutineContext, val block: Runnable)
-
-    private val rand = Random(seed)
 
     private val jobs = mutableSetOf<DispatchJob>()
 
@@ -307,6 +305,7 @@ class SimulationTest {
     var currentSeed: Int = 0
     var explicitSeed: Int? = null
     var driverConfig: DriverConfig = DriverConfig()
+    private lateinit var rand: Random
     private lateinit var mockDriver: MockDriver
     private lateinit var jobCalculator: Compactor.JobCalculator
     private lateinit var compactor: Compactor.Impl
@@ -318,7 +317,8 @@ class SimulationTest {
     fun setUp() {
         setLogLevel.invoke("xtdb.compactor".symbol, logLevel)
         currentSeed = explicitSeed ?: Random.nextInt()
-        dispatcher = DeterministicDispatcher(currentSeed)
+        rand = Random(currentSeed)
+        dispatcher = DeterministicDispatcher(rand)
         mockDriver = MockDriver(dispatcher, currentSeed, driverConfig)
         jobCalculator = createJobCalculator.invoke() as Compactor.JobCalculator
         compactor = Compactor.Impl(mockDriver, null, jobCalculator, false, 2, dispatcher)
@@ -461,6 +461,7 @@ class MultiDbSimulationTest {
     var explicitSeed: Int? = null
     var driverConfig: DriverConfig = DriverConfig()
     var numberOfSystems: Int = 2
+    private lateinit var rand: Random
     private lateinit var mockDriver: MockDriver
     private lateinit var jobCalculator: Compactor.JobCalculator
     private lateinit var compactors: List<Compactor.Impl>
@@ -472,7 +473,8 @@ class MultiDbSimulationTest {
     fun setUp() {
         setLogLevel.invoke("xtdb.compactor".symbol, logLevel)
         currentSeed = explicitSeed ?: Random.nextInt()
-        dispatcher = DeterministicDispatcher(currentSeed)
+        rand = Random(currentSeed)
+        dispatcher = DeterministicDispatcher(rand)
         mockDriver = MockDriver(dispatcher, currentSeed, driverConfig)
         jobCalculator = createJobCalculator.invoke() as Compactor.JobCalculator
 
@@ -529,6 +531,4 @@ class MultiDbSimulationTest {
             trieKeys.first(),
         )
     }
-
-    
 }
