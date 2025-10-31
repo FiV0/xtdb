@@ -438,6 +438,24 @@ class SimulationTest {
     }
 }
 
+
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class WithNumberOfSystems(val numberOfSystems: Int)
+
+class NumberOfSystemsExtension : BeforeEachCallback {
+    override fun beforeEach(context: ExtensionContext) {
+        val annotation = context.requiredTestMethod.getAnnotation(WithNumberOfSystems::class.java)
+            ?: return
+
+        val testInstance = context.requiredTestInstance
+        if (testInstance !is MultiDbSimulationTest) return
+
+        testInstance.numberOfSystems = annotation.numberOfSystems
+    }
+}
+
+@ExtendWith(SeedExceptionWrapper::class, SeedExtension::class, DriverConfigExtension::class, NumberOfSystemsExtension::class)
 class MultiDbSimulationTest {
     var currentSeed: Int = 0
     var explicitSeed: Int? = null
