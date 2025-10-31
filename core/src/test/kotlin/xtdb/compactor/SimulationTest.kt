@@ -36,6 +36,8 @@ import xtdb.util.StringUtil.asLexHex
 import xtdb.util.info
 import xtdb.util.logger
 import xtdb.util.requiringResolve
+import xtdb.util.safeMap
+import xtdb.util.useAll
 import xtdb.util.warn
 import java.time.Instant
 import java.time.LocalDate
@@ -75,17 +77,18 @@ class MockDriver(
     val baseSeed: Int,
     config: DriverConfig
 ) : Factory {
-    class AppendMessage(val triesAdded: TriesAdded, val msgTimestamp: Instant, val dbName: DatabaseName? = null)
+    class AppendMessage(val triesAdded: TriesAdded, val msgTimestamp: Instant, val systemId: Int = 0)
 
     private val temporalSplitting = config.temporalSplitting
     private val baseTime = config.baseTime
     private val blocksPerWeek = config.blocksPerWeek
     val trieKeyToFileSize = mutableMapOf<TrieKey, Long>()
     val channel = Channel<AppendMessage>(UNLIMITED)
+    var nextSystemId = 0
 
-    override fun create(db: IDatabase) = ForDatabase(db)
+    override fun create(db: IDatabase) = ForDatabase(db, nextSystemId++)
 
-    inner class ForDatabase(val db: IDatabase) : Driver {
+    inner class ForDatabase(val db: IDatabase, val systemId: Int) : Driver {
         val trieCatalog = db.trieCatalog
 
         val job = CoroutineScope(dispatcher).launch {
@@ -180,14 +183,11 @@ class MockDriver(
 
         override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata {
             val logTimestamp = Instant.now()
-            channel.send(AppendMessage(triesAdded, logTimestamp, db.name))
+            channel.send(AppendMessage(triesAdded, logTimestamp, systemId))
             return Log.MessageMetadata(logOffset++, logTimestamp)
         }
 
-        override fun close() = close(null)
-
-        fun close(e: Throwable?) {
-            channel.close(e)
+        override fun close() {
             runBlocking {
                 job.cancelAndJoin()
             }
@@ -392,7 +392,7 @@ class SimulationTest {
             )
 
             // Round 2: Add 3 more L0 tries and compact
-           addL0s(
+            addL0s(
                 table,
                 listOf(
                     buildTrieDetails(table.tableName, "l00-rc-b03", 10 * 1024),
@@ -433,12 +433,84 @@ class SimulationTest {
             do {
                 currentTries = trieCatalog.listAllTrieKeys(docsTable)
                 it.compactAll()
-            } while( currentTries.size != trieCatalog.listAllTrieKeys(docsTable).size)
+            } while (currentTries.size != trieCatalog.listAllTrieKeys(docsTable).size)
+        }
+    }
+}
+
+class MultiDbSimulationTest {
+    var currentSeed: Int = 0
+    var explicitSeed: Int? = null
+    var driverConfig: DriverConfig = DriverConfig()
+    var numberOfSystems: Int = 2
+    private lateinit var mockDriver: MockDriver
+    private lateinit var jobCalculator: Compactor.JobCalculator
+    private lateinit var compactors: List<Compactor.Impl>
+    private lateinit var trieCatalogs: List<TrieCatalog>
+    private lateinit var dbs: List<MockDb>
+    private lateinit var dispatcher: CoroutineDispatcher
+
+    @BeforeEach
+    fun setUp() {
+        setLogLevel.invoke("xtdb.compactor".symbol, logLevel)
+        currentSeed = explicitSeed ?: Random.nextInt()
+        dispatcher = DeterministicDispatcher(currentSeed)
+        mockDriver = MockDriver(dispatcher, currentSeed, driverConfig)
+        jobCalculator = createJobCalculator.invoke() as Compactor.JobCalculator
+
+        compactors = List(numberOfSystems) {
+            Compactor.Impl(mockDriver, null, jobCalculator, false, 2, dispatcher)
         }
 
+        trieCatalogs = List(numberOfSystems) {
+            createTrieCatalog.invoke(mutableMapOf<Any, Any>(), 100 * 1024 * 1024) as TrieCatalog
+        }
+
+        dbs = List(numberOfSystems) {
+            MockDb("xtdb", trieCatalogs[it] )
+        }
+    }
+
+    @AfterEach
+    fun tearDown() {
+        driverConfig = DriverConfig()
+        explicitSeed = null
+    }
+
+    private fun addL0s(db: MockDb, tableRef: TableRef, l0s: List<TrieDetails>) {
+        l0s.forEach {
+            mockDriver.trieKeyToFileSize[it.trieKey.toString()] = it.dataFileSize
+        }
+        db.trieCatalog.addTries(tableRef, l0s, Instant.now())
+    }
+
+    @RepeatedTest(testIterations)
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    fun singleL0Compaction() {
+        val docsTable = TableRef("xtdb", "public", "docs")
+        val l0Trie = buildTrieDetails(docsTable.tableName, L0TrieKeys.first())
+
+        for (db in dbs)
+            addL0s(db, docsTable, listOf(l0Trie))
+
+        compactors.zip(dbs).safeMap { (compactor, db) ->
+            compactor.openForDatabase(db)
+        }.useAll {
+            for (db in it)
+                db.compactAll()
+        }
+
+        val trieKeys = trieCatalogs.map { it.listAllTrieKeys(docsTable) }.distinct()
+
         Assertions.assertEquals(
-            208,
-            trieCatalog.listAllTrieKeys(docsTable).size
+            1,
+            trieKeys.size,
+        )
+        Assertions.assertEquals(
+            listOf("l00-rc-b00", "l01-rc-b00"),
+            trieKeys.first(),
         )
     }
+
+    
 }
