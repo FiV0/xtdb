@@ -362,31 +362,19 @@
             :table-cat (ig/ref :xtdb/table-catalog)}
            opts)})
 
-(defn new-trie-details? [^TrieDetails trie-details]
-  (.hasTrieState trie-details))
-
 (defn trie-catalog-init [table->table-block]
-  (if (->> (vals table->table-block) (map (comp first :tries)) (every? new-trie-details?))
-    (let [!table-cats (ConcurrentHashMap.)]
-      (doseq [[table {:keys [tries]}] table->table-block
-              :let [tries (-> (reduce (fn [table-cat ^TrieDetails added-trie]
-                                        (let [{:keys [level recency part state] :as trie} (trie/<-trie-details added-trie)]
-                                          (update table-cat [level recency part] conj-trie trie state)))
-                                      {}
-                                      tries)
-                              (update-vals (fn [tries]
-                                             (update-vals tries #(sort-by :block-idx (fn [a b] (compare b a)) %)))))]]
-        (.put !table-cats table {:tries tries}))
+  (let [!table-cats (ConcurrentHashMap.)]
+    (doseq [[table {:keys [tries]}] table->table-block
+            :let [tries (-> (reduce (fn [table-cat ^TrieDetails added-trie]
+                                      (let [{:keys [level recency part state] :as trie} (trie/<-trie-details added-trie)]
+                                        (update table-cat [level recency part] conj-trie trie state)))
+                                    {}
+                                    tries)
+                            (update-vals (fn [tries]
+                                           (update-vals tries #(sort-by :block-idx (fn [a b] (compare b a)) %)))))]]
+      (.put !table-cats table {:tries tries}))
 
-      (TrieCatalog. !table-cats *file-size-target*))
-
-    ;; TODO: This else statement is here to support block files that have not yet passed to the new extended TrieDetails format
-    ;; see #4526
-    (let [cat (TrieCatalog. (ConcurrentHashMap.) *file-size-target*)
-          now (Instant/now)]
-      (doseq [[table {:keys [tries]}] table->table-block]
-        (.addTries cat table tries now))
-      cat)))
+    (TrieCatalog. !table-cats *file-size-target*)))
 
 (defmethod ig/init-key :xtdb/trie-catalog [_ {:keys [^BufferPool buffer-pool, ^BlockCatalog block-cat]}]
   (log/debug "starting trie catalog...")
