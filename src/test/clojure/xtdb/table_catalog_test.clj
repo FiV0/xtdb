@@ -53,8 +53,9 @@
                                                   table-cat/<-table-block)
 
               current-tries (->> table-block2
-                                 :tries
-                                 (mapv trie-details->edn))
+                                 :partitions
+                                 (mapcat :tries)
+                                 (map trie-details->edn))
               trie-metas (map :trie-metadata current-tries)
               [trie1-bloom _trie2-bloom] (map :iid-bloom trie-metas)]
           (t/is (= [{:table #xt/table foo,
@@ -103,7 +104,8 @@
                    (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b02.binpb"))
                         TableBlock/parseFrom
                         table-cat/<-table-block
-                        :tries
+                        :partitions
+                        (mapcat :tries)
                         (mapv (comp :trie-key trie-details->edn))))))))))
 
 
@@ -128,21 +130,23 @@
 
     (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0})]
       (let [bp (.getBufferPool (db/primary-db node))]
-        (t/is (= ["l00-rc-b00"
-                  "l00-rc-b01"
-                  "l00-rc-b02"
-                  "l00-rc-b03"
-                  "l01-r20200101-b00"
-                  "l01-rc-b00"
-                  "l01-r20200102-b01"
-                  "l01-rc-b01"
-                  "l01-r20200101-b02"
-                  "l01-r20200102-b02"
-                  "l01-rc-b02"
-                  "l02-rc-p0-b01"
-                  "l02-rc-p2-b01"]
+        (t/is (= #{"l00-rc-b00"
+                   "l00-rc-b01"
+                   "l00-rc-b02"
+                   "l00-rc-b03"
+                   "l01-r20200101-b00"
+                   "l01-rc-b00"
+                   "l01-r20200102-b01"
+                   "l01-rc-b01"
+                   "l01-r20200101-b02"
+                   "l01-r20200102-b02"
+                   "l01-rc-b02"
+                   "l02-rc-p0-b01"
+                   "l02-rc-p2-b01"}
                  (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b00.binpb"))
                       TableBlock/parseFrom
                       table-cat/<-table-block
-                      :tries
-                      (mapv (comp :trie-key trie-details->edn)))))))))
+                      :partitions
+                      (mapcat :tries)
+                      (map(comp :trie-key trie-details->edn))
+                      set)))))))
