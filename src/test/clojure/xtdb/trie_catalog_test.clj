@@ -17,7 +17,7 @@
 
 (t/use-fixtures :once tu/with-allocator)
 
-(defn- apply-msgs [& trie-keys]
+(defn apply-msgs [& trie-keys]
   (-> trie-keys
       (->> (transduce (map (fn [[trie-key size]]
                              (-> (trie/parse-trie-key trie-key)
@@ -25,10 +25,19 @@
                       (completing (partial cat/apply-trie-notification {:file-size-target 20}))
                       {}))))
 
+
 (defn- curr-tries [& trie-keys]
   (-> (apply apply-msgs trie-keys)
       (cat/current-tries)
       (->> (into #{} (map :trie-key)))))
+
+(defn ->test-catalog
+  ([file-size-target] (TrieCatalog. (ConcurrentHashMap.) file-size-target))
+  ([tables file-size-target]
+   (let [!table-cats (ConcurrentHashMap.)]
+     (doseq [[table tries] tables]
+       (.put !table-cats table tries))
+     (TrieCatalog. !table-cats file-size-target))))
 
 (t/deftest test-stale-msg
   (letfn [(stale? [tries trie-key]
@@ -189,6 +198,135 @@
            (curr-tries ["l00-rc-b00" 10] ["l00-rc-b01" 10] ["l00-rc-b02" 10] ["l00-rc-b03" 10] ["l00-rc-b04" 10]
                        ["l01-rc-b00" 10] ["l01-rc-b01" 20] ["l01-rc-b02" 10] ["l01-rc-b03" 20]))
         "Superseded L1 files should not get returned"))
+
+(defn l0-seq
+  ([n] (l0-seq n 20))
+  ([n size]
+   (map (fn [i] [(str "l00-rc-b" (util/->lex-hex-string i)) size]) (range n))))
+
+(defn l1-seq
+  ([n] (l1-seq n 20))
+  ([n size]
+   (map (fn [i] [(str "l01-rc-b" (util/->lex-hex-string i)) size]) (range n))))
+
+(defn l2-seq
+  ([n] (l2-seq n 20))
+  ([n size]
+   (mapcat (fn [i]
+             (let [b (util/->lex-hex-string i)
+                   format-str "l02-rc-p%d-b%s"]
+               (for [j (range 4)]
+                 [(format format-str j b) size])))
+           (range 3 n 4))))
+
+(defn l3-seq
+  ([n] (l3-seq n 20))
+  ([n size]
+   (mapcat (fn [i]
+             (let [b (util/->lex-hex-string i)
+                   format-str "l03-rc-p%d%d-b%s"]
+               (for [j (range 4)
+                     k (range 4)]
+                 [(format format-str j k b) size])))
+           (range 3 n 4))))
+
+(comment
+  (l1-seq 16)
+  (l2-seq 16)
+  (count (l3-seq 16))
+
+  (require '[clojure.java.io :as io])
+
+  (def trace-file (io/file "/home/finnv/src/github.com/FiV0/xtdb/core/trace-file"))
+
+  (def trace
+    (-> trace-file
+        io/reader
+        line-seq))
+
+  (def trace-seq (map #(vector % 20) trace))
+
+  (count trace-seq)
+
+  )
+
+(t/deftest test-trace
+  (let [res (apply curr-tries
+                   (take 18 trace-seq))]
+    (t/is (= nil
+             res)))
+  )
+
+
+
+
+(comment
+  (require '[xtdb.compactor :as c]))
+
+(comment
+  (def calculator (c/->JobCalculator))
+
+  (defn- apply-msgs2 [& trie-keys]
+    (reduce (fn [trie-cat [trie-key size]]
+              (cat/apply-trie-notification trie-cat {:file-size-target 20}
+                                           (-> (trie/parse-trie-key trie-key)
+                                               (assoc :data-file-size (or size -1)))))
+            (cat/->test-catalog 20)
+            trie-keys))
+
+  (apply apply-msgs2 (take 16 trace-seq) #_(concat (l0-seq 16) (l1-seq 16) (l2-seq 16)))
+
+  (let [l2 (l2-seq 16)
+        everything (concat (l0-seq 16) (l1-seq 16) (shuffle l2))]
+    (c/compaction-jobs
+     "docs"
+     (:tries (apply apply-msgs (take 16 trace-seq) #_(concat everything)))
+     {:file-size-target 20}))
+
+  (apply apply-msgs (take 18 trace-seq))
+
+  (def trie-cat (cat/->test-catalog
+                 {"docs" (apply apply-msgs
+                                (concat (l0-seq 16)  (l1-seq 16) (shuffle (l2-seq 16))))} 20))
+  (def trie-cat (cat/->test-catalog {"docs" (apply apply-msgs (take 32 trace-seq))} 20))
+
+  (.availableJobs calculator trie-cat)
+
+  )
+
+(defn take-every-nth [s n]
+  (loop [res [] s (drop (dec n) s)]
+    (if (seq s)
+      (recur (conj res (first s)) (drop n s))
+      res)))
+
+
+(t/deftest shuffle-test
+  (let [l2-seq (shuffle (l2-seq 16))
+        starts (take-every-nth l2-seq 4)
+        cat (cat/->test-catalog
+             {"docs" (apply apply-msgs
+                            (concat (l0-seq 16)  (l1-seq 16) starts
+                                    (filter (set starts) l2-seq)))} 20)]
+    (t/is (= nil (.availableJobs calculator cat)))
+    ))
+
+
+
+(t/deftest test-l1-current-to-l2-compaction
+  (let [l1s (l1-seq 16)
+        l2s (l2-seq 16)
+        l3s (l3-seq 16)]
+    (t/is (= nil
+             (apply curr-tries
+                    (concat (l0-seq 16) (l1-seq 16) (l2-seq 16)
+                            #_l3s (drop-last 16 l3s) (take 4 (drop 4 (l1-seq 16)))
+                            (drop 48 l3s)
+                            )
+                    #_(concat (l0-seq 16) (take 12 l1s) (take 12 l2s)
+                              (interleave (drop 12 l1s) (drop 12 l2s))
+                              (interleave (drop 12 l1s) (drop 12 l2s))
+                              ))))))
 
 
 (t/deftest test-l0-addition-idempotent-4545

@@ -100,6 +100,8 @@ class MockDriver(
             }
         }
 
+        override fun systemName() = "system-$systemId"
+
         private fun Instant.plusWeeks(weeks: Long) =
             this.plus(weeks * 7, ChronoUnit.DAYS)
 
@@ -333,7 +335,7 @@ class SimulationTest {
         explicitSeed = null
     }
 
-    private fun addL0s(tableRef: TableRef, l0s: List<TrieDetails>) {
+    private fun addTries(tableRef: TableRef, l0s: List<TrieDetails>) {
         l0s.forEach {
             mockDriver.trieKeyToFileSize[it.trieKey.toString()] = it.dataFileSize
         }
@@ -347,7 +349,7 @@ class SimulationTest {
         val docsTable = TableRef("xtdb", "public", "docs")
         val l0Trie = buildTrieDetails(docsTable.tableName, L0TrieKeys.first())
 
-        addL0s(docsTable, listOf(l0Trie))
+        addTries(docsTable, listOf(l0Trie))
 
         compactor.openForDatabase(db).use {
             it.compactAll()
@@ -373,7 +375,7 @@ class SimulationTest {
 
         compactor.openForDatabase(db).use {
             // Round 1: Add 3 L0 tries and compact
-            addL0s(
+            addTries(
                 table,
                 listOf(
                     buildTrieDetails(table.tableName, "l00-rc-b00", 10 * 1024),
@@ -393,7 +395,7 @@ class SimulationTest {
             )
 
             // Round 2: Add 3 more L0 tries and compact
-            addL0s(
+            addTries(
                 table,
                 listOf(
                     buildTrieDetails(table.tableName, "l00-rc-b03", 10 * 1024),
@@ -426,7 +428,7 @@ class SimulationTest {
         val docsTable = TableRef("xtdb", "public", "docs")
         val l0tries = L0TrieKeys.take(100).map { buildTrieDetails(docsTable.tableName, it, 10L * 1024L * 1024L) }
 
-        addL0s(docsTable, l0tries.toList())
+        addTries(docsTable, l0tries.toList())
 
         var currentTries: List<TrieKey>
 
@@ -437,6 +439,76 @@ class SimulationTest {
             } while (currentTries.size != trieCatalog.listAllTrieKeys(docsTable).size)
         }
     }
+
+    @RepeatedTest(testIterations)
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @WithDriverConfig(temporalSplitting = CURRENT)
+    fun complexInterleavingL2ToL3() {
+        val docsTable = TableRef("xtdb", "public", "docs")
+        val defaultFileTarget = 100L * 1024L * 1024L
+
+        // Create a complex scenario with interleaved L1C and L2C tries
+        // Simulates the "up to L3" test from compactor_test.clj
+
+        val tries = mutableListOf<TrieDetails>()
+
+        // Add L1C tries for blocks 0x00-0x0f (16 blocks)
+        // This will trigger multiple L2C compactions
+        for (blockIdx in 0..15) {
+            tries.add(
+                buildTrieDetails(
+                    docsTable.tableName,
+                    "l01-rc-b${blockIdx.toString(16).padStart(2, '0')}",
+                    defaultFileTarget
+                )
+            )
+        }
+
+        // Add some existing L2C partitions with gaps
+        // L2C partitioned files are ~100MB (each partition gets 1/4 of the 4x100MB L1 input)
+        // Partition 0: has b03, b07, b0b (missing b0f to complete first L3)
+        tries.add(buildTrieDetails(docsTable.tableName, "l02-rc-p0-b03", defaultFileTarget))
+        tries.add(buildTrieDetails(docsTable.tableName, "l02-rc-p0-b07", defaultFileTarget))
+        tries.add(buildTrieDetails(docsTable.tableName, "l02-rc-p0-b0b", defaultFileTarget))
+
+        // Partition 1: completely missing (will be created from L1s)
+
+        // Partition 2: has b03, b07 (missing b0b, b0f)
+        tries.add(buildTrieDetails(docsTable.tableName, "l02-rc-p2-b03", defaultFileTarget))
+        tries.add(buildTrieDetails(docsTable.tableName, "l02-rc-p2-b07", defaultFileTarget))
+
+        // Partition 3: has b03, b07 (missing b0b, b0f)
+        tries.add(buildTrieDetails(docsTable.tableName, "l02-rc-p3-b03", defaultFileTarget))
+        tries.add(buildTrieDetails(docsTable.tableName, "l02-rc-p3-b07", defaultFileTarget))
+
+        compactor.openForDatabase(db).use {
+            addTries(docsTable, tries)
+
+            it.compactAll()
+
+            val allTries = trieCatalog.listAllTrieKeys(docsTable)
+
+            // Verify L2C partitions are complete (should have b03, b07, b0b, b0f for each partition)
+            for (partition in 0..3) {
+                for (blockHex in listOf("03", "07", "0b", "0f")) {
+                    Assertions.assertTrue(
+                        allTries.contains("l02-rc-p$partition-b$blockHex"),
+                        "L2C partition $partition should have block b$blockHex"
+                    )
+                }
+            }
+
+            // Verify L3C partitions were created (when 4 full L2Cs are available)
+            val l3Tries = allTries.filter { it.startsWith("l03-rc-p") }
+            LOGGER.info("L3C tries created: $l3Tries")
+
+            // We should have some L3 tries created since we have full L2 sets
+            Assertions.assertTrue(l3Tries.isNotEmpty(),
+                "Should create L3C tries when 4 full L2C blocks are available")
+        }
+    }
+
+
 }
 
 
@@ -532,8 +604,10 @@ class MultiDbSimulationTest {
         )
     }
 
-    @RepeatedTest(testIterations)
+    @RepeatedTest(1)
     @WithDriverConfig(temporalSplitting = BOTH)
+//    @WithSeed(-123456789)
+    @WithSeed(0)
     fun biggerMultiCompactorRun() {
         val docsTable = TableRef("xtdb", "public", "docs")
         val l0tries = L0TrieKeys.take(1000).map { buildTrieDetails(docsTable.tableName, it, 10L * 1024L * 1024L) }

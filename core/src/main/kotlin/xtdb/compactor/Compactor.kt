@@ -52,6 +52,7 @@ interface Compactor : AutoCloseable {
     fun openForDatabase(db: IDatabase): ForDatabase
 
     interface Driver : AutoCloseable {
+        fun systemName(): String = "compactor-driver"
         fun executeJob(job: Job): TriesAdded
         suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata
 
@@ -181,6 +182,9 @@ interface Compactor : AutoCloseable {
                 }
             }
 
+            val currentTries = requiringResolve("xtdb.trie-catalog/current-tries")
+            val trieState = requiringResolve("xtdb.trie-catalog/trie-state")
+
             init {
                 val jobsScope = CoroutineScope(SupervisorJob(dbJob) + jobsDispatcher)
 
@@ -189,6 +193,30 @@ interface Compactor : AutoCloseable {
                         availableJobs =
                             jobCalculator.availableJobs(trieCatalog)
                                 .associateBy { JobKey(it.table, it.outputTrieKey.toString()) }
+
+                        LOGGER.debug {
+                            buildString {
+                                append("All trie keys: " )
+                                append(trieCatalog.listAllTrieKeys(TableRef("xtdb", "public", "docs")) )
+                            }
+                        }
+
+                        LOGGER.debug {
+                            buildString {
+                                append("available jobs for system '${driver.systemName()}': ")
+                                append(availableJobs.keys.joinToString(prefix = "[", postfix = "]"))
+                            }
+
+                        }
+
+                        LOGGER.debug {
+                            buildString {
+                                append("current tries:")
+                                append(currentTries.invoke(trieState.invoke(trieCatalog, TableRef("xtdb", "public", "docs"))))
+                            }
+                        }
+
+
 
                         if (availableJobs.isEmpty() && queuedJobs.isEmpty()) {
                             LOGGER.trace("sending idle")
@@ -218,6 +246,7 @@ interface Compactor : AutoCloseable {
 
                                         LOGGER.debug {
                                             buildString {
+                                                append("system '${driver.systemName()}' ")
                                                 append("compacted '${job.table.sym}'")
                                                 append(" -> ")
                                                 append(

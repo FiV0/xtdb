@@ -16,6 +16,7 @@
             [xtdb.time :as time]
             [xtdb.trie :as trie]
             [xtdb.trie-catalog :as cat]
+            [xtdb.trie-catalog-test :as cat-test]
             [xtdb.util :as util])
   (:import (java.time Duration)
            [xtdb.block.proto TableBlock]
@@ -65,10 +66,95 @@
                          [(trie/->trie-key level nil (byte-array part) i) size])) (range 3 n 4))))))
 
 (defn take-every-nth [s n]
-  (loop [res [] s (drop (dec n) s)]
-    (if (seq s)
-      (recur (conj res (first s)) (drop n s))
-      res)))
+  (take-nth n (drop (dec n) s)))
+
+(require '[clojure.java.io :as io])
+
+(def trace-file (io/file "/home/finnv/src/github.com/FiV0/xtdb/core/trace-file"))
+
+(def trace (-> trace-file io/reader line-seq))
+
+(def trace-seq (map #(vector % 20) trace))
+
+(def trace-seq
+  ;; I generate L1 explicitly in the test
+  [["l02-rc-p0-b03" 20]
+   ["l02-rc-p0-b07" 20]
+   ["l02-rc-p0-b0b" 20]
+   ["l02-rc-p0-b0f" 20]
+
+
+   ["l03-rc-p00-b0f" 20]
+   ["l03-rc-p01-b0f" 20]
+   ["l03-rc-p02-b0f" 20]
+   ["l03-rc-p03-b0f" 20]])
+
+
+(t/deftest trace-test
+  (binding [cat/*file-size-target* 16]
+    (t/is (= #{{:trie-keys ["l01-rc-b00" "l01-rc-b01" "l01-rc-b02" "l01-rc-b03"],
+                :part [3],
+                :out-trie-key "l02-rc-p3-b03"}
+               {:trie-keys ["l01-rc-b00" "l01-rc-b01" "l01-rc-b02" "l01-rc-b03"],
+                :part [2],
+                :out-trie-key "l02-rc-p2-b03"}
+               {:trie-keys
+                ["l02-rc-p0-b03" "l02-rc-p0-b07" "l02-rc-p0-b0b" "l02-rc-p0-b0f"],
+                :part [0 3],
+                :out-trie-key "l03-rc-p03-b0f"}
+               {:trie-keys ["l01-rc-b00" "l01-rc-b01" "l01-rc-b02" "l01-rc-b03"],
+                :part [1],
+                :out-trie-key "l02-rc-p1-b03"}}
+             (apply calc-jobs (concat (level-seq 1 16) (butlast trace-seq)))))
+
+    (t/is (= #{{:trie-keys ["l01-rc-b00" "l01-rc-b01" "l01-rc-b02" "l01-rc-b03"],
+                :part [3],
+                :out-trie-key "l02-rc-p3-b03"}
+               {:trie-keys ["l01-rc-b00" "l01-rc-b01" "l01-rc-b02" "l01-rc-b03"],
+                :part [2],
+                :out-trie-key "l02-rc-p2-b03"}
+               {:trie-keys ["l01-rc-b00" "l01-rc-b01" "l01-rc-b02" "l01-rc-b03"],
+                :part [1],
+                :out-trie-key "l02-rc-p1-b03"}
+               {:trie-keys ["l01-rc-b00" "l01-rc-b01" "l01-rc-b02" "l01-rc-b03"],
+                :part [0],
+                :out-trie-key "l02-rc-p0-b03"}}
+             (apply calc-jobs (concat (level-seq 1 16) trace-seq))))))
+
+(t/deftest shuffle-test
+  (binding [cat/*file-size-target* 16]
+    (let [l2-seq (level-seq 2 16)
+          starts (take-every-nth l2-seq 4)]
+      (prn starts)
+      (t/is (= nil
+               (apply calc-jobs (concat (level-seq 1 16) starts
+                                        (remove (set starts) l2-seq)))))))
+  )
+
+
+(t/deftest shuffle-test
+  (binding [cat/*file-size-target* 16]
+    (let [l2-seq (shuffle (level-seq 2 16))
+          l3-seq (level-seq 3 16)
+          starts (take-every-nth l2-seq 4)]
+      (t/is (= nil
+               (apply calc-jobs (concat (level-seq 0 16)  (level-seq 1 16) starts
+                                        (shuffle (remove (set starts) l2-seq))
+                                        starts
+                                        l3-seq))))))
+  )
+
+
+(t/deftest shuffle-test
+  (let [l2-seq (shuffle (level-seq 2 16))
+        starts (take-every-nth l2-seq 4)
+        cat (cat-test/->test-catalog
+             {"docs" (apply cat-test/apply-msgs
+                            (concat (level-seq 0 16)  (level-seq 1 16) starts
+                                    (shuffle (filter (set starts) l2-seq))))} 20)
+        calculator (c/->JobCalculator)]
+    (t/is (= nil
+             (.availableJobs calculator cat)))))
 
 (t/deftest test-l0->l1-compaction-jobs
   (binding [cat/*file-size-target* 16]
@@ -100,6 +186,17 @@
     (t/is (empty? (calc-jobs ["l00-rc-b00" 10] ["l00-rc-b01" 10] ["l00-rc-b02" 10] ["l00-rc-b03" 10] ["l00-rc-b04" 10]
                              ["l01-rc-b01" 20] ["l01-rc-b03" 20] ["l01-rc-b04" 10]))
           "all merged, nothing to do")))
+
+(t/deftest test-rc-l0-compact
+  (binding [cat/*file-size-target* 16]
+
+    (t/is (= nil
+             (calc-jobs ["l01-rc-b2301" 20] ["l01-rc-b230b" 20] ["l01-rc-b2315" 20] ["l01-rc-b231f" 20]
+                        ["l02-rc-p0-b231f" 20]
+                        #_["l02-rc-p1-b231f" 20]
+                        ["l02-rc-p2-b231f" 20]
+                        ["l02-rc-p3-b231f" 20]
+                        )))))
 
 (t/deftest test-levelling-compaction-jobs
   (binding [cat/*file-size-target* 16]

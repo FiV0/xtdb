@@ -56,7 +56,7 @@
                          (>= total-size file-size-target))
                  tries)))))
 
-(defn- l2h-compaction-jobs [table table-tries opts]
+(defn l2h-compaction-jobs [table table-tries opts]
   (for [[[level recency _part] {l1h-tries :live+nascent}] table-tries
         :when (and recency (= level 1))
         :let [input-tries (l2h-input-files (get-in table-tries [[2 recency []] :live+nascent]) l1h-tries opts)]

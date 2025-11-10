@@ -1,5 +1,6 @@
 (ns xtdb.trie-catalog
-  (:require [clojure.tools.logging :as log]
+  (:require [clojure.java.io :as io]
+            [clojure.tools.logging :as log]
             [integrant.core :as ig]
             [xtdb.table-catalog :as table-cat]
             [xtdb.time :as time]
@@ -11,8 +12,8 @@
            [java.util.concurrent ConcurrentHashMap]
            org.roaringbitmap.buffer.ImmutableRoaringBitmap
            xtdb.catalog.BlockCatalog
-           xtdb.segment.Segment$Page
            (xtdb.log.proto TemporalMetadata TrieDetails TrieMetadata)
+           xtdb.segment.Segment$Page
            (xtdb.storage BufferPool)
            (xtdb.util TemporalBounds)))
 
@@ -311,6 +312,11 @@
                                             (map #(assoc % :state :live)))}}
      :l1h-recencies {}}))
 
+(def trace-file (io/file "trace-file"))
+
+(defn apply-trace [trie-key]
+  (spit trace-file (str trie-key "\n") :append true))
+
 (defrecord TrieCatalog [^Map !table-cats, ^long file-size-target]
   xtdb.trie.TrieCatalog
   (addTries [this table added-tries as-of]
@@ -319,6 +325,7 @@
                 (log/tracef "Adding tries to table '%s': %s" table (mapv #(.getTrieKey ^TrieDetails %) added-tries))
                 (try
                   (reduce (fn [table-cat ^TrieDetails added-trie]
+                            (apply-trace (.getTrieKey added-trie))
                             (if-let [parsed-key (trie/parse-trie-key (.getTrieKey added-trie))]
                               (apply-trie-notification this table-cat
                                                        (-> parsed-key
@@ -387,6 +394,15 @@
       (doseq [[table {:keys [tries]}] table->table-block]
         (.addTries cat table tries now))
       cat)))
+
+(defn ->test-catalog
+  ([file-size-target] (TrieCatalog. (ConcurrentHashMap.) file-size-target))
+  ([tables file-size-target]
+   (let [!table-cats (ConcurrentHashMap.)]
+     (doseq [[table tries] tables]
+       (.put !table-cats table tries))
+     (TrieCatalog. !table-cats file-size-target))))
+
 
 (defmethod ig/init-key :xtdb/trie-catalog [_ {:keys [^BufferPool buffer-pool, ^BlockCatalog block-cat]}]
   (log/debug "starting trie catalog...")
