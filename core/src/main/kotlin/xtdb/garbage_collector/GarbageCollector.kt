@@ -54,11 +54,16 @@ class GarbageCollector(
         }
     }
 
-    fun garbageCollectFromOldestToKeep() {
+    // explicit function for testing
+    fun garbageCollect(blocksToKeep: Int, garbageLifetime: Duration) {
         val oldestBlockToKeep = blockCatalog.blockFromLatest(blocksToKeep)
         val gcCutOff = oldestBlockToKeep?.let { it.latestCompletedTx.systemTime.microsAsInstant - garbageLifetime }
         LOGGER.debug("Garbage collecting data older than {}", gcCutOff)
         garbageCollect(gcCutOff)
+    }
+
+    fun garbageCollectFromOldestToKeep() {
+        garbageCollect(blocksToKeep, garbageLifetime)
     }
 
     fun start() {
