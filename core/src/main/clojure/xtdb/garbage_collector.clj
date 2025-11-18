@@ -2,7 +2,8 @@
   (:require [integrant.core :as ig]
             [xtdb.node :as xtn]
             [xtdb.util :as util])
-  (:import [xtdb.api Xtdb$Config GarbageCollectorConfig]
+  (:import [java.time Duration]
+           [xtdb.api GarbageCollectorConfig Xtdb$Config]
            xtdb.database.Database$Catalog
            [xtdb.garbage_collector GarbageCollector]))
 
@@ -33,3 +34,6 @@
 
 (defn garbage-collector ^xtdb.garbage_collector.GarbageCollector [node]
   (util/component node :xtdb/garbage-collector))
+
+(defn garbage-collect [node ^long block-to-keep, ^Duration garbage-lifetime]
+  (.garbageCollect (garbage-collector node) block-to-keep garbage-lifetime))
