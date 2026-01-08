@@ -4,7 +4,6 @@
             [integrant.core :as ig]
             [xtdb.buffer-pool]
             [xtdb.metrics :as metrics]
-            [xtdb.table :as table]
             [xtdb.table-catalog :as table-cat]
             [xtdb.trie :as trie]
             [xtdb.trie-catalog :as trie-cat]
@@ -21,7 +20,6 @@
            xtdb.storage.BufferPool
            (xtdb.catalog BlockCatalog TableCatalog)
            (xtdb.indexer LiveIndex$Snapshot LiveIndex$Tx LiveTable LiveTable$FinishedBlock LiveTable$Snapshot LiveTable$Tx Snapshot)
-           (xtdb.log.proto TrieDetails)
            (xtdb.trie TrieCatalog)
            (xtdb.util RefCounter RowCounter)))
 
@@ -144,9 +142,7 @@
                                              :hlls (.getHllDeltas fb)})))]
       (let [added-tries (for [[table {:keys [trie-key data-file-size trie-metadata state]}] table-metadata]
                           (trie/->trie-details table trie-key data-file-size trie-metadata state))]
-        (.appendMessage log (Log$Message$TriesAdded. Storage/VERSION (.getEpoch buffer-pool) added-tries))
-        (doseq [^TrieDetails added-trie added-tries]
-          (.addTries trie-cat (table/->ref db-name (.getTableName added-trie)) [added-trie] (.getSystemTime latest-completed-tx))))
+        (.appendMessage log (Log$Message$TriesAdded. Storage/VERSION (.getEpoch buffer-pool) added-tries)))
 
       (let [all-tables (set (concat (keys table-metadata) (.getAllTables block-cat)))
             table->partitions (->> all-tables

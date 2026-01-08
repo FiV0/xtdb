@@ -207,15 +207,7 @@ interface Compactor : AutoCloseable {
                                         val timer = meterRegistry?.let { Timer.start(it) }
                                         val triesAdded = driver.executeJob(job)
                                         jobTimer?.let { timer?.stop(it) }
-                                        val messageMetadata = driver.appendMessage(triesAdded)
-
-                                        // add the trie to the catalog eagerly so that it's present
-                                        // next time we run `availableJobs` (it's idempotent)
-                                        trieCatalog.addTries(
-                                            job.table,
-                                            triesAdded.tries,
-                                            messageMetadata.logTimestamp
-                                        )
+                                        driver.appendMessage(triesAdded)
 
                                         LOGGER.debug {
                                             buildString {
