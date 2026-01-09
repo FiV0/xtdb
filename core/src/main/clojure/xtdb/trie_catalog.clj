@@ -154,7 +154,9 @@
 (defn- supersede-partial-tries [{:keys [live garbage] :as tries}
                                 {:keys [^long block-idx] :as _trie}
                                 {:keys [^long file-size-target as-of]}]
-  (let [[new-garbage live] (->> live
+  ;; if there is no partition yet we intialize empty but set the max-block-idx the level above
+  (let [tries (or tries {:live (), :garbage (), :max-block-idx block-idx})
+        [new-garbage live] (->> live
                                 ;; TODO this simple map op does not work, see #4947
                                 (map (fn [{^long other-block-idx :block-idx, ^long other-size :data-file-size :as other-trie}]
                                        (cond-> other-trie
@@ -170,7 +172,7 @@
 
 (defn- conj-trie [tries {block-idx :block-idx :as trie} state]
   (let [trie (assoc trie :state state)
-        tries (or tries {:live (), :nascent (), :garbage ()})]
+        tries (or tries {:live (), :garbage ()})]
     (-> tries
         (update state conj trie)
         (update :max-block-idx (fnil max -1) block-idx))))
@@ -181,7 +183,9 @@
       (conj-trie trie :live)))
 
 (defn- supersede-by-block-idx [{:keys [live garbage] :as tries}, ^long block-idx {:keys [as-of]}]
-  (let [[new-garbage live] (->> live
+  ;; if there is no partition yet we intialize empty but set the max-block-idx from the level above
+  (let [tries (or tries {:live (), :garbage () :max-block-idx block-idx})
+        [new-garbage live] (->> live
                                 (map (fn [{^long other-block-idx :block-idx, :as trie}]
                                        (cond-> trie
                                          (<= other-block-idx block-idx) (-> (assoc :state :garbage
