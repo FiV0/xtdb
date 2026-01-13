@@ -10,6 +10,7 @@ import org.junit.jupiter.api.extension.TestExecutionExceptionHandler
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
+import xtdb.util.SimulationClock
 import xtdb.util.logger
 import xtdb.util.warn
 import java.util.concurrent.TimeUnit
@@ -51,13 +52,15 @@ abstract class SimulationTestBase {
     var currentSeed: Int = 0
     var explicitSeed: Int? = null
     protected lateinit var rand: Random
+    protected lateinit var clock: SimulationClock
     protected lateinit var dispatcher: DeterministicDispatcher
 
     @BeforeEach
     open fun setUpSimulation() {
         currentSeed = explicitSeed ?: Random.nextInt()
         rand = Random(currentSeed)
-        dispatcher = DeterministicDispatcher(currentSeed)
+        clock = SimulationClock()
+        dispatcher = DeterministicDispatcher(currentSeed, clock)
     }
 
     @AfterEach

@@ -100,7 +100,7 @@ private val LOGGER = NodeSimulationTest::class.logger
 @ExtendWith(NumberOfSystemsExtension::class)
 class NodeSimulationTest : SimulationTestBase() {
     var numberOfSystems: Int = 1
-    val garbageLifetime = Duration.ofSeconds(60)
+    val garbageLifetime = Duration.ofSeconds(10)
     private lateinit var allocator: BufferAllocator
     private lateinit var sharedBufferPool: MemoryStorage
     private lateinit var compactorDriver: CompactorMockDriver
@@ -118,7 +118,7 @@ class NodeSimulationTest : SimulationTestBase() {
         setLogLevel.invoke("xtdb".symbol, logLevel)
 
         val jobCalculator = createJobCalculator.invoke() as Compactor.JobCalculator
-        compactorDriver = CompactorMockDriver(dispatcher, currentSeed, CompactorDriverConfig())
+        compactorDriver = CompactorMockDriver(dispatcher, currentSeed, CompactorDriverConfig(), clock)
         gcDriver = GarbageCollectorMockDriver()
         allocator = RootAllocator()
 
@@ -158,7 +158,7 @@ class NodeSimulationTest : SimulationTestBase() {
         allocator.close()
     }
 
-    private fun addTries(tableRef: TableRef, tries: List<TrieDetails>, timestamp: Instant) {
+    private fun addTries(tableRef: TableRef, tries: List<TrieDetails>, timestamp: Instant = clock.instant()) {
         tries.forEach {
             compactorDriver.trieKeyToFileSize[it.trieKey.toString()] = it.dataFileSize
         }
@@ -220,14 +220,13 @@ class NodeSimulationTest : SimulationTestBase() {
 
         addTries(
             table,
-            l1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            l1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         for (blockIndex in 1L..3L) {
             blockCatalog.finishBlock(
                 blockIndex = blockIndex,
-                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                 latestProcessedMsgId = blockIndex,
                 tables = listOf(table),
                 secondaryDatabases = null
@@ -237,7 +236,8 @@ class NodeSimulationTest : SimulationTestBase() {
         Assertions.assertEquals(l1Tries, trieCatalog.listAllTrieKeys(table), "l1s present in trie catalog")
         Assertions.assertEquals(l1Tries, listTrieNamesFromBufferPool(sharedBufferPool, table), "l1s present in buffer pool")
 
-        runBlocking { garbageCollector.garbageCollectTries(Instant.now() + Duration.ofHours(1)) }
+        clock.advanceBy(garbageLifetime)
+        runBlocking { garbageCollector.garbageCollectTries(clock.instant()) }
 
         Assertions.assertEquals(l1Tries, trieCatalog.listAllTrieKeys(table), "live l1s haven't been garbage collected")
         Assertions.assertEquals(l1Tries, listTrieNamesFromBufferPool(sharedBufferPool, table), "live l1s haven't been garbage collected")
@@ -250,7 +250,8 @@ class NodeSimulationTest : SimulationTestBase() {
         Assertions.assertEquals(allTries, listTrieNamesFromBufferPool(sharedBufferPool, table).toSet(), "l2s present in buffer pool")
         Assertions.assertEquals(allTries, trieCatalog.listAllTrieKeys(table).toSet(), "l2s present in trie catalog")
 
-        runBlocking { garbageCollector.garbageCollectTries(Instant.now() + Duration.ofHours(1)) }
+        clock.advanceBy(garbageLifetime)
+        runBlocking { garbageCollector.garbageCollectTries(clock.instant()) }
 
         Assertions.assertEquals(l2Tries.toSet(), trieCatalog.listAllTrieKeys(table).toSet(), "l1s should get garbage collected from trie catalog")
         Assertions.assertEquals(l2Tries.toSet(), listTrieNamesFromBufferPool(sharedBufferPool, table).toSet(), "l1s should get garbage collected from buffer pool")
@@ -273,15 +274,14 @@ class NodeSimulationTest : SimulationTestBase() {
 
         addTries(
             table,
-            l1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            l1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         // Finish blocks so GC can consider tries for collection
         for (blockIndex in 5L..7L) {
             blockCatalog.finishBlock(
                 blockIndex = blockIndex,
-                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                 latestProcessedMsgId = blockIndex,
                 tables = listOf(table),
                 secondaryDatabases = null
@@ -297,9 +297,10 @@ class NodeSimulationTest : SimulationTestBase() {
                 compactorForDb.startCompaction().await()
             }
             val gcJob = launch {
-                val asOf = Instant.now() + Duration.ofHours(1)
-                while(trieCatalog.garbageTries(table, asOf).isEmpty()) { yield() } // wait for compaction to mark tries as garbage
-                garbageCollector.garbageCollectTries(asOf)
+                // Use future time to ensure garbage is immediately eligible for collection
+                val gcAsOf = clock.instant().plus(garbageLifetime).plus(garbageLifetime)
+                while(trieCatalog.garbageTries(table, gcAsOf).isEmpty()) { yield() } // wait for compaction to mark tries as garbage
+                garbageCollector.garbageCollectTries(gcAsOf)
             }
 
             compactionJob.join()
@@ -315,7 +316,8 @@ class NodeSimulationTest : SimulationTestBase() {
         val l1sInCatalog = triesInCatalog.prefix("l01-rc-")
         Assertions.assertTrue(l1sInCatalog.size < 8, "Some l1s should get garbage collected from trie catalog mid compaction.")
 
-        runBlocking { garbageCollector.garbageCollectTries(Instant.now() + Duration.ofHours(1)) }
+        clock.advanceBy(garbageLifetime)
+        runBlocking { garbageCollector.garbageCollectTries(clock.instant()) }
 
         Assertions.assertEquals(expectedL2Tries.toSet(), trieCatalog.listAllTrieKeys(table).toSet(), "l1s should get garbage collected from trie catalog, leaving l2s")
     }
@@ -336,8 +338,7 @@ class NodeSimulationTest : SimulationTestBase() {
 
         addTries(
             table,
-            oldTries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            oldTries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         Assertions.assertEquals(oldTries, trieCatalog.listAllTrieKeys(table), "tries present in catalog")
@@ -346,15 +347,14 @@ class NodeSimulationTest : SimulationTestBase() {
         val newL1Tries = listOf("l01-rc-b04", "l01-rc-b05", "l01-rc-b06", "l01-rc-b07")
         addTries(
             table,
-            newL1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            newL1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         // Finish blocks so GC can consider tries for collection
         for (blockIndex in 5L..7L) {
             blockCatalog.finishBlock(
                 blockIndex = blockIndex,
-                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                 latestProcessedMsgId = blockIndex,
                 tables = listOf(table),
                 secondaryDatabases = null
@@ -369,7 +369,7 @@ class NodeSimulationTest : SimulationTestBase() {
                 compactorForDb.startCompaction().await()
             }
             val gcJob = launch {
-                garbageCollector.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                garbageCollector.garbageCollectTries(clock.instant())
             }
 
             compactionJob.join()
@@ -388,7 +388,8 @@ class NodeSimulationTest : SimulationTestBase() {
         Assertions.assertTrue(oldl2Tries.all { it in finalTriesInCatalog }, "Old L2 tries should still be present")
         Assertions.assertTrue(oldl2Tries.all { it in finalTriesInBufferPool }, "Old L2 tries should still be in buffer pool")
 
-        runBlocking { garbageCollector.garbageCollectTries(Instant.now() + Duration.ofHours(1)) }
+        clock.advanceBy(garbageLifetime)
+        runBlocking { garbageCollector.garbageCollectTries(clock.instant()) }
         val l2Set = (oldl2Tries + expectedNewL2Tries).toSet()
         Assertions.assertEquals(l2Set.toSet(), trieCatalog.listAllTrieKeys(table).toSet(), "l1s should get garbage collected from trie catalog, leaving l2s")
     }
@@ -405,16 +406,14 @@ class NodeSimulationTest : SimulationTestBase() {
         val oldL2Tries = listOf("l02-rc-p0-b03", "l02-rc-p1-b03", "l02-rc-p2-b03", "l02-rc-p3-b03")
         addTries(
             table,
-            (oldL1Tries + oldL2Tries).map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            (oldL1Tries + oldL2Tries).map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         // Add new L1 tries that will be compacted
         val newL1Tries = listOf("l01-rc-b04", "l01-rc-b05", "l01-rc-b06", "l01-rc-b07")
         addTries(
             table,
-            newL1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            newL1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         // Finish blocks so GC can consider tries for collection
@@ -422,7 +421,7 @@ class NodeSimulationTest : SimulationTestBase() {
             for (blockIndex in 5L..7L) {
                 blockCatalog.finishBlock(
                     blockIndex = blockIndex,
-                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                     latestProcessedMsgId = blockIndex,
                     tables = listOf(table),
                     secondaryDatabases = null
@@ -443,7 +442,7 @@ class NodeSimulationTest : SimulationTestBase() {
             val gcJobs = garbageCollectors.shuffled(rand).map { gc ->
                 val jobId = UUID.randomUUID().toString().substring(0, 8)
                 launch(CoroutineName("gc-$jobId")) {
-                    gc.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                    gc.garbageCollectTries(clock.instant())
                 }
             }
 
@@ -460,9 +459,10 @@ class NodeSimulationTest : SimulationTestBase() {
         }
 
         // Final GC pass to clean up remaining L1s
+        clock.advanceBy(garbageLifetime)
         runBlocking {
             garbageCollectors.forEach { gc ->
-                gc.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                gc.garbageCollectTries(clock.instant())
             }
         }
 
@@ -483,8 +483,7 @@ class NodeSimulationTest : SimulationTestBase() {
         val l1Tries = L1TrieKeys.take(8).toList()
         addTries(
             table,
-            l1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            l1Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         // Finish blocks so compaction can proceed
@@ -492,7 +491,7 @@ class NodeSimulationTest : SimulationTestBase() {
             for (blockIndex in 5L..7L) {
                 blockCatalog.finishBlock(
                     blockIndex = blockIndex,
-                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                     latestProcessedMsgId = blockIndex,
                     tables = listOf(table),
                     secondaryDatabases = null
@@ -513,7 +512,7 @@ class NodeSimulationTest : SimulationTestBase() {
                 compactorsForDb[0].startCompaction().await()
             }
             val system0GC = launch(CoroutineName("system0-gc")) {
-                garbageCollectors[0].garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                garbageCollectors[0].garbageCollectTries(clock.instant())
             }
 
             system0Compaction.join()
@@ -531,7 +530,7 @@ class NodeSimulationTest : SimulationTestBase() {
                 compactorsForDb[1].startCompaction().await()
             }
             val system1GC = launch(CoroutineName("system1-gc")) {
-                garbageCollectors[1].garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                garbageCollectors[1].garbageCollectTries(clock.instant())
             }
 
             system1Compaction.join()
@@ -548,9 +547,10 @@ class NodeSimulationTest : SimulationTestBase() {
         }
 
         // Final GC pass
+        clock.advanceBy(garbageLifetime)
         runBlocking {
             garbageCollectors.forEach { gc ->
-                gc.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                gc.garbageCollectTries(clock.instant())
             }
         }
 
@@ -576,14 +576,13 @@ class NodeSimulationTest : SimulationTestBase() {
 
         addTries(
             table,
-            l0Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            l0Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         for (blockIndex in 1L..15L) {
             blockCatalog.finishBlock(
                 blockIndex = blockIndex,
-                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                 latestProcessedMsgId = blockIndex,
                 tables = listOf(table),
                 secondaryDatabases = null
@@ -591,7 +590,8 @@ class NodeSimulationTest : SimulationTestBase() {
         }
 
         compactorForDb.compactAll()
-        runBlocking { garbageCollector.garbageCollectTries(Instant.now() + Duration.ofHours(1)) }
+        clock.advanceBy(garbageLifetime)
+        runBlocking { garbageCollector.garbageCollectTries(clock.instant()) }
 
         val triesInCatalog = trieCatalog.listAllTrieKeys(table)
         val l0Count = triesInCatalog.prefix("l00-rc-").size
@@ -619,8 +619,7 @@ class NodeSimulationTest : SimulationTestBase() {
 
         addTries(
             table,
-            l0Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            l0Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         // Finish blocks to enable compaction
@@ -628,7 +627,7 @@ class NodeSimulationTest : SimulationTestBase() {
             for (blockIndex in 1L..15L) {
                 blockCatalog.finishBlock(
                     blockIndex = blockIndex,
-                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                     latestProcessedMsgId = blockIndex,
                     tables = listOf(table),
                     secondaryDatabases = null
@@ -646,7 +645,7 @@ class NodeSimulationTest : SimulationTestBase() {
 
             val gcJobs = garbageCollectors.shuffled(rand).map { gc ->
                 launch(CoroutineName("gc")) {
-                    gc.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                    gc.garbageCollectTries(clock.instant())
                 }
             }
 
@@ -663,9 +662,10 @@ class NodeSimulationTest : SimulationTestBase() {
         }
 
         // Final GC pass
+        clock.advanceBy(garbageLifetime)
         runBlocking {
             garbageCollectors.forEach { gc ->
-                gc.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                gc.garbageCollectTries(clock.instant())
             }
         }
 
@@ -705,15 +705,14 @@ class NodeSimulationTest : SimulationTestBase() {
 
         addTries(
             table,
-            l3Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) },
-            Instant.now()
+            l3Tries.map { buildTrieDetails(table.tableName, it, defaultFileTarget) }
         )
 
         blockCatalogs.forEach { blockCatalog ->
             for (blockIndex in 0L..13L) {
                 blockCatalog.finishBlock(
                     blockIndex = blockIndex,
-                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = clock.instant()),
                     latestProcessedMsgId = blockIndex,
                     tables = listOf(table),
                     secondaryDatabases = null
@@ -734,7 +733,7 @@ class NodeSimulationTest : SimulationTestBase() {
                 List(3) { round ->
                     launch(CoroutineName("gc-round$round")) {
                         repeat(round) { yield() }
-                        gc.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                        gc.garbageCollectTries(clock.instant())
                     }
                 }
             }
@@ -749,9 +748,10 @@ class NodeSimulationTest : SimulationTestBase() {
         }
 
         // Final GC pass to clean up all remaining garbage
+        clock.advanceBy(garbageLifetime)
         runBlocking {
             garbageCollectors.forEach { gc ->
-                gc.garbageCollectTries(Instant.now() + Duration.ofHours(1))
+                gc.garbageCollectTries(clock.instant())
             }
         }
 

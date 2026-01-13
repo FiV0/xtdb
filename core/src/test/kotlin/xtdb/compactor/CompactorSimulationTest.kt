@@ -88,7 +88,8 @@ data class CompactorDriverConfig(
 class CompactorMockDriver(
     val dispatcher: CoroutineDispatcher,
     val baseSeed: Int,
-    config: CompactorDriverConfig
+    config: CompactorDriverConfig,
+    val clock: java.time.InstantSource = java.time.InstantSource.system()
 ) : Factory {
     class AppendMessage(val triesAdded: TriesAdded, val msgTimestamp: Instant, val systemId: Int = 0)
 
@@ -212,7 +213,7 @@ class CompactorMockDriver(
         override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata {
             LOGGER.debug("[appendMessage started] systemId=$systemId offset=$logOffset tries=${triesAdded.tries.map { it.trieKey }}")
             yield() // Force suspension after appendMessage started
-            val logTimestamp = Instant.now()
+            val logTimestamp = clock.instant()
             sharedFlow.emit(AppendMessage(triesAdded, logTimestamp, systemId))
             LOGGER.debug("[appendMessage completed] systemId=$systemId offset=$logOffset sent to channel")
             return Log.MessageMetadata(logOffset++, logTimestamp)
@@ -293,7 +294,7 @@ class CompactorSimulationTest : SimulationTestBase() {
     fun setUp() {
         super.setUpSimulation()
         setLogLevel.invoke("xtdb.compactor".symbol, logLevel)
-        mockDriver = CompactorMockDriver(dispatcher, currentSeed, driverConfig)
+        mockDriver = CompactorMockDriver(dispatcher, currentSeed, driverConfig, clock)
         jobCalculator = createJobCalculator.invoke() as Compactor.JobCalculator
         allocator = RootAllocator()
 
@@ -328,7 +329,7 @@ class CompactorSimulationTest : SimulationTestBase() {
         }
         dbs.forEach { db ->
             addTriesToBufferPool(db.bufferPool, tableRef, l0s)
-            db.trieCatalog.addTries(tableRef, l0s, Instant.now())
+            db.trieCatalog.addTries(tableRef, l0s, clock.instant())
         }
     }
 
