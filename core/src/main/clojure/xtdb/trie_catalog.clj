@@ -35,20 +35,9 @@
          (partition 2 1)
          (every? (fn [[a b]] (>= a b))))))
 
-(defn descending-by-one? [key-fn]
-  (fn [coll]
-    (->> coll
-         (map key-fn)
-         (partition 2 1)
-         (every? (fn [[a b]] (zero? (- a b 1)))))))
-
 (s/def ::shard-list
   (s/and (s/coll-of ::trie)
          (descending-by? :block-idx)))
-
-(s/def ::shard-list-strict
-  (s/and (s/coll-of ::trie)
-         (descending-by-one? :block-idx)))
 
 (defn all-eq? [key-fn value]
   (fn [coll]
@@ -57,20 +46,11 @@
 (s/def ::live (s/and ::shard-list
                      (all-eq? :state :live)))
 
-(s/def ::live-strict (s/and ::shard-list-strict
-                            (all-eq? :state :live)))
-
 (s/def ::nascent (s/and ::shard-list
                         (all-eq? :state :nascent)))
 
-(s/def ::nascent-strict (s/and ::shard-list-strict
-                               (all-eq? :state :nascent)))
-
 (s/def ::garbage (s/and ::shard-list
                         (all-eq? :state :garbage)))
-
-(s/def ::garbage-strict (s/and ::shard-list-strict
-                               (all-eq? :state :garbage)))
 
 (s/def ::max-block-idx ::block-idx)
 
@@ -78,26 +58,8 @@
   (s/keys :req-un [::live ::garbage ::max-block-idx]
           :opt-un [::nascent]))
 
-
-(s/def ::shard-values-strict
-  (s/and (s/keys :req-un [::live ::garbage ::max-block-idx]
-                 :opt-un [::nascent])
-         #(s/valid? ::live-strict (:live %))
-         #(s/valid? ::garbage-strict (:garbage %))
-         #(or (nil? (:nascent %)) (s/valid? ::nascent-strict (:nascent %)))))
-
-(defmulti shard-entry-spec (fn [[shard _values]] (first shard)))
-
-(defmethod shard-entry-spec 0 [[_ _]]
-  (s/tuple ::shard ::shard-values-strict))
-
-(defmethod shard-entry-spec :default [[_ _]]
-  (s/tuple ::shard ::shard-values))
-
-(s/def ::shared-entry (s/multi-spec shard-entry-spec (fn [genv _tag] genv)))
-
 (s/def ::catalog-tries
-  (s/coll-of ::shared-entry :kind (some-fn nil? map?)))
+  (s/nilable (s/map-of ::shard ::shard-values)))
 
 ;; table-tries data structure
 ;; values is a map of live, nascent and garbage tries lists
