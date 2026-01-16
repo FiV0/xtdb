@@ -22,10 +22,15 @@ import xtdb.catalog.TableCatalog
 import xtdb.compactor.Compactor
 import xtdb.compactor.CompactorDriverConfig
 import xtdb.compactor.CompactorMockDriver
+import xtdb.compactor.DriverConfigExtension
+import xtdb.compactor.HasCompactorDriverConfig
+import xtdb.compactor.HasNumberOfSystems
+import xtdb.compactor.NumberOfSystemsExtension
 import xtdb.compactor.RepeatableSimulationTest
-import org.junit.jupiter.api.extension.BeforeEachCallback
+import xtdb.compactor.WithCompactorDriverConfig
+import xtdb.compactor.WithNumberOfSystems
+import xtdb.compactor.TemporalSplitting
 import org.junit.jupiter.api.extension.ExtendWith
-import org.junit.jupiter.api.extension.ExtensionContext
 import xtdb.SimulationTestUtils.Companion.L0TrieKeys
 import xtdb.SimulationTestUtils.Companion.L3TrieKeys
 import xtdb.compactor.MockDb
@@ -72,34 +77,15 @@ fun listTrieNamesFromBufferPool(bufferPool: BufferPool, tableRef: TableRef): Lis
         .listAllObjects("tables/public\$${tableRef.tableName}/data/".asPath)
         .map { it.key.fileName.toString().removeSuffix(".arrow") }
 
-@ParameterizedTest(name = "[iteration {0}]")
-@MethodSource("xtdb.SimulationTestBase#iterationSource")
-annotation class RepeatableSimulationTest
-
-@Target(AnnotationTarget.FUNCTION)
-@Retention(AnnotationRetention.RUNTIME)
-annotation class WithNumberOfSystems(val numberOfSystems: Int)
-
-class NumberOfSystemsExtension : BeforeEachCallback {
-    override fun beforeEach(context: ExtensionContext) {
-        val annotation = context.requiredTestMethod.getAnnotation(WithNumberOfSystems::class.java)
-            ?: return
-
-        val testInstance = context.requiredTestInstance
-        if (testInstance !is NodeSimulationTest) return
-
-        testInstance.numberOfSystems = annotation.numberOfSystems
-    }
-}
-
 // Settings used by all tests in this class
 private const val logLevel = "WARN"
 private val LOGGER = NodeSimulationTest::class.logger
 
 @Tag("property")
-@ExtendWith(NumberOfSystemsExtension::class)
-class NodeSimulationTest : SimulationTestBase() {
-    var numberOfSystems: Int = 1
+@ExtendWith(DriverConfigExtension::class, NumberOfSystemsExtension::class)
+class NodeSimulationTest : SimulationTestBase(), HasCompactorDriverConfig, HasNumberOfSystems {
+    override var driverConfig: CompactorDriverConfig = CompactorDriverConfig()
+    override var numberOfSystems: Int = 1
     val garbageLifetime = Duration.ofSeconds(60)
     private lateinit var allocator: BufferAllocator
     private lateinit var sharedBufferPool: MemoryStorage
@@ -118,7 +104,7 @@ class NodeSimulationTest : SimulationTestBase() {
         setLogLevel.invoke("xtdb".symbol, logLevel)
 
         val jobCalculator = createJobCalculator.invoke() as Compactor.JobCalculator
-        compactorDriver = CompactorMockDriver(dispatcher, currentSeed, CompactorDriverConfig())
+        compactorDriver = CompactorMockDriver(dispatcher, currentSeed, driverConfig)
         gcDriver = GarbageCollectorMockDriver()
         allocator = RootAllocator()
 
@@ -151,6 +137,7 @@ class NodeSimulationTest : SimulationTestBase() {
     @AfterEach
     fun tearDown() {
         super.tearDownSimulation()
+        driverConfig = CompactorDriverConfig()
         garbageCollectors.forEach { it.close() }
         sharedBufferPool.close()
         compactorsForDb.forEach { it.close() }
@@ -732,5 +719,129 @@ class NodeSimulationTest : SimulationTestBase() {
         val bufferPoolTries = listTrieNamesFromBufferPool(sharedBufferPool, table).toSet()
         Assertions.assertEquals(finalTries.size, bufferPoolTries.size, "Buffer pool trie count should match catalog")
         Assertions.assertEquals(finalTries, bufferPoolTries, "Buffer pool should match catalog")
+    }
+
+//    @RepeatedTest(1)
+    @RepeatableSimulationTest
+//    @WithSeed(1071536144)
+    @WithSeed(-410731000)
+    @WithNumberOfSystems(2)
+    @WithCompactorDriverConfig(temporalSplitting = TemporalSplitting.BOTH)
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    fun `multi-table sparse L0 with temporal splitting`(iteration: Int) {
+        // Enable TRACE logging for trie-catalog to see addTries calls
+        setLogLevel.invoke("xtdb.trie-catalog".symbol, "TRACE")
+
+        val docsTable = TableRef("xtdb", "public", "docs")
+        val usersTable = TableRef("xtdb", "public", "users")
+        val tables = listOf(docsTable, usersTable)
+        val defaultFileTarget = 100L * 1024L * 1024L
+
+        // Sparse L0 population: not every table gets an L0 for every block
+        // docs: blocks 0,1,2,3,4,5,6,7 (all)
+        // users: blocks 0,2,4,6 (even only)
+        val docsL0s = (0..7).map { "l00-rc-b0$it" }
+        val usersL0s = listOf(0, 2, 4, 6).map { "l00-rc-b0$it" }
+
+        addTries(docsTable, docsL0s.map { buildTrieDetails(docsTable.tableName, it, defaultFileTarget) }, Instant.now())
+        addTries(usersTable, usersL0s.map { buildTrieDetails(usersTable.tableName, it, defaultFileTarget) }, Instant.now())
+
+        // Finish blocks
+        blockCatalogs.forEach { blockCatalog ->
+            for (blockIndex in 0L..7L) {
+                blockCatalog.finishBlock(
+                    blockIndex = blockIndex,
+                    latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
+                    latestProcessedMsgId = blockIndex,
+                    tables = tables,
+                    secondaryDatabases = null
+                )
+            }
+        }
+
+        // Run compaction and GC concurrently across all systems
+        runBlocking(dispatcher) {
+            val compactionJobs = compactorsForDb.shuffled(rand).map { compactor ->
+                launch {
+                    compactor.startCompaction().await()
+                }
+            }
+
+            val now = Instant.now()
+
+            val gcJobs = garbageCollectors.shuffled(rand).map { gc ->
+                launch(CoroutineName("gc")) {
+                    gc.garbageCollectTries(now)
+                }
+            }
+
+            (compactionJobs + gcJobs).joinAll()
+        }
+
+        // Verify each table has L0s and L1s (temporal splitting creates both current and historical L1s)
+        trieCatalogs.forEach { trieCatalog ->
+            val docsTries = trieCatalog.listAllTrieKeys(docsTable)
+            val usersTries = trieCatalog.listAllTrieKeys(usersTable)
+
+            // docs should have 8 L0s
+            Assertions.assertEquals(8, docsTries.prefix("l00-rc-").size, "docs should have 8 L0s")
+            // users should have 4 L0s
+            Assertions.assertEquals(4, usersTries.prefix("l00-rc-").size, "users should have 4 L0s")
+
+            // With BOTH temporal splitting, each L0->L1 compaction creates 2 L1s (current + historical)
+            // So docs (8 L0s) -> 16 L1s, users (4 L0s) -> 8 L1s
+            val docsL1Count = docsTries.prefix("l01-").size
+            val usersL1Count = usersTries.prefix("l01-").size
+
+            Assertions.assertTrue(docsL1Count >= 8, "docs should have at least 8 L1s (got $docsL1Count)")
+            Assertions.assertTrue(usersL1Count >= 4, "users should have at least 4 L1s (got $usersL1Count)")
+        }
+
+        // Final GC pass - use Instant.MAX to catch all garbage regardless of timestamp
+        runBlocking {
+            garbageCollectors.forEach { gc ->
+                gc.garbageCollectTries(Instant.MAX)
+            }
+        }
+
+        // Verify buffer pool consistency first - all live tries in catalogs should exist in storage
+        // This is the most critical invariant: if a trie is live, its files must exist
+        tables.forEach { table ->
+            val triesInStorage = listTrieNamesFromBufferPool(sharedBufferPool, table).toSet()
+            val liveTrieKeysByCatalog = trieCatalogs.map { it.listAllTrieKeys(table).toSet() }
+            val allLiveTrieKeys = liveTrieKeysByCatalog.flatten().toSet()
+            val missingFromStorage = allLiveTrieKeys - triesInStorage
+
+            if (missingFromStorage.isNotEmpty()) {
+                val details = missingFromStorage.map { trieKey ->
+                    val liveInCatalogs = liveTrieKeysByCatalog.mapIndexedNotNull { idx, keys ->
+                        if (trieKey in keys) idx else null
+                    }
+                    "$trieKey (live in catalogs: $liveInCatalogs)"
+                }
+
+                // Break down tries by level for each catalog
+                val levelPrefixes = listOf("l00-", "l01-", "l02-", "l03-", "l04-")
+                val catalogStates = liveTrieKeysByCatalog.mapIndexed { idx, keys ->
+                    val byLevel = levelPrefixes.map { prefix ->
+                        val triesAtLevel = keys.filter { it.startsWith(prefix) }.sorted()
+                        "$prefix: $triesAtLevel"
+                    }
+                    "Catalog $idx:\n      ${byLevel.joinToString("\n      ")}"
+                }
+
+                Assertions.fail<Unit>(
+                    "${table.tableName}: live tries missing from storage:\n  ${details.joinToString("\n  ")}\n\n" +
+                    "Catalog states:\n    ${catalogStates.joinToString("\n    ")}"
+                )
+            }
+        }
+
+        // Verify all systems converged to the same trie set for each table
+        tables.forEach { table ->
+            val allTrieSets = trieCatalogs.map { it.listAllTrieKeys(table).toSet() }
+            Assertions.assertEquals(1, allTrieSets.distinct().size,
+                "All systems should converge to the same trie set for ${table.tableName}")
+        }
     }
 }

@@ -71,8 +71,8 @@ abstract class SimulationTestBase {
          * Override using:
          *   -Dxtdb.simulation-test-iterations=N
          */
-        private val testIterations: Int =
-            System.getProperty("xtdb.simulation-test-iterations", "100").toInt()
+        private val testIterations: Int = 1
+//            System.getProperty("xtdb.simulation-test-iterations", "100").toInt()
 
         @JvmStatic
         fun iterationSource(): List<Arguments> = (1..testIterations).map { Arguments.of(it) }

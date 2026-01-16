@@ -86,6 +86,14 @@ data class CompactorDriverConfig(
     val blocksPerWeek: Long = 140
 )
 
+interface HasCompactorDriverConfig {
+    var driverConfig: CompactorDriverConfig
+}
+
+interface HasNumberOfSystems {
+    var numberOfSystems: Int
+}
+
 class CompactorMockDriver(
     val dispatcher: CoroutineDispatcher,
     val baseSeed: Int,
@@ -252,7 +260,7 @@ class DriverConfigExtension : BeforeEachCallback {
             ?: return
 
         val testInstance = context.requiredTestInstance
-        if (testInstance !is CompactorSimulationTest) return
+        if (testInstance !is HasCompactorDriverConfig) return
 
         testInstance.driverConfig = with(annotation) {
             CompactorDriverConfig(
@@ -274,7 +282,7 @@ class NumberOfSystemsExtension : BeforeEachCallback {
             ?: return
 
         val testInstance = context.requiredTestInstance
-        if (testInstance !is CompactorSimulationTest) return
+        if (testInstance !is HasNumberOfSystems) return
 
         testInstance.numberOfSystems = annotation.numberOfSystems
     }
@@ -282,9 +290,9 @@ class NumberOfSystemsExtension : BeforeEachCallback {
 
 @Tag("property")
 @ExtendWith(DriverConfigExtension::class, NumberOfSystemsExtension::class)
-class CompactorSimulationTest : SimulationTestBase() {
-    var driverConfig: CompactorDriverConfig = CompactorDriverConfig()
-    var numberOfSystems: Int = 1
+class CompactorSimulationTest : SimulationTestBase(), HasCompactorDriverConfig, HasNumberOfSystems {
+    override var driverConfig: CompactorDriverConfig = CompactorDriverConfig()
+    override var numberOfSystems: Int = 1
     private lateinit var allocator: BufferAllocator
     private lateinit var sharedBufferPool: BufferPool
     private lateinit var mockDriver: CompactorMockDriver
