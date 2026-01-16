@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: 'xtdb-node-1'
+    static_configs:
+      - targets: ['xtdb-node-1:8080']
+    metrics_path: /metrics
+
+  - job_name: 'xtdb-node-2'
+    static_configs:
+      - targets: ['xtdb-node-2:8080']
+    metrics_path: /metrics
+
+  - job_name: 'xtdb-node-3'
+    static_configs:
+      - targets: ['xtdb-node-3:8080']
+    metrics_path: /metrics
+
+  - job_name: 'auctionmark'
+    static_configs:
+      - targets: ['auctionmark:8080']
+    metrics_path: /metrics

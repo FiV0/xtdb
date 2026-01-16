@@ -132,6 +132,85 @@ Under `localhost:3001` you are able to access the Grafana UI (`admin` for user a
 The XTDB node datasource should be setup, and there should be a dashboard available with some basic metrics.
 If you tweak the dashboard or add a new one, save the changes in the corresponding file in `.config/dashboards/dashboard_name.json`.
 
+== Running Multi-Node Cluster Locally (Docker Compose)
+
+For local testing of multi-node XTDB clusters, use the docker-compose setup in `docker-compose/`:
+
+=== Build Images from Current Branch
+
+[source,bash]
+----
+cd modules/bench/docker-compose
+./build-images.sh
+----
+
+This builds both `xtdb/xtdb-aws:local` and `xtdb/xtdb-bench:local` from your current branch.
+
+=== Start the Cluster
+
+[source,bash]
+----
+cd modules/bench/docker-compose
+
+# Start infrastructure + 3 XTDB nodes
+docker-compose up -d
+
+# Check all nodes are healthy
+docker-compose ps
+----
+
+=== Run AuctionMark Benchmark
+
+[source,bash]
+----
+# Run with defaults (8 threads, 30 min, scale 0.1)
+docker-compose --profile benchmark run --rm auctionmark
+
+# Custom parameters
+docker-compose --profile benchmark run --rm auctionmark \
+  auctionmark -f /config/xtdb-config.yaml \
+  --threads 8 --duration PT10M --scale-factor 0.1
+
+# Two-phase: load then run
+docker-compose --profile benchmark run --rm auctionmark \
+  auctionmark -f /config/xtdb-config.yaml --only-load --scale-factor 0.1
+
+docker-compose --profile benchmark run --rm auctionmark \
+  auctionmark -f /config/xtdb-config.yaml --no-load --threads 8 --duration PT30M
+----
+
+=== Connect to Individual Nodes
+
+* Node 1: `localhost:5432` (PGWire), `localhost:8081` (metrics)
+* Node 2: `localhost:5433` (PGWire), `localhost:8082` (metrics)
+* Node 3: `localhost:5434` (PGWire), `localhost:8083` (metrics)
+
+=== With Monitoring
+
+[source,bash]
+----
+# Start with Prometheus + Grafana
+docker-compose --profile monitoring up -d
+
+# Access Grafana at http://localhost:3001 (admin/admin)
+----
+
+=== Using Pre-built Images
+
+To use GHCR images instead of locally built ones:
+
+[source,bash]
+----
+XTDB_IMAGE=ghcr.io/xtdb/xtdb-aws:edge BENCH_IMAGE=ghcr.io/xtdb/xtdb-bench:nightly docker-compose up -d
+----
+
+=== Cleanup
+
+[source,bash]
+----
+docker-compose down --volumes
+----
+
 == Running the benchmarks on the Cloud
 
 === Prerequisites
