@@ -511,6 +511,7 @@
 
 (defmethod ig/init-key :xtdb/trie-catalog [_ {:keys [^BufferPool buffer-pool, ^BlockCatalog block-cat]}]
   (log/debug "starting trie catalog...")
+  (log/info "starting trie catalog with spec enabled" (s/check-asserts?))
   (let [table->table-block (table-cat/load-tables-to-metadata buffer-pool block-cat)
         cat (TrieCatalog. buffer-pool block-cat
                           (load-tries table->table-block *file-size-target*)

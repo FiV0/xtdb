@@ -163,9 +163,7 @@ allprojects {
             val simulationIterations = project.findProperty("simulationIterations")?.toString() ?: "100"
             systemProperty("xtdb.simulation-test-iterations", simulationIterations)
 
-            if (project.hasProperty("specAsserts")) {
-                systemProperty("clojure.spec.check-asserts", "true")
-            }
+            systemProperty("clojure.spec.check-asserts", "true")
 
             useJUnitPlatform {
                 includeTags("property")

@@ -46,6 +46,7 @@ import xtdb.storage.BufferPool
 import xtdb.storage.MemoryStorage
 import xtdb.table.TableRef
 import xtdb.trie.TrieCatalog
+import xtdb.util.StringUtil.asLexHex
 import xtdb.util.asPath
 import xtdb.util.debug
 import xtdb.util.logger
@@ -100,6 +101,10 @@ class NodeSimulationTest : SimulationTestBase(), HasCompactorDriverConfig, HasNu
 
     @BeforeEach
     fun setUp() {
+        // Verify spec assertions are enabled for property tests
+        val specAsserts = System.getProperty("clojure.spec.check-asserts")
+        require(specAsserts == "true") { "Expected clojure.spec.check-asserts=true but got: $specAsserts" }
+
         super.setUpSimulation()
         setLogLevel.invoke("xtdb".symbol, logLevel)
 
@@ -721,16 +726,11 @@ class NodeSimulationTest : SimulationTestBase(), HasCompactorDriverConfig, HasNu
         Assertions.assertEquals(finalTries, bufferPoolTries, "Buffer pool should match catalog")
     }
 
-//    @RepeatedTest(1)
     @RepeatableSimulationTest
-//    @WithSeed(1071536144)
-    @WithSeed(-410731000)
     @WithNumberOfSystems(2)
     @WithCompactorDriverConfig(temporalSplitting = TemporalSplitting.BOTH)
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Timeout(value = 120, unit = TimeUnit.SECONDS)
     fun `multi-table sparse L0 with temporal splitting`(iteration: Int) {
-        // Enable TRACE logging for trie-catalog to see addTries calls
-        setLogLevel.invoke("xtdb.trie-catalog".symbol, "TRACE")
 
         val docsTable = TableRef("xtdb", "public", "docs")
         val usersTable = TableRef("xtdb", "public", "users")
@@ -738,17 +738,17 @@ class NodeSimulationTest : SimulationTestBase(), HasCompactorDriverConfig, HasNu
         val defaultFileTarget = 100L * 1024L * 1024L
 
         // Sparse L0 population: not every table gets an L0 for every block
-        // docs: blocks 0,1,2,3,4,5,6,7 (all)
-        // users: blocks 0,2,4,6 (even only)
-        val docsL0s = (0..7).map { "l00-rc-b0$it" }
-        val usersL0s = listOf(0, 2, 4, 6).map { "l00-rc-b0$it" }
+        // docs: blocks 0-127 (128 L0s)
+        // users: blocks 0,2,4,...,126 (64 L0s, even only)
+        val docsL0s = L0TrieKeys.take(128).toList()
+        val usersL0s = (0..126 step 2).map { "l00-rc-b${it.asLexHex}" }
 
         addTries(docsTable, docsL0s.map { buildTrieDetails(docsTable.tableName, it, defaultFileTarget) }, Instant.now())
         addTries(usersTable, usersL0s.map { buildTrieDetails(usersTable.tableName, it, defaultFileTarget) }, Instant.now())
 
         // Finish blocks
         blockCatalogs.forEach { blockCatalog ->
-            for (blockIndex in 0L..7L) {
+            for (blockIndex in 0L..127L) {
                 blockCatalog.finishBlock(
                     blockIndex = blockIndex,
                     latestCompletedTx = TransactionKey(txId = blockIndex, systemTime = Instant.now()),
@@ -783,18 +783,17 @@ class NodeSimulationTest : SimulationTestBase(), HasCompactorDriverConfig, HasNu
             val docsTries = trieCatalog.listAllTrieKeys(docsTable)
             val usersTries = trieCatalog.listAllTrieKeys(usersTable)
 
-            // docs should have 8 L0s
-            Assertions.assertEquals(8, docsTries.prefix("l00-rc-").size, "docs should have 8 L0s")
-            // users should have 4 L0s
-            Assertions.assertEquals(4, usersTries.prefix("l00-rc-").size, "users should have 4 L0s")
+            // docs should have 128 L0s
+            Assertions.assertEquals(128, docsTries.prefix("l00-rc-").size, "docs should have 128 L0s")
+            // users should have 64 L0s
+            Assertions.assertEquals(64, usersTries.prefix("l00-rc-").size, "users should have 64 L0s")
 
             // With BOTH temporal splitting, each L0->L1 compaction creates 2 L1s (current + historical)
-            // So docs (8 L0s) -> 16 L1s, users (4 L0s) -> 8 L1s
             val docsL1Count = docsTries.prefix("l01-").size
             val usersL1Count = usersTries.prefix("l01-").size
 
-            Assertions.assertTrue(docsL1Count >= 8, "docs should have at least 8 L1s (got $docsL1Count)")
-            Assertions.assertTrue(usersL1Count >= 4, "users should have at least 4 L1s (got $usersL1Count)")
+            Assertions.assertTrue(docsL1Count >= 128, "docs should have at least 128 L1s (got $docsL1Count)")
+            Assertions.assertTrue(usersL1Count >= 64, "users should have at least 64 L1s (got $usersL1Count)")
         }
 
         // Final GC pass - use Instant.MAX to catch all garbage regardless of timestamp

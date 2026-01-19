@@ -49,3 +49,5 @@ terraform.tfstate.backup
 
 # This directory should only contain data not checked in
 src/test/resources/data/
+
+.claude-worktrees
