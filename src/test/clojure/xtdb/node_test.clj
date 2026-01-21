@@ -7,6 +7,7 @@
             [xtdb.compactor :as c]
             [xtdb.db-catalog :as db]
             [xtdb.error :as err]
+            [xtdb.garbage-collector :as gc]
             [xtdb.log :as xt-log]
             [xtdb.logging :as logging]
             [xtdb.next.jdbc :as xt-jdbc]
@@ -19,11 +20,11 @@
             [xtdb.time :as time]
             [xtdb.util :as util])
   (:import [java.nio.file Path]
-           [java.time ZoneId ZonedDateTime]
+           [java.time Duration Instant ZoneId ZonedDateTime]
            [xtdb.api ServerConfig Xtdb$Config]
            xtdb.types.RegClass))
 
-(t/use-fixtures :each tu/with-allocator tu/with-mock-clock tu/with-node)
+(t/use-fixtures :each tu/with-allocator tu/with-mock-clock #_tu/with-node)
 
 (t/deftest test-multi-value-insert-423
   (letfn [(expected [tt]
@@ -884,7 +885,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
                                             :storage [:local {:path (str path "/storage")}]
                                             :indexer {:skip-txs [@!skiptxid]}})]
             (xt-log/sync-node node)
-            
+
             (t/testing "Verify skipped transaction is stored in object store"
               (let [buffer-pool (.getBufferPool (db/primary-db node))
                     skipped-tx-path (util/->path (format "skipped-txs/%s" (util/->lex-dec-string @!skiptxid)))
@@ -1283,7 +1284,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
     (xt/execute-tx tu/*node* [[:put-docs :docs {:xt/id 8 :a ["NULL"]}]])
     (t/is (= [{:xt/id 8 :a ["NULL"]}]
              (xt/q tu/*node* "SELECT * FROM docs WHERE _id = 8"))))
-  
+
   (t/testing "escape characters"
     (xt/execute-tx tu/*node* [[:put-docs :docs {:xt/id 9 :a ["\n" "\t" "\r"]}]])
     (t/is (= [{:xt/id 9 :a ["\n" "\t" "\r"]}]
@@ -1299,7 +1300,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
     (xt/execute-tx tu/*node* [[:delete-docs :xtqldocs 0 "foo" :bar #uuid "a3a3690b-e3a7-4e62-b03e-69cf9982ebd3"]])
     (xt/execute-tx tu/*node* [[:erase-docs :xtqldocs 0 "foo" :bar #uuid "a3a3690b-e3a7-4e62-b03e-69cf9982ebd3"]])
     (t/is (empty? (xt/q tu/*node* "SELECT * FROM xtqldocs"))))
-  
+
   (t/testing "sql"
     (xt/execute-tx tu/*node* [[:sql "INSERT INTO sqldocs (_id) VALUES (?)" [0] ["foo"] [:bar] [#uuid "a3a3690b-e3a7-4e62-b03e-69cf9982ebd3"]]])
     (tu/finish-block! tu/*node*)
@@ -1345,3 +1346,77 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
                :committed true,
                :user-metadata {:source "clojure-api", :tags ["api-test"], :request-id "req-12345"}}]
              (xt/q conn ["SELECT * FROM xt.txs ORDER BY _id"])))))
+
+
+
+
+(deftest test-prepared-out-of-date
+  (tu/with-allocator
+    (fn []
+      (util/with-tmp-dirs #{node-dir}
+        (let [opts {:node-dir node-dir
+                    :gc? false
+                    :blocks-to-keep 1
+                    :garbage-lifetime (Duration/ofSeconds 0)
+                    :instant-src (tu/->mock-clock (tu/->instants :year))
+                    :instant-source-for-non-tx-msgs? true}]
+          (with-open [node (tu/->local-node opts)]
+
+            (xt/execute-tx node [[:put-docs :docs {:xt/id 1, :name "Alice"}]])
+
+            ;; l0-00
+            (tu/finish-block! node)
+
+            ;; l1-00 - will disappear
+            (c/compact-all! node (Duration/ofSeconds 10))
+
+
+
+
+
+            (let [pq (xtp/prepare-sql node "SELECT * FROM docs ORDER BY _id" {:default-db "xtdb"})
+                  bp (.getBufferPool (db/primary-db node))]
+
+              (t/is (= nil
+                       (map (comp str #(.getKey %)) (.listAllObjects bp (util/->path "tables/public$docs/meta/")))))
+
+              (with-open [cursor (.openQuery pq {})]
+
+                #_(t/is (= [[{:name "Alice", :xt/id 1} {:name "Bob", :xt/id 2}]]
+                           (tu/<-cursor cursor)))
+
+
+                (xt/execute-tx node [[:put-docs :docs {:xt/id 2, :name "Bob"}]])
+
+                ;; b01 - this block file is only needed to get a proper as-of that deleted l1-00
+                (tu/finish-block! node)
+
+                (xt/execute-tx node [[:put-docs :docs {:xt/id 3, :name "Charlie"}]])
+
+                ;; b02
+                (tu/finish-block! node)
+
+
+                ;; The GC triggered by this compact runs as of b01 because of block to keep being 1 and garbage-lifetime of 0
+                (c/compact-all! node (Duration/ofSeconds 10))
+                (let [gc-instance (gc/garbage-collector node)]
+                  (.collectAllGarbage gc-instance #_(Instant/now))
+                  )
+
+                (t/is (= nil
+
+                         (map (comp str #(.getKey %)) (.listAllObjects bp (util/->path "tables/public$docs/meta/")))))
+
+
+                (t/is (= [[{:name "Alice", :xt/id 1} {:name "Bob", :xt/id 2}]]
+                         (tu/<-cursor cursor)))
+
+                )
+
+
+              )
+
+            )))))
+
+
+  )
