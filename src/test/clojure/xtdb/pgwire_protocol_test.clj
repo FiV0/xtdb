@@ -1,17 +1,17 @@
 (ns xtdb.pgwire-protocol-test
   (:require [clojure.test :as t :refer [deftest]]
-            [jsonista.core :as json]
+            [xtdb.api :as xt]
             [xtdb.authn :as authn]
-            [xtdb.authn-test :as authn-test]
+            [xtdb.compactor :as c]
             [xtdb.db-catalog :as db]
-            [xtdb.indexer.live-index :as li]
+            [xtdb.garbage-collector :as gc]
             [xtdb.pgwire :as pgwire]
             [xtdb.pgwire.io :as pgio]
             [xtdb.test-util :as tu]
             [xtdb.util :as util])
   (:import [java.lang AutoCloseable]
            [java.nio.charset StandardCharsets]
-           [java.time Clock InstantSource]
+           [java.time Clock Duration]
            xtdb.JsonSerde
            [xtdb.pgwire PgType]))
 
@@ -223,7 +223,7 @@
                    :localized-severity "ERROR",
                    :sql-state "22P02",
                    :message "Text 'alan' could not be parsed at index 0"
-                   :detail #xt/error [:incorrect :xtdb.pgwire/invalid-arg-representation 
+                   :detail #xt/error [:incorrect :xtdb.pgwire/invalid-arg-representation
                                       "Text 'alan' could not be parsed at index 0"
                                       {:arg-idx 0, :arg-format :text}]}}]
                 [:msg-ready {:status :idle}]]
@@ -296,7 +296,7 @@
                 [:msg-error-response {:error-fields
                                       {:severity "ERROR", :localized-severity "ERROR", :sql-state "08P01",
                                        :message "DML is not allowed in a READ ONLY transaction"
-                                       :detail #xt/error [:incorrect :xtdb/dml-in-read-only-tx 
+                                       :detail #xt/error [:incorrect :xtdb/dml-in-read-only-tx
                                                           "DML is not allowed in a READ ONLY transaction"
                                                           {:query "INSERT INTO foo RECORDS {_id: 1}"}]}}]
                 [:msg-ready {:status :idle}]]
@@ -433,3 +433,84 @@
         (t/is (= [[:msg-command-complete {:command "SELECT 2"}]
                   [:msg-ready {:status :transaction}]]
                  @!in-msgs))))))
+
+
+(deftest test-portal-survives-gc
+  (tu/with-allocator
+    (fn []
+      (util/with-tmp-dirs #{node-dir}
+        (let [opts {:node-dir node-dir
+                    :gc? true
+                    :blocks-to-keep 1
+                    :garbage-lifetime (Duration/ofSeconds 0)
+                    :instant-src (tu/->mock-clock (tu/->instants :year))
+                    :instant-source-for-non-tx-msgs? true}]
+          (with-open [node (tu/->local-node opts)]
+            (binding [tu/*node* node]
+              (let [{:keys [!in-msgs] :as frontend} (->recording-frontend)
+                    portal-name ""
+                    stmt-name ""]
+                (with-open [conn (->conn frontend {"user" "xtdb" "database" "xtdb"})]
+                  (reset! !in-msgs [])
+
+
+                  (xt/execute-tx node [[:put-docs :docs {:xt/id 1, :name "Alice"}]])
+
+                  ;; l0-00
+                  (tu/finish-block! node)
+
+                  ;; l1-00 - will disappear
+                  (c/compact-all! node (Duration/ofSeconds 10))
+
+                  (pgwire/handle-msg conn {:msg-name :msg-parse
+                                           :stmt-name stmt-name
+                                           :query "SELECT * FROM docs ORDER BY _id"
+                                           :param-oids []})
+
+                  ;; Bind - creates portal
+                  (pgwire/handle-msg conn {:msg-name :msg-bind
+                                           :portal-name portal-name
+                                           :stmt-name stmt-name
+                                           :arg-format []
+                                           :args []
+                                           :result-format nil})
+
+                  (xt/execute-tx node [[:put-docs :docs {:xt/id 2, :name "Bob"}]])
+
+                  ;; b01 - this block file is only needed to get a proper as-of that deleted l1-00
+                  (tu/finish-block! node)
+
+                  (xt/execute-tx node [[:put-docs :docs {:xt/id 3, :name "Charlie"}]])
+
+                  ;; b02
+                  (tu/finish-block! node)
+
+
+                  ;; The GC triggered by this compact runs as of b01 because of block to keep being 1 and garbage-lifetime of 0
+                  (c/compact-all! node (Duration/ofSeconds 10))
+                  (let [gc-instance (gc/garbage-collector node)]
+                    (.collectAllGarbage gc-instance #_(Instant/now))
+                    )
+
+
+                  ;; Execute
+                  (pgwire/handle-msg conn {:msg-name :msg-execute
+                                           :portal-name portal-name
+                                           :limit 0})
+
+                  ;; Sync
+                  (pgwire/handle-msg conn {:msg-name :msg-sync})
+
+                  (t/is (= [[:msg-parse-complete]
+                            [:msg-bind-complete]
+                            [:msg-error-response
+                             {:error-fields
+                              {:severity "ERROR",
+                               :localized-severity "ERROR",
+                               :sql-state "XX000",
+                               :message
+                               "Object tables/public$docs/data/l01-rc-b00.arrow doesn't exist.",
+                               :detail
+                               #xt/error [:fault :xtdb.error/unknown "Object tables/public$docs/data/l01-rc-b00.arrow doesn't exist." {}]}}]
+                            [:msg-ready {:status :idle}]]
+                           @!in-msgs)))))))))))
